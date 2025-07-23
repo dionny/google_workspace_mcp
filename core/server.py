@@ -160,7 +160,7 @@ async def oauth2_callback(request: Request) -> HTMLResponse:
 async def start_google_auth(
     service_name: str,
     user_google_email: str = USER_GOOGLE_EMAIL,
-    mcp_session_id: Optional[str] = Header(None, alias="Mcp-Session-Id")
+    mcp_session_id: Optional[str] = Header(None, alias="mcp-session-id")
 ) -> str:
     """
     Initiates the Google OAuth 2.0 authentication flow for the specified user email and service.
