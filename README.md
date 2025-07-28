@@ -328,9 +328,28 @@ When calling a tool:
 | `list_calendars` | List accessible calendars |
 | `get_events` | Retrieve events with time range filtering |
 | `get_event` | Fetch detailed information of a single event by ID |
-| `create_event` | Create events (all-day or timed) with optional Drive file attachments |
+| `create_event` | Create events (all-day or timed) with optional Drive file attachments and recurrence rules |
 | `modify_event` | Update existing events |
 | `delete_event` | Remove events |
+
+#### Common Recurrence Rule Examples for `create_event`
+
+When creating recurring events, use the `recurrence` parameter with RRULE strings. Here are common patterns:
+
+| Use Case | RRULE | Description |
+|----------|-------|-------------|
+| **Weekly 1-1 meeting** | `["RRULE:FREQ=WEEKLY"]` | Repeats every week on the same day and time |
+| **Weekly team standup (MWF)** | `["RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"]` | Weekly on Monday, Wednesday, Friday |
+| **Daily standup (weekdays)** | `["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"]` | Every weekday |
+| **Bi-weekly sprint review** | `["RRULE:FREQ=WEEKLY;INTERVAL=2"]` | Every 2 weeks |
+| **Monthly all-hands (15th)** | `["RRULE:FREQ=MONTHLY;BYMONTHDAY=15"]` | Monthly on the 15th |
+| **Monthly board meeting (last Friday)** | `["RRULE:FREQ=MONTHLY;BYDAY=-1FR"]` | Last Friday of each month |
+| **Quarterly business review** | `["RRULE:FREQ=MONTHLY;INTERVAL=3"]` | Every 3 months |
+| **Limited series (10 sessions)** | `["RRULE:FREQ=WEEKLY;COUNT=10"]` | Weekly for 10 occurrences |
+| **Until end of quarter** | `["RRULE:FREQ=WEEKLY;UNTIL=20240331T235959Z"]` | Weekly until March 31, 2024 |
+| **Annual performance review** | `["RRULE:FREQ=YEARLY"]` | Yearly on the same date |
+
+**Note**: Day codes are: MO (Monday), TU (Tuesday), WE (Wednesday), TH (Thursday), FR (Friday), SA (Saturday), SU (Sunday)
 
 ### 📁 Google Drive ([`drive_tools.py`](gdrive/drive_tools.py))
 

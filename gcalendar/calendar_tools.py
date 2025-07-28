@@ -215,6 +215,7 @@ async def create_event(
     attendees: Optional[List[str]] = None,
     timezone: Optional[str] = None,
     attachments: Optional[List[str]] = None,
+    recurrence: Optional[List[str]] = None,
 ) -> str:
     """
     Creates a new event.
@@ -230,6 +231,17 @@ async def create_event(
         attendees (Optional[List[str]]): Attendee email addresses.
         timezone (Optional[str]): Timezone (e.g., "America/New_York").
         attachments (Optional[List[str]]): List of Google Drive file URLs or IDs to attach to the event.
+        recurrence (Optional[List[str]]): List of RRULE strings for recurring events. Common examples:
+            - Weekly 1-1 meeting: ["RRULE:FREQ=WEEKLY"]
+            - Weekly on specific days: ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"]
+            - Bi-weekly meeting: ["RRULE:FREQ=WEEKLY;INTERVAL=2"]
+            - Daily standup (weekdays only): ["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"]
+            - Monthly on specific date: ["RRULE:FREQ=MONTHLY;BYMONTHDAY=15"]
+            - Monthly on last Friday: ["RRULE:FREQ=MONTHLY;BYDAY=-1FR"]
+            - Quarterly meeting: ["RRULE:FREQ=MONTHLY;INTERVAL=3"]
+            - Limited occurrences: ["RRULE:FREQ=WEEKLY;COUNT=10"]
+            - Until specific date: ["RRULE:FREQ=WEEKLY;UNTIL=20240630T235959Z"]
+            - Annual event: ["RRULE:FREQ=YEARLY"]
 
     Returns:
         str: Confirmation message of the successful event creation with event link.
@@ -264,6 +276,9 @@ async def create_event(
             event_body["end"]["timeZone"] = timezone
     if attendees:
         event_body["attendees"] = [{"email": email} for email in attendees]
+    if recurrence:
+        event_body["recurrence"] = recurrence
+        logger.info(f"[create_event] Adding recurrence rules: {recurrence}")
 
     if attachments:
         # Accept both file URLs and file IDs. If a URL, extract the fileId.
