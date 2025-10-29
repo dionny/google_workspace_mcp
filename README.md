@@ -89,7 +89,6 @@ A production-ready MCP server that integrates all major Google Workspace service
 
 **<span style="color:#72898f">✓</span> Tasks** • **<span style="color:#72898f">◆</span> Custom Search** • **<span style="color:#72898f">↻</span> Transport Support**
 - Full support for all MCP Transports
-- OpenAPI compatibility via `mcpo`
 - Task & task list management with hierarchy
 - Programmable Search Engine (PSE) integration
 
@@ -903,6 +902,28 @@ uvx workspace-mcp --tool-tier core  # or --tools gmail drive calendar
 
 </details>
 
+### Local Development Setup
+
+<details open>
+<summary>🛠️ <b>Developer Workflow</b> <sub><sup>← Install deps, lint, and test</sup></sub></summary>
+
+```bash
+# Install everything needed for linting, tests, and release tooling
+uv sync --group dev
+
+# Run the same linter that git hooks invoke automatically
+uv run ruff check .
+
+# Execute the full test suite (async fixtures require pytest-asyncio)
+uv run pytest
+```
+
+- `uv sync --group test` installs only the testing stack if you need a slimmer environment.
+- `uv run main.py --transport streamable-http` launches the server with your checked-out code for manual verification.
+- Ruff is part of the `dev` group because pre-push hooks call `ruff check` automatically—run it locally before committing to avoid hook failures.
+
+</details>
+
 ### OAuth 2.1 Support (Multi-User Bearer Token Authentication)
 
 The server includes OAuth 2.1 support for bearer token authentication, enabling multi-user session management. **OAuth 2.1 automatically reuses your existing `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` credentials** - no additional configuration needed!
@@ -926,19 +947,15 @@ uv run main.py --transport streamable-http
 If `MCP_ENABLE_OAUTH21` is not set to `true`, the server will use legacy authentication, which is suitable for clients that do not support OAuth 2.1.
 
 <details>
-<summary>🔐 <b>Innovative CORS Proxy Architecture</b> <sub><sup>← Advanced OAuth 2.1 details</sup></sub></summary>
+<summary>🔐 <b>How the FastMCP GoogleProvider handles OAuth</b> <sub><sup>← Advanced OAuth 2.1 details</sup></sub></summary>
 
-This implementation solves two critical challenges when using Google OAuth in browser environments:
+FastMCP ships a native `GoogleProvider` that we now rely on directly. It solves the two tricky parts of using Google OAuth with MCP clients:
 
-1.  **Dynamic Client Registration**: Google doesn't support OAuth 2.1 dynamic client registration. Our server provides a clever proxy that accepts any client registration request and returns the pre-configured Google OAuth credentials, allowing standards-compliant clients to work seamlessly.
+1.  **Dynamic Client Registration**: Google still doesn't support OAuth 2.1 DCR, but the FastMCP provider exposes the full DCR surface and forwards registrations to Google using your fixed credentials. MCP clients register as usual and the provider hands them your Google client ID/secret under the hood.
 
-2.  **CORS Issues**: Google's OAuth endpoints don't include CORS headers, blocking browser-based clients. We implement intelligent proxy endpoints that:
-   - Proxy authorization server discovery requests through `/auth/discovery/authorization-server/{server}`
-   - Proxy token exchange requests through `/oauth2/token`
-   - Add proper CORS headers to all responses
-   - Maintain security by only proxying to known Google OAuth endpoints
+2.  **CORS & Browser Compatibility**: The provider includes an OAuth proxy that serves all discovery, authorization, and token endpoints with proper CORS headers. We no longer maintain custom `/oauth2/*` routes—the provider handles the upstream exchanges securely and advertises the correct metadata to clients.
 
-This architecture enables any OAuth 2.1 compliant client to authenticate users through Google, even from browser environments, without requiring changes to the client implementation.
+The result is a leaner server that still enables any OAuth 2.1 compliant client (including browser-based ones) to authenticate through Google without bespoke code.
 
 </details>
 
@@ -1196,59 +1213,10 @@ The credential store automatically handles credential serialization, expiry pars
 - **OAuth Callback**: Uses `http://localhost:8000/oauth2callback` for development (requires `OAUTHLIB_INSECURE_TRANSPORT=1`)
 - **Transport-Aware Callbacks**: Stdio mode starts a minimal HTTP server only for OAuth, ensuring callbacks work in all modes
 - **Production**: Use HTTPS & OAuth 2.1 and configure accordingly
-- **Network Exposure**: Consider authentication when using `mcpo` over networks
 - **Scope Minimization**: Tools request only necessary permissions
 
 ---
 
-## <span style="color:#adbcbc">◆ Integration with Open WebUI</span>
-
-<details open>
-<summary>◆ <b>Open WebUI Integration</b> <sub><sup>← Connect to Open WebUI as tool provider</sup></sub></summary>
-
-<table>
-<tr><td width="50%" valign="top">
-
-### ▶ Instant Start (No Config)
-```bash
-# Set credentials & launch in one command
-GOOGLE_OAUTH_CLIENT_ID="your_id" \
-GOOGLE_OAUTH_CLIENT_SECRET="your_secret" \
-uvx mcpo --port 8000 --api-key "secret" \
--- uvx workspace-mcp
-```
-
-</td><td width="50%" valign="top">
-
-### ◆ Manual Configuration
-1. Create `config.json`:
-```json
-{
-  "mcpServers": {
-    "google_workspace": {
-      "type": "streamablehttp",
-      "url": "http://localhost:8000/mcp"
-    }
-  }
-}
-```
-
-2. Start MCPO:
-```bash
-mcpo --port 8001 --config config.json
-```
-
-</td></tr>
-</table>
-
-### ≡ Configure Open WebUI
-1. Navigate to **Settings** → **Connections** → **Tools**
-2. Click **Add Tool** and enter:
-   - **Server URL**: `http://localhost:8001/google_workspace`
-   - **API Key**: Your mcpo `--api-key` (if set)
-3. Save - Google Workspace tools are now available!
-
-</details>
 
 ---
 

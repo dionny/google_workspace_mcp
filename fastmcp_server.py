@@ -1,8 +1,7 @@
 # ruff: noqa
 """
-FastMCP CLI entrypoint for Google Workspace MCP Server.
-This file imports all tool modules to register them with the server instance.
-Includes full initialization bootstrap that main.py provides.
+FastMCP Cloud entrypoint for the Google Workspace MCP server.
+Enforces OAuth 2.1 + stateless defaults required by FastMCP-hosted deployments.
 """
 import logging
 import os
@@ -16,21 +15,38 @@ from core.server import server, set_transport_mode, configure_server_for_http
 from core.tool_registry import set_enabled_tools as set_enabled_tool_names, wrap_server_tool_method, filter_server_tools
 from auth.scopes import set_enabled_tools
 
-# Import OAuth 2.1 route handlers
-from auth.oauth_common_handlers import (
-    handle_oauth_authorize,
-    handle_proxy_token_exchange,
-    handle_oauth_protected_resource,
-    handle_oauth_authorization_server,
-    handle_oauth_client_config,
-    handle_oauth_register,
-)
-from fastapi.responses import JSONResponse
-from starlette.requests import Request
+def enforce_fastmcp_cloud_defaults():
+    """Force FastMCP Cloud-compatible OAuth settings before initializing the server."""
+    enforced = []
+
+    required = {
+        "MCP_ENABLE_OAUTH21": "true",
+        "WORKSPACE_MCP_STATELESS_MODE": "true",
+    }
+    defaults = {
+        "MCP_SINGLE_USER_MODE": "false",
+    }
+
+    for key, target in required.items():
+        current = os.environ.get(key)
+        normalized = (current or "").lower()
+        if normalized != target:
+            os.environ[key] = target
+            enforced.append((key, current, target))
+
+    for key, target in defaults.items():
+        current = os.environ.get(key)
+        if current != target:
+            os.environ[key] = target
+            enforced.append((key, current, target))
+
+    return enforced
 
 # Load environment variables
 dotenv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
 load_dotenv(dotenv_path=dotenv_path)
+
+_fastmcp_cloud_overrides = enforce_fastmcp_cloud_defaults()
 
 # Suppress googleapiclient discovery cache warning
 logging.getLogger('googleapiclient.discovery_cache').setLevel(logging.ERROR)
@@ -44,6 +60,15 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+if _fastmcp_cloud_overrides:
+    for key, previous, new_value in _fastmcp_cloud_overrides:
+        if previous is None:
+            logger.info("FastMCP Cloud: set %s=%s", key, new_value)
+        else:
+            logger.warning("FastMCP Cloud: overriding %s from %s to %s", key, previous, new_value)
+else:
+    logger.info("FastMCP Cloud: OAuth 2.1 stateless defaults already satisfied")
 
 # Configure file logging based on stateless mode
 configure_file_logging()
@@ -86,7 +111,6 @@ else:
 
 # Set transport mode for HTTP (FastMCP CLI defaults to streamable-http)
 set_transport_mode('streamable-http')
-configure_server_for_http()
 
 # Import all tool modules to register their @server.tool() decorators
 import gmail.gmail_tools
@@ -111,30 +135,8 @@ set_enabled_tool_names(None)  # Don't filter individual tools - enable all
 # Filter tools based on configuration
 filter_server_tools(server)
 
-# Add OAuth 2.1 routes for stateless authentication
-@server.custom_route("/.well-known/oauth-protected-resource", methods=["GET", "OPTIONS"])
-async def oauth_protected_resource(request: Request):
-    return await handle_oauth_protected_resource(request)
-
-@server.custom_route("/.well-known/oauth-authorization-server", methods=["GET", "OPTIONS"])
-async def oauth_authorization_server(request: Request):
-    return await handle_oauth_authorization_server(request)
-
-@server.custom_route("/.well-known/oauth-client", methods=["GET", "OPTIONS"])
-async def oauth_client_config(request: Request):
-    return await handle_oauth_client_config(request)
-
-@server.custom_route("/oauth2/authorize", methods=["GET", "OPTIONS"])
-async def oauth_authorize(request: Request):
-    return await handle_oauth_authorize(request)
-
-@server.custom_route("/oauth2/token", methods=["POST", "OPTIONS"])
-async def oauth_token(request: Request):
-    return await handle_proxy_token_exchange(request)
-
-@server.custom_route("/oauth2/register", methods=["POST", "OPTIONS"])
-async def oauth_register(request: Request):
-    return await handle_oauth_register(request)
+# Configure authentication after scopes are known
+configure_server_for_http()
 
 # Export server instance for FastMCP CLI (looks for 'mcp', 'server', or 'app')
 mcp = server
