@@ -5,7 +5,14 @@ This module provides centralized validation logic for Google Docs operations,
 extracting validation patterns from individual tool functions.
 """
 import logging
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Union
+
+from gdocs.errors import (
+    DocsErrorBuilder,
+    StructuredError,
+    ErrorCode,
+    format_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -360,7 +367,7 @@ class ValidationManager:
     def get_validation_summary(self) -> Dict[str, Any]:
         """
         Get a summary of all validation rules and constraints.
-        
+
         Returns:
             Dictionary containing validation rules
         """
@@ -378,3 +385,267 @@ class ValidationManager:
                 'document_indices': "Non-negative integers for position specification"
             }
         }
+
+    # ============================================================
+    # Structured Error Methods
+    # ============================================================
+    # These methods return structured JSON errors for better debugging
+
+    def validate_document_id_structured(self, document_id: str) -> Tuple[bool, Optional[str]]:
+        """
+        Validate document ID and return structured error if invalid.
+
+        Returns:
+            Tuple of (is_valid, structured_error_json or None)
+        """
+        is_valid, _ = self.validate_document_id(document_id)
+        if not is_valid:
+            error = DocsErrorBuilder.document_not_found(document_id or "(empty)")
+            return False, format_error(error)
+        return True, None
+
+    def validate_index_range_structured(
+        self,
+        start_index: int,
+        end_index: Optional[int] = None,
+        document_length: Optional[int] = None
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Validate index range and return structured error if invalid.
+
+        Returns:
+            Tuple of (is_valid, structured_error_json or None)
+        """
+        # Check start_index type
+        if not isinstance(start_index, int):
+            error = StructuredError(
+                code=ErrorCode.INVALID_INDEX_TYPE.value,
+                message=f"start_index must be an integer, got {type(start_index).__name__}",
+                suggestion="Provide an integer value for start_index"
+            )
+            return False, format_error(error)
+
+        # Check negative start_index
+        if start_index < 0:
+            error = StructuredError(
+                code=ErrorCode.INVALID_INDEX_RANGE.value,
+                message=f"start_index cannot be negative, got {start_index}",
+                suggestion="Use inspect_doc_structure to find valid insertion indices"
+            )
+            return False, format_error(error)
+
+        # Check end_index if provided
+        if end_index is not None:
+            if not isinstance(end_index, int):
+                error = StructuredError(
+                    code=ErrorCode.INVALID_INDEX_TYPE.value,
+                    message=f"end_index must be an integer, got {type(end_index).__name__}",
+                    suggestion="Provide an integer value for end_index"
+                )
+                return False, format_error(error)
+
+            if end_index <= start_index:
+                error = DocsErrorBuilder.invalid_index_range(start_index, end_index)
+                return False, format_error(error)
+
+        # Check bounds if document length provided
+        if document_length is not None:
+            if start_index >= document_length:
+                error = DocsErrorBuilder.index_out_of_bounds(
+                    "start_index", start_index, document_length
+                )
+                return False, format_error(error)
+
+            if end_index is not None and end_index > document_length:
+                error = DocsErrorBuilder.index_out_of_bounds(
+                    "end_index", end_index, document_length
+                )
+                return False, format_error(error)
+
+        return True, None
+
+    def validate_formatting_range_structured(
+        self,
+        start_index: int,
+        end_index: Optional[int],
+        text: Optional[str],
+        formatting_params: List[str]
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Validate that formatting operations have proper range.
+
+        Returns:
+            Tuple of (is_valid, structured_error_json or None)
+        """
+        # Formatting without text and without end_index is invalid
+        if end_index is None and text is None:
+            error = DocsErrorBuilder.formatting_requires_range(
+                start_index=start_index,
+                has_text=False,
+                formatting_params=formatting_params
+            )
+            return False, format_error(error)
+
+        return True, None
+
+    def validate_table_data_structured(self, table_data: List[List[str]]) -> Tuple[bool, Optional[str]]:
+        """
+        Validate table data and return structured error if invalid.
+
+        Returns:
+            Tuple of (is_valid, structured_error_json or None)
+        """
+        if not table_data:
+            error = DocsErrorBuilder.invalid_table_data("Table data cannot be empty")
+            return False, format_error(error)
+
+        if not isinstance(table_data, list):
+            error = DocsErrorBuilder.invalid_table_data(
+                f"Table data must be a list, got {type(table_data).__name__}"
+            )
+            return False, format_error(error)
+
+        # Check if it's a 2D list
+        for row_idx, row in enumerate(table_data):
+            if not isinstance(row, list):
+                error = DocsErrorBuilder.invalid_table_data(
+                    f"Row {row_idx} must be a list, got {type(row).__name__}",
+                    row_index=row_idx
+                )
+                return False, format_error(error)
+
+            if len(row) == 0:
+                error = DocsErrorBuilder.invalid_table_data(
+                    f"Row {row_idx} is empty",
+                    row_index=row_idx
+                )
+                return False, format_error(error)
+
+        # Check column consistency
+        col_counts = [len(row) for row in table_data]
+        if len(set(col_counts)) > 1:
+            error = DocsErrorBuilder.invalid_table_data(
+                f"All rows must have same column count. Found: {col_counts}"
+            )
+            return False, format_error(error)
+
+        # Check cell content
+        for row_idx, row in enumerate(table_data):
+            for col_idx, cell in enumerate(row):
+                if cell is None:
+                    error = DocsErrorBuilder.invalid_table_data(
+                        "Cell value is None - use empty string '' instead",
+                        row_index=row_idx,
+                        col_index=col_idx,
+                        value=None
+                    )
+                    return False, format_error(error)
+
+                if not isinstance(cell, str):
+                    error = DocsErrorBuilder.invalid_table_data(
+                        f"Cell must be string, got {type(cell).__name__}",
+                        row_index=row_idx,
+                        col_index=col_idx,
+                        value=cell
+                    )
+                    return False, format_error(error)
+
+        return True, None
+
+    def create_search_not_found_error(
+        self,
+        search_text: str,
+        match_case: bool = True,
+        similar_found: Optional[List[str]] = None
+    ) -> str:
+        """Create a structured error for search text not found."""
+        error = DocsErrorBuilder.search_text_not_found(
+            search_text=search_text,
+            similar_found=similar_found,
+            match_case=match_case
+        )
+        return format_error(error)
+
+    def create_ambiguous_search_error(
+        self,
+        search_text: str,
+        occurrences: List[Dict[str, Any]],
+        total_count: int
+    ) -> str:
+        """Create a structured error for ambiguous search results."""
+        error = DocsErrorBuilder.ambiguous_search(
+            search_text=search_text,
+            occurrences=occurrences,
+            total_count=total_count
+        )
+        return format_error(error)
+
+    def create_heading_not_found_error(
+        self,
+        heading: str,
+        available_headings: List[str],
+        match_case: bool = True
+    ) -> str:
+        """Create a structured error for heading not found."""
+        error = DocsErrorBuilder.heading_not_found(
+            heading=heading,
+            available_headings=available_headings,
+            match_case=match_case
+        )
+        return format_error(error)
+
+    def create_invalid_occurrence_error(
+        self,
+        occurrence: int,
+        total_found: int,
+        search_text: str
+    ) -> str:
+        """Create a structured error for invalid occurrence number."""
+        error = DocsErrorBuilder.invalid_occurrence(
+            occurrence=occurrence,
+            total_found=total_found,
+            search_text=search_text
+        )
+        return format_error(error)
+
+    def create_table_not_found_error(
+        self,
+        table_index: int,
+        total_tables: int
+    ) -> str:
+        """Create a structured error for table not found."""
+        error = DocsErrorBuilder.table_not_found(
+            table_index=table_index,
+            total_tables=total_tables
+        )
+        return format_error(error)
+
+    def create_missing_param_error(
+        self,
+        param_name: str,
+        context: str,
+        valid_values: Optional[List[str]] = None
+    ) -> str:
+        """Create a structured error for missing required parameter."""
+        error = DocsErrorBuilder.missing_required_param(
+            param_name=param_name,
+            context_description=context,
+            valid_values=valid_values
+        )
+        return format_error(error)
+
+    def create_invalid_param_error(
+        self,
+        param_name: str,
+        received: Any,
+        valid_values: List[str],
+        context: str = ""
+    ) -> str:
+        """Create a structured error for invalid parameter value."""
+        error = DocsErrorBuilder.invalid_param_value(
+            param_name=param_name,
+            received_value=received,
+            valid_values=valid_values,
+            context_description=context
+        )
+        return format_error(error)

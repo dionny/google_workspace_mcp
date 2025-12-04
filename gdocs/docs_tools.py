@@ -25,14 +25,24 @@ from gdocs.docs_helpers import (
     create_insert_table_request,
     create_insert_page_break_request,
     create_insert_image_request,
-    create_bullet_list_request
+    create_bullet_list_request,
+    calculate_search_based_indices,
+    find_all_occurrences_in_document,
+    SearchPosition,
+    OperationType,
+    build_operation_result,
 )
 
 # Import document structure and table utilities
 from gdocs.docs_structure import (
     parse_document_structure,
     find_tables,
-    analyze_document_complexity
+    analyze_document_complexity,
+    extract_structural_elements,
+    build_headings_outline,
+    find_section_by_heading,
+    get_all_headings,
+    find_section_insertion_point
 )
 from gdocs.docs_tables import (
     extract_table_as_data
@@ -45,6 +55,7 @@ from gdocs.managers import (
     ValidationManager,
     BatchOperationManager
 )
+from gdocs.errors import DocsErrorBuilder, format_error
 
 logger = logging.getLogger(__name__)
 
@@ -311,7 +322,7 @@ async def modify_doc_text(
     service: Any,
     user_google_email: str,
     document_id: str,
-    start_index: int,
+    start_index: int = None,
     end_index: int = None,
     text: str = None,
     bold: bool = None,
@@ -319,62 +330,321 @@ async def modify_doc_text(
     underline: bool = None,
     font_size: int = None,
     font_family: str = None,
+    search: str = None,
+    position: str = None,
+    occurrence: int = 1,
+    match_case: bool = True,
+    heading: str = None,
+    section_position: str = None,
 ) -> str:
     """
-    Modifies text in a Google Doc - can insert/replace text and/or apply formatting in a single operation.
+    Modifies text in a Google Doc - can insert/replace text and/or apply formatting.
+
+    Supports three positioning modes:
+    1. Index-based: Use start_index/end_index to specify exact positions
+    2. Search-based: Use search/position to find text and operate relative to it
+    3. Heading-based: Use heading/section_position to target a specific section
 
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document to update
+
+        Index-based positioning (traditional):
         start_index: Start position for operation (0-based)
-        end_index: End position for text replacement/formatting (if not provided with text, text is inserted)
-        text: New text to insert or replace with (optional - can format existing text without changing it)
+        end_index: End position for text replacement/formatting
+
+        Search-based positioning:
+        search: Text to search for in the document
+        position: Where to insert relative to search result:
+            - "before": Insert before the found text
+            - "after": Insert after the found text
+            - "replace": Replace the found text entirely
+        occurrence: Which occurrence to target (1=first, 2=second, -1=last). Default: 1
+        match_case: Whether to match case exactly. Default: True
+
+        Heading-based positioning (structural):
+        heading: Section heading text to target
+        section_position: Where to insert within the section:
+            - "start": Insert right after the heading
+            - "end": Insert at the end of the section (before next same-level heading)
+
+        Text and formatting:
+        text: New text to insert or replace with
         bold: Whether to make text bold (True/False/None to leave unchanged)
         italic: Whether to make text italic (True/False/None to leave unchanged)
         underline: Whether to underline text (True/False/None to leave unchanged)
         font_size: Font size in points
         font_family: Font family name (e.g., "Arial", "Times New Roman")
 
+    Examples:
+        # Insert at end of a specific section (heading-based):
+        modify_doc_text(document_id="...", heading="The Problem",
+                       section_position="end", text="\\n[New content]")
+
+        # Insert right after a heading:
+        modify_doc_text(document_id="...", heading="Introduction",
+                       section_position="start", text="\\nUpdated intro text.")
+
+        # Insert after specific text (search-based):
+        modify_doc_text(document_id="...", search="Chapter 1", position="after",
+                       text=" [Updated]")
+
+        # Replace specific text:
+        modify_doc_text(document_id="...", search="old heading", position="replace",
+                       text="new heading")
+
+        # Replace second occurrence:
+        modify_doc_text(document_id="...", search="TODO", position="replace",
+                       text="DONE", occurrence=2)
+
+        # Traditional index-based (still supported):
+        modify_doc_text(document_id="...", start_index=10, end_index=20,
+                       text="replacement")
+
+        # Insert text WITH formatting (no end_index needed!):
+        modify_doc_text(document_id="...", start_index=100, text="IMPORTANT:",
+                       bold=True, italic=True)
+        # This inserts "IMPORTANT:" at position 100 and automatically formats it.
+        # The formatting range is calculated as [start_index, start_index + len(text)].
+
     Returns:
-        str: Confirmation message with operation details
+        str: JSON string with operation details including position shift information.
+
+        Response includes:
+        - success (bool): Whether the operation succeeded
+        - operation (str): Type of operation ("insert", "replace", "delete", "format")
+        - position_shift (int): How much subsequent positions shifted (+ve = right, -ve = left)
+        - affected_range (dict): {"start": x, "end": y} of the modified area
+        - message (str): Human-readable description
+        - link (str): URL to the document
+        - inserted_length (int, optional): Length of inserted text (for insert operations)
+        - original_length (int, optional): Original text length (for replace operations)
+        - new_length (int, optional): New text length (for replace operations)
+        - deleted_length (int, optional): Deleted text length (for delete operations)
+        - styles_applied (list, optional): List of styles applied (for format operations)
+        - legacy_message (str): Backward-compatible text summary
+
+        Example response for insert:
+        {
+            "success": true,
+            "operation": "insert",
+            "position_shift": 13,
+            "affected_range": {"start": 100, "end": 113},
+            "inserted_length": 13,
+            "message": "Inserted 13 characters at index 100",
+            "link": "https://docs.google.com/document/d/.../edit"
+        }
+
+        Use position_shift for efficient follow-up edits:
+        ```python
+        result = modify_doc_text(doc_id, start_index=100, text="AAA")
+        # result["position_shift"] = 3
+        # For next edit originally at 200: use 200 + result["position_shift"] = 203
+        ```
     """
-    logger.info(f"[modify_doc_text] Doc={document_id}, start={start_index}, end={end_index}, text={text is not None}, formatting={any([bold, italic, underline, font_size, font_family])}")
+    logger.info(f"[modify_doc_text] Doc={document_id}, search={search}, position={position}, "
+                f"heading={heading}, section_position={section_position}, "
+                f"start={start_index}, end={end_index}, text={text is not None}")
 
     # Input validation
     validator = ValidationManager()
 
-    is_valid, error_msg = validator.validate_document_id(document_id)
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
     if not is_valid:
-        return f"Error: {error_msg}"
+        return structured_error
 
     # Validate that we have something to do
     if text is None and not any([bold is not None, italic is not None, underline is not None, font_size, font_family]):
-        return "Error: Must provide either 'text' to insert/replace, or formatting parameters (bold, italic, underline, font_size, font_family)."
+        error = DocsErrorBuilder.missing_required_param(
+            param_name="text or formatting",
+            context_description="for document modification",
+            valid_values=["text", "bold", "italic", "underline", "font_size", "font_family"]
+        )
+        return format_error(error)
+
+    # Determine positioning mode
+    use_search_mode = search is not None
+    use_heading_mode = heading is not None
+
+    # Validate positioning parameters - heading mode takes priority, then search, then index
+    if use_heading_mode:
+        if not section_position:
+            return validator.create_missing_param_error(
+                param_name="section_position",
+                context="when using 'heading'",
+                valid_values=["start", "end"]
+            )
+        if section_position not in ['start', 'end']:
+            return validator.create_invalid_param_error(
+                param_name="section_position",
+                received=section_position,
+                valid_values=["start", "end"]
+            )
+        if search is not None or start_index is not None or end_index is not None:
+            logger.warning("Multiple positioning parameters provided; heading mode takes precedence")
+    elif use_search_mode:
+        if not position:
+            return validator.create_missing_param_error(
+                param_name="position",
+                context="when using 'search'",
+                valid_values=["before", "after", "replace"]
+            )
+        if position not in [p.value for p in SearchPosition]:
+            return validator.create_invalid_param_error(
+                param_name="position",
+                received=position,
+                valid_values=["before", "after", "replace"]
+            )
+        if start_index is not None or end_index is not None:
+            logger.warning("Both search and index parameters provided; search mode takes precedence")
+    else:
+        # Traditional index-based mode
+        if start_index is None:
+            return validator.create_missing_param_error(
+                param_name="positioning",
+                context="for document modification",
+                valid_values=["heading+section_position", "search+position", "start_index"]
+            )
+
+    # Track search results for response
+    search_info = {}
+
+    # If using heading mode, find the section and calculate insertion point
+    if use_heading_mode:
+        # Get document
+        doc_data = await asyncio.to_thread(
+            service.documents().get(documentId=document_id).execute
+        )
+
+        # Find the insertion point using section navigation
+        insertion_index = find_section_insertion_point(doc_data, heading, section_position, match_case)
+
+        if insertion_index is None:
+            # Provide helpful error with available headings
+            all_headings = get_all_headings(doc_data)
+            heading_list = [h['text'] for h in all_headings] if all_headings else []
+            return validator.create_heading_not_found_error(
+                heading=heading,
+                available_headings=heading_list,
+                match_case=match_case
+            )
+
+        start_index = insertion_index
+        end_index = None  # Heading mode is always insert, not replace
+        search_info = {
+            'heading': heading,
+            'section_position': section_position,
+            'insertion_index': insertion_index,
+            'message': f"Found section '{heading}', inserting at {section_position}"
+        }
+
+    # If using search mode, find the text and calculate indices
+    elif use_search_mode:
+        # Get document to search
+        doc_data = await asyncio.to_thread(
+            service.documents().get(documentId=document_id).execute
+        )
+
+        success, calc_start, calc_end, message = calculate_search_based_indices(
+            doc_data, search, position, occurrence, match_case
+        )
+
+        if not success:
+            # Provide helpful error with occurrence info
+            all_occurrences = find_all_occurrences_in_document(doc_data, search, match_case)
+            if all_occurrences:
+                # Check if it's an invalid occurrence error
+                if "occurrence" in message.lower():
+                    return validator.create_invalid_occurrence_error(
+                        occurrence=occurrence,
+                        total_found=len(all_occurrences),
+                        search_text=search
+                    )
+                # Multiple occurrences exist but specified one not found
+                occurrences_data = [
+                    {"index": i + 1, "position": f"{s}-{e}"}
+                    for i, (s, e) in enumerate(all_occurrences[:5])
+                ]
+                return validator.create_ambiguous_search_error(
+                    search_text=search,
+                    occurrences=occurrences_data,
+                    total_count=len(all_occurrences)
+                )
+            # Text not found at all
+            return validator.create_search_not_found_error(
+                search_text=search,
+                match_case=match_case
+            )
+
+        start_index = calc_start
+        end_index = calc_end
+        search_info = {
+            'search_text': search,
+            'position': position,
+            'occurrence': occurrence,
+            'found_at_index': calc_start,
+            'message': message
+        }
+
+        # For "before" and "after" positions, we're just inserting, not replacing
+        if position in [SearchPosition.BEFORE.value, SearchPosition.AFTER.value]:
+            # Set end_index to None to trigger insert mode rather than replace
+            end_index = None
 
     # Validate text formatting params if provided
-    if any([bold is not None, italic is not None, underline is not None, font_size, font_family]):
+    has_formatting = any([bold is not None, italic is not None, underline is not None, font_size, font_family])
+    formatting_params_list = []
+    if bold is not None:
+        formatting_params_list.append("bold")
+    if italic is not None:
+        formatting_params_list.append("italic")
+    if underline is not None:
+        formatting_params_list.append("underline")
+    if font_size:
+        formatting_params_list.append("font_size")
+    if font_family:
+        formatting_params_list.append("font_family")
+
+    if has_formatting:
         is_valid, error_msg = validator.validate_text_formatting_params(bold, italic, underline, font_size, font_family)
         if not is_valid:
             return f"Error: {error_msg}"
 
-        # For formatting, we need end_index
-        if end_index is None:
-            return "Error: 'end_index' is required when applying formatting."
+        # For formatting without text insertion, we need end_index
+        # But if text is provided, we can calculate end_index automatically
+        if end_index is None and text is None:
+            is_valid, structured_error = validator.validate_formatting_range_structured(
+                start_index=start_index,
+                end_index=end_index,
+                text=text,
+                formatting_params=formatting_params_list
+            )
+            if not is_valid:
+                return structured_error
 
-        is_valid, error_msg = validator.validate_index_range(start_index, end_index)
-        if not is_valid:
-            return f"Error: {error_msg}"
+        if end_index is not None:
+            is_valid, structured_error = validator.validate_index_range_structured(start_index, end_index)
+            if not is_valid:
+                return structured_error
 
     requests = []
     operations = []
+
+    # Track operation details for response
+    operation_type = None
+    actual_start_index = start_index
+    actual_end_index = end_index
+    format_styles = []
 
     # Handle text insertion/replacement
     if text is not None:
         if end_index is not None and end_index > start_index:
             # Text replacement
+            operation_type = OperationType.REPLACE
             if start_index == 0:
                 # Special case: Cannot delete at index 0 (first section break)
                 # Instead, we insert new text at index 1 and then delete the old text
+                actual_start_index = 1
                 requests.append(create_insert_text_request(1, text))
                 adjusted_end = end_index + len(text)
                 requests.append(create_delete_range_request(1 + len(text), adjusted_end))
@@ -388,12 +658,15 @@ async def modify_doc_text(
                 operations.append(f"Replaced text from index {start_index} to {end_index}")
         else:
             # Text insertion
-            actual_index = 1 if start_index == 0 else start_index
-            requests.append(create_insert_text_request(actual_index, text))
-            operations.append(f"Inserted text at index {start_index}")
+            operation_type = OperationType.INSERT
+            actual_start_index = 1 if start_index == 0 else start_index
+            actual_end_index = None  # Insert has no end_index
+            requests.append(create_insert_text_request(actual_start_index, text))
+            operations.append(f"Inserted text at index {actual_start_index}")
+            search_info['inserted_at_index'] = actual_start_index
 
     # Handle formatting
-    if any([bold is not None, italic is not None, underline is not None, font_size, font_family]):
+    if has_formatting:
         # Adjust range for formatting based on text operations
         format_start = start_index
         format_end = end_index
@@ -418,17 +691,24 @@ async def modify_doc_text(
 
         format_details = []
         if bold is not None:
-            format_details.append(f"bold={bold}")
+            format_details.append("bold")
         if italic is not None:
-            format_details.append(f"italic={italic}")
+            format_details.append("italic")
         if underline is not None:
-            format_details.append(f"underline={underline}")
+            format_details.append("underline")
         if font_size:
-            format_details.append(f"font_size={font_size}")
+            format_details.append("font_size")
         if font_family:
-            format_details.append(f"font_family={font_family}")
+            format_details.append("font_family")
 
+        format_styles = format_details
         operations.append(f"Applied formatting ({', '.join(format_details)}) to range {format_start}-{format_end}")
+
+        # If only formatting (no text operation), set operation type
+        if operation_type is None:
+            operation_type = OperationType.FORMAT
+            actual_start_index = format_start
+            actual_end_index = format_end
 
     await asyncio.to_thread(
         service.documents().batchUpdate(
@@ -437,10 +717,34 @@ async def modify_doc_text(
         ).execute
     )
 
-    link = f"https://docs.google.com/document/d/{document_id}/edit"
+    # Build structured operation result
+    import json
+
+    # Determine final operation type for combined operations
+    if text is not None and has_formatting:
+        # Combined insert/replace + format - report the text operation as primary
+        pass  # operation_type already set from text operation
+
+    # Build the operation result
+    op_result = build_operation_result(
+        operation_type=operation_type,
+        start_index=actual_start_index,
+        end_index=actual_end_index,
+        text=text,
+        document_id=document_id,
+        extra_info=search_info if search_info else None,
+        styles_applied=format_styles if format_styles else None
+    )
+
+    # Convert to dict and return as JSON
+    result_dict = op_result.to_dict()
+
+    # Add legacy message for backward compatibility
     operation_summary = "; ".join(operations)
-    text_info = f" Text length: {len(text)} characters." if text else ""
-    return f"{operation_summary} in document {document_id}.{text_info} Link: {link}"
+    result_dict['legacy_message'] = operation_summary
+
+    return json.dumps(result_dict, indent=2)
+
 
 @server.tool()
 @handle_http_errors("find_and_replace_doc", service_type="docs")
@@ -871,6 +1175,223 @@ async def inspect_doc_structure(
     link = f"https://docs.google.com/document/d/{document_id}/edit"
     return f"Document structure analysis for {document_id}:\n\n{json.dumps(result, indent=2)}\n\nLink: {link}"
 
+
+@server.tool()
+@handle_http_errors("get_doc_structure", is_read_only=True, service_type="docs")
+@require_google_service("docs", "docs_read")
+async def get_doc_structure(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    element_types: List[str] = None,
+) -> str:
+    """
+    Get a hierarchical view of the document's structural elements.
+
+    Returns headings, paragraphs, tables, lists, and other structural elements
+    with their positions and content. Useful for understanding document layout
+    and navigation.
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to analyze
+        element_types: Optional list of element types to filter (e.g., ["heading1", "heading2", "table"])
+                      Supported types: heading1-6, title, paragraph, table, bullet_list, numbered_list
+
+    Returns:
+        str: JSON containing:
+            - elements: List of structural elements with type, text, and positions
+            - headings_outline: Hierarchical outline of headings
+            - statistics: Count of each element type
+
+    Example Response:
+        {
+            "elements": [
+                {"type": "heading1", "text": "Introduction", "start_index": 1, "end_index": 13, "level": 1},
+                {"type": "paragraph", "text": "This is content...", "start_index": 14, "end_index": 50},
+                {"type": "heading2", "text": "Details", "start_index": 51, "end_index": 58, "level": 2}
+            ],
+            "headings_outline": [
+                {"level": 1, "text": "Introduction", "children": [
+                    {"level": 2, "text": "Details", "children": []}
+                ]}
+            ],
+            "statistics": {"heading1": 1, "heading2": 1, "paragraph": 1}
+        }
+    """
+    logger.debug(f"[get_doc_structure] Doc={document_id}, filters={element_types}")
+
+    # Input validation
+    validator = ValidationManager()
+    is_valid, error_msg = validator.validate_document_id(document_id)
+    if not is_valid:
+        return f"Error: {error_msg}"
+
+    # Get the document
+    doc = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Extract structural elements
+    elements = extract_structural_elements(doc)
+
+    # Filter by element types if specified
+    if element_types:
+        elements = [e for e in elements if e['type'] in element_types]
+
+    # Build headings outline
+    all_elements = extract_structural_elements(doc)  # Need full list for outline
+    headings_outline = build_headings_outline(all_elements)
+
+    # Calculate statistics
+    statistics = {}
+    for elem in all_elements:
+        elem_type = elem['type']
+        statistics[elem_type] = statistics.get(elem_type, 0) + 1
+
+    # Clean up elements for output (remove internal fields)
+    clean_elements = []
+    for elem in elements:
+        clean_elem = {
+            'type': elem['type'],
+            'start_index': elem['start_index'],
+            'end_index': elem['end_index']
+        }
+        if 'text' in elem:
+            clean_elem['text'] = elem['text']
+        if 'level' in elem:
+            clean_elem['level'] = elem['level']
+        if 'rows' in elem:
+            clean_elem['rows'] = elem['rows']
+            clean_elem['columns'] = elem.get('columns', 0)
+        if 'items' in elem:
+            clean_elem['items'] = [
+                {'text': item['text'], 'start_index': item['start_index'], 'end_index': item['end_index']}
+                for item in elem['items']
+            ]
+        clean_elements.append(clean_elem)
+
+    # Build result
+    result = {
+        'elements': clean_elements,
+        'headings_outline': _clean_outline(headings_outline),
+        'statistics': statistics
+    }
+
+    import json
+    link = f"https://docs.google.com/document/d/{document_id}/edit"
+    return f"Document structure for {document_id}:\n\n{json.dumps(result, indent=2)}\n\nLink: {link}"
+
+
+def _clean_outline(outline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Clean outline for JSON output, removing internal fields."""
+    clean = []
+    for item in outline:
+        clean_item = {
+            'level': item['level'],
+            'text': item['text'],
+            'start_index': item['start_index'],
+            'end_index': item['end_index'],
+            'children': _clean_outline(item.get('children', []))
+        }
+        clean.append(clean_item)
+    return clean
+
+
+@server.tool()
+@handle_http_errors("get_doc_section", is_read_only=True, service_type="docs")
+@require_google_service("docs", "docs_read")
+async def get_doc_section(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    heading: str,
+    include_subsections: bool = True,
+    match_case: bool = False,
+) -> str:
+    """
+    Get content of a specific section by heading.
+
+    A section includes all content from the heading until the next heading
+    of the same or higher level (smaller number = higher level).
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to read
+        heading: The heading text to search for
+        include_subsections: Whether to include nested subsection headings in the response
+        match_case: Whether to match case exactly when finding the heading
+
+    Returns:
+        str: JSON containing:
+            - heading: The matched heading text
+            - level: The heading level (1-6)
+            - start_index: Start position of the section
+            - end_index: End position of the section
+            - content: Full text content of the section
+            - subsections: List of subsection headings (if include_subsections=True)
+
+    Example:
+        get_doc_section(document_id="...", heading="The Problem")
+
+        Response:
+        {
+            "heading": "The Problem",
+            "level": 2,
+            "start_index": 151,
+            "end_index": 450,
+            "content": "Full text of the section...",
+            "subsections": [
+                {"heading": "Sub-problem 1", "level": 3, "start_index": 200, "end_index": 300}
+            ]
+        }
+    """
+    logger.debug(f"[get_doc_section] Doc={document_id}, heading={heading}")
+
+    # Input validation
+    validator = ValidationManager()
+    is_valid, error_msg = validator.validate_document_id(document_id)
+    if not is_valid:
+        return f"Error: {error_msg}"
+
+    if not heading or not heading.strip():
+        return "Error: 'heading' parameter is required and cannot be empty."
+
+    # Get the document
+    doc = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Find the section
+    section = find_section_by_heading(doc, heading, match_case)
+
+    if section is None:
+        # Provide helpful error with available headings
+        all_headings = get_all_headings(doc)
+        heading_list = [h['text'] for h in all_headings] if all_headings else []
+        return validator.create_heading_not_found_error(
+            heading=heading,
+            available_headings=heading_list,
+            match_case=match_case
+        )
+
+    # Build result
+    result = {
+        'heading': section['heading'],
+        'level': section['level'],
+        'start_index': section['start_index'],
+        'end_index': section['end_index'],
+        'content': section['content']
+    }
+
+    if include_subsections:
+        result['subsections'] = section['subsections']
+
+    import json
+    link = f"https://docs.google.com/document/d/{document_id}/edit"
+    return f"Section '{heading}' in document {document_id}:\n\n{json.dumps(result, indent=2)}\n\nLink: {link}"
+
+
 @server.tool()
 @handle_http_errors("create_table_with_data", service_type="docs")
 @require_google_service("docs", "docs_write")
@@ -1021,7 +1542,11 @@ async def debug_table_structure(
     # Find tables
     tables = find_tables(doc)
     if table_index >= len(tables):
-        return f"Error: Table index {table_index} not found. Document has {len(tables)} table(s)."
+        validator = ValidationManager()
+        return validator.create_table_not_found_error(
+            table_index=table_index,
+            total_tables=len(tables)
+        )
 
     table_info = tables[table_index]
 
