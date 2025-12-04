@@ -31,6 +31,8 @@ from gdocs.docs_helpers import (
     SearchPosition,
     OperationType,
     build_operation_result,
+    resolve_range,
+    RangeResult,
 )
 
 # Import document structure and table utilities
@@ -336,14 +338,16 @@ async def modify_doc_text(
     match_case: bool = True,
     heading: str = None,
     section_position: str = None,
+    range: Dict[str, Any] = None,
 ) -> str:
     """
     Modifies text in a Google Doc - can insert/replace text and/or apply formatting.
 
-    Supports three positioning modes:
+    Supports four positioning modes:
     1. Index-based: Use start_index/end_index to specify exact positions
     2. Search-based: Use search/position to find text and operate relative to it
     3. Heading-based: Use heading/section_position to target a specific section
+    4. Range-based: Use range parameter for semantic text selection
 
     Args:
         user_google_email: User's Google email address
@@ -367,6 +371,26 @@ async def modify_doc_text(
         section_position: Where to insert within the section:
             - "start": Insert right after the heading
             - "end": Insert at the end of the section (before next same-level heading)
+
+        Range-based positioning (semantic):
+        range: Dictionary specifying a semantic range. Supported formats:
+
+            1. Range by search bounds - select from start text to end text:
+               {"start": {"search": "Introduction", "occurrence": 1},
+                "end": {"search": "Conclusion", "occurrence": 1}}
+
+            2. Search with boundary extension - find text and extend to boundary:
+               {"search": "keyword", "extend": "paragraph"}
+               extend options: "paragraph", "sentence", "line", "section"
+
+            3. Search with character offsets - include surrounding context:
+               {"search": "keyword", "before_chars": 50, "after_chars": 100}
+
+            4. Section reference - select entire section by heading:
+               {"section": "The Velocity Trap", "include_heading": False,
+                "include_subsections": True}
+
+            All range formats support "match_case": True/False (default True)
 
         Text and formatting:
         text: New text to insert or replace with
@@ -407,6 +431,27 @@ async def modify_doc_text(
         # This inserts "IMPORTANT:" at position 100 and automatically formats it.
         # The formatting range is calculated as [start_index, start_index + len(text)].
 
+        # Range-based: Replace everything between two search terms:
+        modify_doc_text(document_id="...",
+                       range={"start": {"search": "Introduction"},
+                              "end": {"search": "Conclusion"}},
+                       text="[ENTIRE RANGE REPLACED]")
+
+        # Range-based: Select and format entire paragraph containing keyword:
+        modify_doc_text(document_id="...",
+                       range={"search": "important keyword", "extend": "paragraph"},
+                       bold=True)
+
+        # Range-based: Replace entire section under a heading:
+        modify_doc_text(document_id="...",
+                       range={"section": "The Velocity Trap", "include_heading": False},
+                       text="New section content here.")
+
+        # Range-based: Include surrounding context with offsets:
+        modify_doc_text(document_id="...",
+                       range={"search": "error", "before_chars": 50, "after_chars": 100},
+                       italic=True)
+
     Returns:
         str: JSON string with operation details including position shift information.
 
@@ -422,6 +467,7 @@ async def modify_doc_text(
         - new_length (int, optional): New text length (for replace operations)
         - deleted_length (int, optional): Deleted text length (for delete operations)
         - styles_applied (list, optional): List of styles applied (for format operations)
+        - resolved_range (dict, optional): For range-based operations, details about how range was resolved
         - legacy_message (str): Backward-compatible text summary
 
         Example response for insert:
@@ -443,7 +489,7 @@ async def modify_doc_text(
         ```
     """
     logger.info(f"[modify_doc_text] Doc={document_id}, search={search}, position={position}, "
-                f"heading={heading}, section_position={section_position}, "
+                f"heading={heading}, section_position={section_position}, range={range is not None}, "
                 f"start={start_index}, end={end_index}, text={text is not None}")
 
     # Input validation
@@ -463,11 +509,15 @@ async def modify_doc_text(
         return format_error(error)
 
     # Determine positioning mode
+    use_range_mode = range is not None
     use_search_mode = search is not None
     use_heading_mode = heading is not None
 
-    # Validate positioning parameters - heading mode takes priority, then search, then index
-    if use_heading_mode:
+    # Validate positioning parameters - range mode takes priority, then heading, then search, then index
+    if use_range_mode:
+        if heading is not None or search is not None or start_index is not None or end_index is not None:
+            logger.warning("Multiple positioning parameters provided; range mode takes precedence")
+    elif use_heading_mode:
         if not section_position:
             return validator.create_missing_param_error(
                 param_name="section_position",
@@ -503,14 +553,54 @@ async def modify_doc_text(
             return validator.create_missing_param_error(
                 param_name="positioning",
                 context="for document modification",
-                valid_values=["heading+section_position", "search+position", "start_index"]
+                valid_values=["range", "heading+section_position", "search+position", "start_index"]
             )
 
     # Track search results for response
     search_info = {}
+    range_result_info = None  # For range-based operations
+
+    # If using range mode, resolve the range to indices
+    if use_range_mode:
+        # Get document
+        doc_data = await asyncio.to_thread(
+            service.documents().get(documentId=document_id).execute
+        )
+
+        # Resolve the range specification
+        range_result = resolve_range(doc_data, range)
+
+        if not range_result.success:
+            # Return structured error with range resolution details
+            import json
+            error_response = {
+                "success": False,
+                "error": "range_resolution_failed",
+                "message": range_result.message,
+                "hint": "Check range specification format and search terms"
+            }
+            return json.dumps(error_response, indent=2)
+
+        start_index = range_result.start_index
+        end_index = range_result.end_index
+        range_result_info = range_result.to_dict()
+        search_info = {
+            'range': range,
+            'resolved_start': start_index,
+            'resolved_end': end_index,
+            'message': range_result.message
+        }
+        if range_result.matched_start:
+            search_info['matched_start'] = range_result.matched_start
+        if range_result.matched_end:
+            search_info['matched_end'] = range_result.matched_end
+        if range_result.extend_type:
+            search_info['extend_type'] = range_result.extend_type
+        if range_result.section_name:
+            search_info['section_name'] = range_result.section_name
 
     # If using heading mode, find the section and calculate insertion point
-    if use_heading_mode:
+    elif use_heading_mode:
         # Get document
         doc_data = await asyncio.to_thread(
             service.documents().get(documentId=document_id).execute
@@ -608,7 +698,12 @@ async def modify_doc_text(
     if has_formatting:
         is_valid, error_msg = validator.validate_text_formatting_params(bold, italic, underline, font_size, font_family)
         if not is_valid:
-            return f"Error: {error_msg}"
+            return validator.create_invalid_param_error(
+                param_name="formatting",
+                received=str(formatting_params_list),
+                valid_values=["bold (bool)", "italic (bool)", "underline (bool)", "font_size (1-400)", "font_family (string)"],
+                context=error_msg
+            )
 
         # For formatting without text insertion, we need end_index
         # But if text is provided, we can calculate end_index automatically
@@ -739,6 +834,10 @@ async def modify_doc_text(
     # Convert to dict and return as JSON
     result_dict = op_result.to_dict()
 
+    # Add resolved range info for range-based operations
+    if range_result_info:
+        result_dict['resolved_range'] = range_result_info
+
     # Add legacy message for backward compatibility
     operation_summary = "; ".join(operations)
     result_dict['legacy_message'] = operation_summary
@@ -824,6 +923,9 @@ async def insert_doc_elements(
     """
     logger.info(f"[insert_doc_elements] Doc={document_id}, type={element_type}, index={index}")
 
+    # Input validation
+    validator = ValidationManager()
+
     # Handle the special case where we can't insert at the first section break
     # If index is 0, bump it to 1 to avoid the section break
     if index == 0:
@@ -834,14 +936,22 @@ async def insert_doc_elements(
 
     if element_type == "table":
         if not rows or not columns:
-            return "Error: 'rows' and 'columns' parameters are required for table insertion."
+            return validator.create_missing_param_error(
+                param_name="rows and columns",
+                context="for table insertion",
+                valid_values=["rows: positive integer", "columns: positive integer"]
+            )
 
         requests.append(create_insert_table_request(index, rows, columns))
         description = f"table ({rows}x{columns})"
 
     elif element_type == "list":
         if not list_type:
-            return "Error: 'list_type' parameter is required for list insertion ('UNORDERED' or 'ORDERED')."
+            return validator.create_missing_param_error(
+                param_name="list_type",
+                context="for list insertion",
+                valid_values=["UNORDERED", "ORDERED"]
+            )
 
         if not text:
             text = "List item"
@@ -858,7 +968,11 @@ async def insert_doc_elements(
         description = "page break"
 
     else:
-        return f"Error: Unsupported element type '{element_type}'. Supported types: 'table', 'list', 'page_break'."
+        return validator.create_invalid_param_error(
+            param_name="element_type",
+            received=element_type,
+            valid_values=["table", "list", "page_break"]
+        )
 
     await asyncio.to_thread(
         service.documents().batchUpdate(
@@ -902,6 +1016,9 @@ async def insert_doc_image(
     """
     logger.info(f"[insert_doc_image] Doc={document_id}, source={image_source}, index={index}")
 
+    # Input validation
+    validator = ValidationManager()
+
     # Handle the special case where we can't insert at the first section break
     # If index is 0, bump it to 1 to avoid the section break
     if index == 0:
@@ -922,12 +1039,18 @@ async def insert_doc_image(
             )
             mime_type = file_metadata.get('mimeType', '')
             if not mime_type.startswith('image/'):
-                return f"Error: File {image_source} is not an image (MIME type: {mime_type})."
+                return validator.create_image_error(
+                    image_source=image_source,
+                    actual_mime_type=mime_type
+                )
 
             image_uri = f"https://drive.google.com/uc?id={image_source}"
             source_description = f"Drive file {file_metadata.get('name', image_source)}"
         except Exception as e:
-            return f"Error: Could not access Drive file {image_source}: {str(e)}"
+            return validator.create_image_error(
+                image_source=image_source,
+                error_detail=str(e)
+            )
     else:
         image_uri = image_source
         source_description = "URL image"
@@ -978,17 +1101,33 @@ async def update_doc_headers_footers(
     # Input validation
     validator = ValidationManager()
 
-    is_valid, error_msg = validator.validate_document_id(document_id)
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
     if not is_valid:
-        return f"Error: {error_msg}"
+        return structured_error
 
     is_valid, error_msg = validator.validate_header_footer_params(section_type, header_footer_type)
     if not is_valid:
-        return f"Error: {error_msg}"
+        if "section_type" in error_msg.lower():
+            return validator.create_invalid_param_error(
+                param_name="section_type",
+                received=section_type,
+                valid_values=["header", "footer"]
+            )
+        else:
+            return validator.create_invalid_param_error(
+                param_name="header_footer_type",
+                received=header_footer_type,
+                valid_values=["DEFAULT", "FIRST_PAGE_ONLY", "EVEN_PAGE"]
+            )
 
     is_valid, error_msg = validator.validate_text_content(content)
     if not is_valid:
-        return f"Error: {error_msg}"
+        return validator.create_invalid_param_error(
+            param_name="content",
+            received=repr(content)[:50],
+            valid_values=["non-empty string"],
+            context=error_msg
+        )
 
     # Use HeaderFooterManager to handle the complex logic
     header_footer_manager = HeaderFooterManager(service)
@@ -1001,7 +1140,11 @@ async def update_doc_headers_footers(
         link = f"https://docs.google.com/document/d/{document_id}/edit"
         return f"{message}. Link: {link}"
     else:
-        return f"Error: {message}"
+        return validator.create_api_error(
+            operation="update_header_footer",
+            error_message=message,
+            document_id=document_id
+        )
 
 @server.tool()
 @handle_http_errors("batch_update_doc", service_type="docs")
@@ -1030,20 +1173,47 @@ async def batch_update_doc(
         ]
 
     Returns:
-        str: Confirmation message with batch operation results
+        str: JSON string with operation results including:
+            - success (bool): Whether the batch succeeded
+            - operations_count (int): Number of operations executed
+            - total_position_shift (int): Cumulative position change from all operations
+            - per_operation_shifts (list): Position shift for each operation
+            - message (str): Human-readable summary
+            - document_link (str): Link to the document
+
+        Example response:
+        {
+            "success": true,
+            "operations_count": 3,
+            "total_position_shift": 15,
+            "per_operation_shifts": [11, 0, 4],
+            "message": "Successfully executed 3 operations",
+            "document_link": "https://docs.google.com/document/d/.../edit"
+        }
+
+        Use total_position_shift for efficient follow-up edits:
+        If you had a position at index 100 before these operations,
+        the new position is 100 + total_position_shift.
     """
+    import json
+
     logger.debug(f"[batch_update_doc] Doc={document_id}, operations={len(operations)}")
 
     # Input validation
     validator = ValidationManager()
 
-    is_valid, error_msg = validator.validate_document_id(document_id)
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
     if not is_valid:
-        return f"Error: {error_msg}"
+        return structured_error
 
     is_valid, error_msg = validator.validate_batch_operations(operations)
     if not is_valid:
-        return f"Error: {error_msg}"
+        return validator.create_invalid_param_error(
+            param_name="operations",
+            received=f"list with {len(operations) if isinstance(operations, list) else 'invalid'} items",
+            valid_values=["list of operation dicts with 'type' field"],
+            context=error_msg
+        )
 
     # Use BatchOperationManager to handle the complex logic
     batch_manager = BatchOperationManager(service)
@@ -1053,11 +1223,153 @@ async def batch_update_doc(
     )
 
     if success:
-        link = f"https://docs.google.com/document/d/{document_id}/edit"
-        replies_count = metadata.get('replies_count', 0)
-        return f"{message} on document {document_id}. API replies: {replies_count}. Link: {link}"
+        result = {
+            "success": True,
+            "operations_count": metadata.get('operations_count', len(operations)),
+            "total_position_shift": metadata.get('total_position_shift', 0),
+            "per_operation_shifts": metadata.get('per_operation_shifts', []),
+            "message": message,
+            "document_link": metadata.get('document_link', f"https://docs.google.com/document/d/{document_id}/edit")
+        }
+        return json.dumps(result, indent=2)
     else:
-        return f"Error: {message}"
+        error_result = {
+            "success": False,
+            "error": message,
+            "document_id": document_id
+        }
+        return json.dumps(error_result, indent=2)
+
+
+@server.tool()
+@handle_http_errors("batch_modify_doc", service_type="docs")
+@require_google_service("docs", "docs_write")
+async def batch_modify_doc(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    operations: List[Dict[str, Any]],
+    auto_adjust_positions: bool = True,
+) -> str:
+    """
+    Execute multiple document operations atomically with search-based positioning.
+
+    This tool enables efficient batch editing with:
+    - Search-based positioning (insert before/after search text)
+    - Automatic position adjustment for sequential operations
+    - Per-operation results with position shift tracking
+    - Atomic execution (all succeed or all fail)
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to update
+        operations: List of operations. Each operation can use either:
+            - Index-based: {"type": "insert_text", "index": 100, "text": "Hello"}
+            - Search-based: {"type": "insert", "search": "Conclusion", "position": "before", "text": "New text"}
+
+        auto_adjust_positions: If True (default), automatically adjusts positions
+            for subsequent operations based on cumulative shifts from earlier operations.
+
+    Supported operation types:
+        - insert/insert_text: Insert text at position
+        - delete/delete_text: Delete text range
+        - replace/replace_text: Replace text range with new text
+        - format/format_text: Apply formatting (bold, italic, underline, font_size, font_family)
+        - insert_table: Insert table at position
+        - insert_page_break: Insert page break
+        - find_replace: Find and replace all occurrences
+
+    Search-based positioning options:
+        - search: Text to find in the document
+        - position: "before" (insert before match), "after" (insert after), "replace" (replace match)
+        - occurrence: Which occurrence to target (1=first, 2=second, -1=last)
+        - match_case: Whether to match case exactly (default: True)
+
+    Example operations:
+        [
+            {"type": "insert", "search": "Conclusion", "position": "before",
+             "text": "\\n\\nNew section content.\\n"},
+            {"type": "format", "search": "Important Note", "position": "replace",
+             "bold": True, "font_size": 14},
+            {"type": "insert_text", "index": 1, "text": "Header text\\n"},
+            {"type": "find_replace", "find_text": "old term", "replace_text": "new term"}
+        ]
+
+    Returns:
+        JSON string with detailed results including:
+        - success: Overall success status
+        - operations_completed: Number of operations executed
+        - results: Per-operation details with position shifts
+        - total_position_shift: Cumulative position change
+        - document_link: Link to edited document
+
+        Example response:
+        {
+            "success": true,
+            "operations_completed": 2,
+            "total_operations": 2,
+            "results": [
+                {
+                    "index": 0,
+                    "type": "insert",
+                    "success": true,
+                    "description": "insert 'New section...' at 150",
+                    "position_shift": 20,
+                    "affected_range": {"start": 150, "end": 170},
+                    "resolved_index": 150
+                },
+                {
+                    "index": 1,
+                    "type": "format",
+                    "success": true,
+                    "description": "format 180-195 (bold=True)",
+                    "position_shift": 0,
+                    "affected_range": {"start": 180, "end": 195}
+                }
+            ],
+            "total_position_shift": 20,
+            "message": "Successfully executed 2 operation(s)",
+            "document_link": "https://docs.google.com/document/d/.../edit"
+        }
+
+        Using position_shift for chained operations:
+        ```python
+        # First operation at index 100 inserts 15 chars
+        result1 = batch_modify_doc(doc_id, [{"type": "insert_text", "index": 100, "text": "15 char string."}])
+        # result1["results"][0]["position_shift"] = 15
+
+        # For a subsequent edit originally targeting index 200:
+        # new_index = 200 + result1["total_position_shift"] = 215
+        ```
+    """
+    import json
+
+    logger.debug(f"[batch_modify_doc] Doc={document_id}, operations={len(operations)}")
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, error_msg = validator.validate_document_id(document_id)
+    if not is_valid:
+        return json.dumps({"success": False, "error": error_msg}, indent=2)
+
+    if not operations or not isinstance(operations, list):
+        return json.dumps({
+            "success": False,
+            "error": "Operations must be a non-empty list"
+        }, indent=2)
+
+    # Use BatchOperationManager with enhanced search support
+    batch_manager = BatchOperationManager(service)
+
+    result = await batch_manager.execute_batch_with_search(
+        document_id,
+        operations,
+        auto_adjust_positions=auto_adjust_positions
+    )
+
+    return json.dumps(result.to_dict(), indent=2)
+
 
 @server.tool()
 @handle_http_errors("inspect_doc_structure", is_read_only=True, service_type="docs")
@@ -1223,9 +1535,9 @@ async def get_doc_structure(
 
     # Input validation
     validator = ValidationManager()
-    is_valid, error_msg = validator.validate_document_id(document_id)
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
     if not is_valid:
-        return f"Error: {error_msg}"
+        return structured_error
 
     # Get the document
     doc = await asyncio.to_thread(
@@ -1350,12 +1662,16 @@ async def get_doc_section(
 
     # Input validation
     validator = ValidationManager()
-    is_valid, error_msg = validator.validate_document_id(document_id)
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
     if not is_valid:
-        return f"Error: {error_msg}"
+        return structured_error
 
     if not heading or not heading.strip():
-        return "Error: 'heading' parameter is required and cannot be empty."
+        return validator.create_missing_param_error(
+            param_name="heading",
+            context="for section retrieval",
+            valid_values=["non-empty heading text"]
+        )
 
     # Get the document
     doc = await asyncio.to_thread(
@@ -1600,16 +1916,23 @@ async def export_doc_to_pdf(
     """
     logger.info(f"[export_doc_to_pdf] Email={user_google_email}, Doc={document_id}, pdf_filename={pdf_filename}, folder_id={folder_id}")
 
+    # Input validation
+    validator = ValidationManager()
+
     # Get file metadata first to validate it's a Google Doc
     try:
         file_metadata = await asyncio.to_thread(
             service.files().get(
-                fileId=document_id, 
+                fileId=document_id,
                 fields="id, name, mimeType, webViewLink"
             ).execute
         )
     except Exception as e:
-        return f"Error: Could not access document {document_id}: {str(e)}"
+        return validator.create_pdf_export_error(
+            document_id=document_id,
+            stage="access",
+            error_detail=str(e)
+        )
 
     mime_type = file_metadata.get("mimeType", "")
     original_name = file_metadata.get("name", "Unknown Document")
@@ -1617,7 +1940,11 @@ async def export_doc_to_pdf(
 
     # Verify it's a Google Doc
     if mime_type != "application/vnd.google-apps.document":
-        return f"Error: File '{original_name}' is not a Google Doc (MIME type: {mime_type}). Only native Google Docs can be exported to PDF."
+        return validator.create_invalid_document_type_error(
+            document_id=document_id,
+            file_name=original_name,
+            actual_mime_type=mime_type
+        )
 
     logger.info(f"[export_doc_to_pdf] Exporting '{original_name}' to PDF")
 
@@ -1627,19 +1954,23 @@ async def export_doc_to_pdf(
             fileId=document_id,
             mimeType='application/pdf'
         )
-        
+
         fh = io.BytesIO()
         downloader = MediaIoBaseDownload(fh, request_obj)
-        
+
         done = False
         while not done:
             _, done = await asyncio.to_thread(downloader.next_chunk)
-            
+
         pdf_content = fh.getvalue()
         pdf_size = len(pdf_content)
-        
+
     except Exception as e:
-        return f"Error: Failed to export document to PDF: {str(e)}"
+        return validator.create_pdf_export_error(
+            document_id=document_id,
+            stage="export",
+            error_detail=str(e)
+        )
 
     # Determine PDF filename
     if not pdf_filename:
@@ -1693,7 +2024,202 @@ async def export_doc_to_pdf(
         return f"Successfully exported '{original_name}' to PDF and saved to Drive as '{pdf_filename}' (ID: {pdf_file_id}, {pdf_size:,} bytes){folder_info}. PDF: {pdf_web_link} | Original: {web_view_link}"
         
     except Exception as e:
-        return f"Error: Failed to upload PDF to Drive: {str(e)}. PDF was generated successfully ({pdf_size:,} bytes) but could not be saved to Drive."
+        return validator.create_pdf_export_error(
+            document_id=document_id,
+            stage="upload",
+            error_detail=f"{str(e)}. PDF was generated successfully ({pdf_size:,} bytes) but could not be saved to Drive."
+        )
+
+
+@server.tool()
+@handle_http_errors("preview_search_results", is_read_only=True, service_type="docs")
+@require_google_service("docs", "docs_read")
+async def preview_search_results(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    search_text: str,
+    match_case: bool = True,
+    context_chars: int = 50,
+) -> str:
+    """
+    Preview what text will be matched by a search operation before modifying.
+
+    USE THIS TOOL BEFORE:
+    - Using modify_doc_text with search parameter
+    - Using batch_modify_doc with search-based operations
+    - Any operation where you need to verify search targets
+
+    This tool shows ALL occurrences of search text in the document with
+    surrounding context, helping you:
+    - Verify the correct text will be matched
+    - Identify which occurrence to target
+    - See if search text spans fragmented text runs
+    - Understand character ranges before making changes
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to search
+        search_text: Text to search for in the document
+        match_case: Whether to match case exactly (default: True)
+        context_chars: Characters of context to show before/after each match (default: 50)
+
+    Returns:
+        str: JSON containing:
+            - total_matches: Number of occurrences found
+            - matches: List of match details including:
+                - occurrence: Which occurrence (1, 2, 3, etc.)
+                - start_index: Character position where match starts
+                - end_index: Character position where match ends
+                - context_before: Text immediately before the match
+                - matched_text: The actual matched text
+                - context_after: Text immediately after the match
+            - search_text: The text that was searched for
+            - match_case: Whether case-sensitive search was used
+
+    Example Response:
+        {
+            "total_matches": 3,
+            "search_text": "TODO",
+            "match_case": true,
+            "matches": [
+                {
+                    "occurrence": 1,
+                    "start_index": 150,
+                    "end_index": 154,
+                    "context_before": "...needs review. ",
+                    "matched_text": "TODO",
+                    "context_after": ": Fix this bug..."
+                },
+                {
+                    "occurrence": 2,
+                    "start_index": 450,
+                    "end_index": 454,
+                    "context_before": "...later. ",
+                    "matched_text": "TODO",
+                    "context_after": ": Add tests..."
+                }
+            ]
+        }
+
+    Usage Tips:
+        - Use occurrence number from results when calling modify_doc_text
+        - Context helps verify you're targeting the right match
+        - If no matches found, try match_case=False for case-insensitive search
+    """
+    import json
+
+    logger.debug(f"[preview_search_results] Doc={document_id}, search='{search_text}', match_case={match_case}")
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    if not search_text or not search_text.strip():
+        error = DocsErrorBuilder.missing_required_param(
+            param_name="search_text",
+            context_description="for search preview",
+            valid_values=["non-empty search string"]
+        )
+        return format_error(error)
+
+    # Get the document
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Find all occurrences
+    all_matches = find_all_occurrences_in_document(doc_data, search_text, match_case)
+
+    if not all_matches:
+        # No matches - provide helpful response
+        result = {
+            "total_matches": 0,
+            "search_text": search_text,
+            "match_case": match_case,
+            "matches": [],
+            "message": f"No matches found for '{search_text}'" +
+                      (" (case-sensitive)" if match_case else " (case-insensitive)"),
+            "hint": "Try match_case=False for case-insensitive search" if match_case else
+                   "Verify the search text exists in the document"
+        }
+        return json.dumps(result, indent=2)
+
+    # Extract full document text for context retrieval
+    from gdocs.docs_helpers import extract_document_text_with_indices
+
+    text_segments = extract_document_text_with_indices(doc_data)
+
+    # Build full text and index mapping
+    full_text = ""
+    index_map = []  # Maps position in full_text to document index
+    reverse_map = {}  # Maps document index to position in full_text
+
+    for segment_text, start_idx, _ in text_segments:
+        for i, char in enumerate(segment_text):
+            doc_idx = start_idx + i
+            reverse_map[doc_idx] = len(full_text)
+            index_map.append(doc_idx)
+            full_text += char
+
+    # Build match details with context
+    matches_with_context = []
+
+    for i, (start_idx, end_idx) in enumerate(all_matches):
+        # Find positions in full_text
+        text_start = reverse_map.get(start_idx)
+        text_end = reverse_map.get(end_idx - 1, reverse_map.get(end_idx))
+
+        if text_start is not None and text_end is not None:
+            text_end += 1  # Adjust to exclusive end
+
+            # Extract context
+            context_start = max(0, text_start - context_chars)
+            context_end = min(len(full_text), text_end + context_chars)
+
+            context_before = full_text[context_start:text_start]
+            matched_text = full_text[text_start:text_end]
+            context_after = full_text[text_end:context_end]
+
+            # Add ellipsis indicators if truncated
+            if context_start > 0:
+                context_before = "..." + context_before
+            if context_end < len(full_text):
+                context_after = context_after + "..."
+
+            match_info = {
+                "occurrence": i + 1,
+                "start_index": start_idx,
+                "end_index": end_idx,
+                "context_before": context_before,
+                "matched_text": matched_text,
+                "context_after": context_after
+            }
+        else:
+            # Fallback if mapping failed
+            match_info = {
+                "occurrence": i + 1,
+                "start_index": start_idx,
+                "end_index": end_idx,
+                "context_before": "[context unavailable]",
+                "matched_text": search_text,
+                "context_after": "[context unavailable]"
+            }
+
+        matches_with_context.append(match_info)
+
+    result = {
+        "total_matches": len(all_matches),
+        "search_text": search_text,
+        "match_case": match_case,
+        "matches": matches_with_context
+    }
+
+    link = f"https://docs.google.com/document/d/{document_id}/edit"
+    return f"Search preview for document {document_id}:\n\n{json.dumps(result, indent=2)}\n\nLink: {link}"
 
 
 # Create comment management tools for documents
