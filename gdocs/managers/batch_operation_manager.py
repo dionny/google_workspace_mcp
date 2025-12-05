@@ -23,13 +23,12 @@ from gdocs.docs_helpers import (
     create_insert_table_request,
     create_insert_page_break_request,
     validate_operation,
-    find_text_in_document,
     calculate_search_based_indices,
-    OperationType,
-    calculate_position_shift,
     resolve_range,
     RangeResult,
+    extract_text_at_range,
 )
+from gdocs.managers.history_manager import get_history_manager, UndoCapability
 
 logger = logging.getLogger(__name__)
 
@@ -394,22 +393,28 @@ class BatchOperationManager:
             request = create_format_text_request(
                 op['start_index'], op['end_index'],
                 op.get('bold'), op.get('italic'), op.get('underline'),
-                op.get('font_size'), op.get('font_family')
+                op.get('strikethrough'), op.get('small_caps'), op.get('subscript'),
+                op.get('superscript'), op.get('font_size'), op.get('font_family'),
+                op.get('link'), op.get('foreground_color'), op.get('background_color')
             )
-            
+
             if not request:
                 raise ValueError("No formatting options provided")
-                
+
             # Build format description
             format_changes = []
             for param, name in [
                 ('bold', 'bold'), ('italic', 'italic'), ('underline', 'underline'),
-                ('font_size', 'font size'), ('font_family', 'font family')
+                ('strikethrough', 'strikethrough'), ('small_caps', 'small caps'),
+                ('subscript', 'subscript'), ('superscript', 'superscript'),
+                ('font_size', 'font size'), ('font_family', 'font family'),
+                ('link', 'link'), ('foreground_color', 'foreground color'),
+                ('background_color', 'background color')
             ]:
                 if op.get(param) is not None:
                     value = f"{op[param]}pt" if param == 'font_size' else op[param]
                     format_changes.append(f"{name}: {value}")
-                    
+
             description = f"format text {op['start_index']}-{op['end_index']} ({', '.join(format_changes)})"
             
         elif op_type == 'insert_table':
@@ -648,6 +653,14 @@ class BatchOperationManager:
 
             total_shift = sum(r.position_shift for r in operation_results)
 
+            # Record operations for undo history (automatic tracking)
+            try:
+                self._record_batch_operations_to_history(
+                    document_id, resolved_ops, operation_results, doc_data
+                )
+            except Exception as e:
+                logger.warning(f"Failed to record batch operations for undo history: {e}")
+
             return BatchExecutionResult(
                 success=True,
                 operations_completed=len(operations),
@@ -707,7 +720,7 @@ class BatchOperationManager:
                         index=i,
                         type=op_type,
                         success=False,
-                        description=f"Range resolution failed",
+                        description="Range resolution failed",
                         error=range_result.message,
                     ))
                     resolved_ops.append(None)
@@ -1027,7 +1040,9 @@ class BatchOperationManager:
                 req = create_format_text_request(
                     op['start_index'], op['end_index'],
                     op.get('bold'), op.get('italic'), op.get('underline'),
-                    op.get('font_size'), op.get('font_family')
+                    op.get('strikethrough'), op.get('small_caps'), op.get('subscript'),
+                    op.get('superscript'), op.get('font_size'), op.get('font_family'),
+                    op.get('link'), op.get('foreground_color'), op.get('background_color')
                 )
                 if req:
                     requests.append(req)
@@ -1046,3 +1061,97 @@ class BatchOperationManager:
                 ))
 
         return requests
+
+    def _record_batch_operations_to_history(
+        self,
+        document_id: str,
+        resolved_ops: List[Dict[str, Any]],
+        operation_results: List['BatchOperationResult'],
+        doc_data: Dict[str, Any],
+    ) -> None:
+        """
+        Record batch operations to history for undo support.
+
+        Args:
+            document_id: ID of the document
+            resolved_ops: List of resolved operations
+            operation_results: List of BatchOperationResult with operation details
+            doc_data: Document data (may be stale after operations, but useful for text context)
+        """
+        history_manager = get_history_manager()
+
+        # Map operation types to history operation types
+        op_type_map = {
+            'insert_text': 'insert_text',
+            'insert': 'insert_text',
+            'delete_text': 'delete_text',
+            'delete': 'delete_text',
+            'replace_text': 'replace_text',
+            'replace': 'replace_text',
+            'format_text': 'format_text',
+            'format': 'format_text',
+        }
+
+        for i, (op, result) in enumerate(zip(resolved_ops, operation_results)):
+            if op is None or not result.success:
+                continue
+
+            op_type = op.get('type', '')
+            normalized_type = normalize_operation_type(op_type)
+            history_op_type = op_type_map.get(normalized_type, op_type_map.get(op_type))
+
+            if not history_op_type:
+                # Skip operations that don't have a mapped history type (e.g., insert_table, find_replace)
+                logger.debug(f"Skipping history recording for operation type: {op_type}")
+                continue
+
+            start_index = op.get('index') or op.get('start_index', 0)
+            end_index = op.get('end_index')
+            text = op.get('text', '')
+            position_shift = result.position_shift
+
+            # Capture deleted/original text for undo if available from result
+            deleted_text = None
+            original_text = None
+            if result.affected_range:
+                # For delete/replace, we'd need to capture text before operation
+                # Since we're recording after, this is best-effort from doc_data (which is pre-operation)
+                if history_op_type in ['delete_text', 'replace_text'] and end_index:
+                    try:
+                        extracted = extract_text_at_range(doc_data, start_index, end_index)
+                        captured = extracted.get("text", "")
+                        if history_op_type == 'delete_text':
+                            deleted_text = captured
+                        else:
+                            original_text = captured
+                    except Exception as e:
+                        logger.debug(f"Could not capture text for undo: {e}")
+
+            # Determine undo capability
+            undo_capability = UndoCapability.FULL
+            undo_notes = None
+            if history_op_type == 'format_text':
+                undo_capability = UndoCapability.NONE
+                undo_notes = "Format undo requires capturing original formatting (not yet supported)"
+
+            try:
+                history_manager.record_operation(
+                    document_id=document_id,
+                    operation_type=history_op_type,
+                    operation_params={
+                        "start_index": start_index,
+                        "end_index": end_index,
+                        "text": text,
+                        "batch_index": i,
+                    },
+                    start_index=start_index,
+                    end_index=end_index,
+                    position_shift=position_shift,
+                    deleted_text=deleted_text,
+                    original_text=original_text,
+                    undo_capability=undo_capability,
+                    undo_notes=undo_notes,
+                )
+                logger.debug(f"Recorded batch operation {i} for undo: {history_op_type} at {start_index}")
+            except Exception as e:
+                logger.warning(f"Failed to record batch operation {i}: {e}")

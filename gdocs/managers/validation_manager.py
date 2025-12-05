@@ -5,7 +5,7 @@ This module provides centralized validation logic for Google Docs operations,
 extracting validation patterns from individual tool functions.
 """
 import logging
-from typing import Dict, Any, List, Tuple, Optional, Union
+from typing import Dict, Any, List, Tuple, Optional
 
 from gdocs.errors import (
     DocsErrorBuilder,
@@ -126,6 +126,9 @@ class ValidationManager:
         italic: Optional[bool] = None,
         underline: Optional[bool] = None,
         strikethrough: Optional[bool] = None,
+        small_caps: Optional[bool] = None,
+        subscript: Optional[bool] = None,
+        superscript: Optional[bool] = None,
         font_size: Optional[int] = None,
         font_family: Optional[str] = None,
         link: Optional[str] = None,
@@ -140,6 +143,9 @@ class ValidationManager:
             italic: Italic setting
             underline: Underline setting
             strikethrough: Strikethrough setting
+            small_caps: Small caps setting
+            subscript: Subscript setting (mutually exclusive with superscript)
+            superscript: Superscript setting (mutually exclusive with subscript)
             font_size: Font size in points
             font_family: Font family name
             link: URL for hyperlink (empty string "" removes link)
@@ -150,14 +156,18 @@ class ValidationManager:
             Tuple of (is_valid, error_message)
         """
         # Check if at least one formatting option is provided
-        formatting_params = [bold, italic, underline, strikethrough, font_size, font_family, link, foreground_color, background_color]
+        formatting_params = [bold, italic, underline, strikethrough, small_caps, subscript, superscript, font_size, font_family, link, foreground_color, background_color]
         if all(param is None for param in formatting_params):
-            return False, "At least one formatting parameter must be provided (bold, italic, underline, strikethrough, font_size, font_family, link, foreground_color, or background_color)"
+            return False, "At least one formatting parameter must be provided (bold, italic, underline, strikethrough, small_caps, subscript, superscript, font_size, font_family, link, foreground_color, or background_color)"
 
         # Validate boolean parameters
-        for param, name in [(bold, 'bold'), (italic, 'italic'), (underline, 'underline'), (strikethrough, 'strikethrough')]:
+        for param, name in [(bold, 'bold'), (italic, 'italic'), (underline, 'underline'), (strikethrough, 'strikethrough'), (small_caps, 'small_caps'), (subscript, 'subscript'), (superscript, 'superscript')]:
             if param is not None and not isinstance(param, bool):
                 return False, f"{name} parameter must be boolean (True/False), got {type(param).__name__}"
+
+        # Validate that subscript and superscript are not both True
+        if subscript and superscript:
+            return False, "subscript and superscript are mutually exclusive - only one can be True at a time"
 
         # Validate font size
         if font_size is not None:

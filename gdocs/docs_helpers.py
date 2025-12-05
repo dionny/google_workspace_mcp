@@ -563,6 +563,9 @@ def build_text_style(
     italic: bool = None,
     underline: bool = None,
     strikethrough: bool = None,
+    small_caps: bool = None,
+    subscript: bool = None,
+    superscript: bool = None,
     font_size: int = None,
     font_family: str = None,
     link: str = None,
@@ -577,6 +580,9 @@ def build_text_style(
         italic: Whether text should be italic
         underline: Whether text should be underlined
         strikethrough: Whether text should have strikethrough
+        small_caps: Whether text should be in small caps
+        subscript: Whether text should be subscript (mutually exclusive with superscript)
+        superscript: Whether text should be superscript (mutually exclusive with subscript)
         font_size: Font size in points
         font_family: Font family name
         link: URL to create a hyperlink (use empty string "" to remove existing link)
@@ -604,6 +610,19 @@ def build_text_style(
     if strikethrough is not None:
         text_style['strikethrough'] = strikethrough
         fields.append('strikethrough')
+
+    if small_caps is not None:
+        text_style['smallCaps'] = small_caps
+        fields.append('smallCaps')
+
+    if subscript is not None or superscript is not None:
+        if superscript:
+            text_style['baselineOffset'] = 'SUPERSCRIPT'
+        elif subscript:
+            text_style['baselineOffset'] = 'SUBSCRIPT'
+        else:
+            text_style['baselineOffset'] = 'NONE'
+        fields.append('baselineOffset')
 
     if font_size is not None:
         text_style['fontSize'] = {'magnitude': font_size, 'unit': 'PT'}
@@ -698,6 +717,9 @@ def create_format_text_request(
     italic: bool = None,
     underline: bool = None,
     strikethrough: bool = None,
+    small_caps: bool = None,
+    subscript: bool = None,
+    superscript: bool = None,
     font_size: int = None,
     font_family: str = None,
     link: str = None,
@@ -714,6 +736,9 @@ def create_format_text_request(
         italic: Whether text should be italic
         underline: Whether text should be underlined
         strikethrough: Whether text should have strikethrough
+        small_caps: Whether text should be in small caps
+        subscript: Whether text should be subscript (mutually exclusive with superscript)
+        superscript: Whether text should be superscript (mutually exclusive with subscript)
         font_size: Font size in points
         font_family: Font family name
         link: URL to create a hyperlink (use empty string "" to remove existing link)
@@ -724,7 +749,7 @@ def create_format_text_request(
         Dictionary representing the updateTextStyle request, or None if no styles provided
     """
     text_style, fields = build_text_style(
-        bold, italic, underline, strikethrough, font_size, font_family, link,
+        bold, italic, underline, strikethrough, small_caps, subscript, superscript, font_size, font_family, link,
         foreground_color, background_color
     )
     
@@ -873,6 +898,61 @@ def create_bullet_list_request(
         }
     }
 
+def create_paragraph_style_request(
+    start_index: int,
+    end_index: int,
+    line_spacing: float = None,
+    heading_style: str = None,
+    alignment: str = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Create an updateParagraphStyle request for Google Docs API.
+
+    Args:
+        start_index: Start position of text range to format
+        end_index: End position of text range to format
+        line_spacing: Line spacing as percentage (100=single, 150=1.5x, 200=double)
+            Common values: 100 (single), 115 (1.15x), 150 (1.5x), 200 (double)
+            Custom values from 50-1000 are supported.
+        heading_style: Named paragraph style to apply. Valid values:
+            HEADING_1, HEADING_2, HEADING_3, HEADING_4, HEADING_5, HEADING_6,
+            NORMAL_TEXT, TITLE, SUBTITLE
+        alignment: Paragraph alignment. Valid values:
+            START (left-aligned for LTR), CENTER, END (right-aligned for LTR), JUSTIFIED
+
+    Returns:
+        Dictionary representing the updateParagraphStyle request, or None if no styles provided
+    """
+    paragraph_style = {}
+    fields = []
+
+    if line_spacing is not None:
+        paragraph_style['lineSpacing'] = line_spacing
+        fields.append('lineSpacing')
+
+    if heading_style is not None:
+        paragraph_style['namedStyleType'] = heading_style
+        fields.append('namedStyleType')
+
+    if alignment is not None:
+        paragraph_style['alignment'] = alignment
+        fields.append('alignment')
+
+    if not paragraph_style:
+        return None
+
+    return {
+        'updateParagraphStyle': {
+            'range': {
+                'startIndex': start_index,
+                'endIndex': end_index
+            },
+            'paragraphStyle': paragraph_style,
+            'fields': ','.join(fields)
+        }
+    }
+
+
 # =============================================================================
 # Range-Based Selection for Semantic Editing
 # =============================================================================
@@ -973,8 +1053,6 @@ def find_sentence_boundaries(
     Returns:
         Tuple of (sentence_start, sentence_end)
     """
-    import re
-
     # Get text segments with indices
     text_segments = extract_document_text_with_indices(doc_data)
 

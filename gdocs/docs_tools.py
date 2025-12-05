@@ -6,7 +6,7 @@ This module provides MCP tools for interacting with Google Docs API and managing
 import logging
 import asyncio
 import io
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Literal
 
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
@@ -26,13 +26,13 @@ from gdocs.docs_helpers import (
     create_insert_page_break_request,
     create_insert_image_request,
     create_bullet_list_request,
+    create_paragraph_style_request,
     calculate_search_based_indices,
     find_all_occurrences_in_document,
     SearchPosition,
     OperationType,
     build_operation_result,
     resolve_range,
-    RangeResult,
     extract_text_at_range,
 )
 
@@ -61,6 +61,7 @@ from gdocs.managers import (
     ValidationManager,
     BatchOperationManager
 )
+from gdocs.managers.history_manager import get_history_manager, UndoCapability
 from gdocs.errors import DocsErrorBuilder, format_error
 
 logger = logging.getLogger(__name__)
@@ -335,11 +336,17 @@ async def modify_doc_text(
     italic: bool = None,
     underline: bool = None,
     strikethrough: bool = None,
+    small_caps: bool = None,
+    subscript: bool = None,
+    superscript: bool = None,
     font_size: int = None,
     font_family: str = None,
     link: str = None,
     foreground_color: str = None,
     background_color: str = None,
+    line_spacing: float = None,
+    heading_style: str = None,
+    alignment: str = None,
     search: str = None,
     position: str = None,
     occurrence: int = 1,
@@ -349,6 +356,7 @@ async def modify_doc_text(
     range: Dict[str, Any] = None,
     location: str = None,
     preview: bool = False,
+    convert_to_list: str = None,
 ) -> str:
     """
     Modifies text in a Google Doc - can insert/replace text and/or apply formatting.
@@ -415,12 +423,38 @@ async def modify_doc_text(
         italic: Whether to make text italic (True/False/None to leave unchanged)
         underline: Whether to underline text (True/False/None to leave unchanged)
         strikethrough: Whether to strikethrough text (True/False/None to leave unchanged)
+        small_caps: Whether to make text small caps (True/False/None to leave unchanged)
+        subscript: Whether to make text subscript (True/False/None to leave unchanged, mutually exclusive with superscript)
+        superscript: Whether to make text superscript (True/False/None to leave unchanged, mutually exclusive with subscript)
         font_size: Font size in points
         font_family: Font family name (e.g., "Arial", "Times New Roman")
         link: URL to create a hyperlink. Use empty string "" to remove an existing link.
             Supports http://, https://, or # (for internal document bookmarks).
         foreground_color: Text color as hex (#FF0000, #F00) or named color (red, blue, green, etc.)
         background_color: Background/highlight color as hex or named color
+
+        Paragraph formatting:
+        line_spacing: Line spacing as percentage of normal (100=single, 150=1.5x, 200=double)
+            Common values: 100 (single), 115 (1.15x - Google Docs default), 150 (1.5x), 200 (double)
+            Custom values from 50-1000 are supported.
+        heading_style: Change paragraph to a named style. Valid values:
+            - "HEADING_1" through "HEADING_6": Heading levels
+            - "NORMAL_TEXT": Regular paragraph text
+            - "TITLE": Document title style
+            - "SUBTITLE": Document subtitle style
+            Note: This changes the entire paragraph(s) containing the affected range.
+        alignment: Paragraph alignment. Valid values:
+            - "START": Left-aligned for left-to-right text
+            - "CENTER": Center-aligned
+            - "END": Right-aligned for left-to-right text
+            - "JUSTIFIED": Justified text (even margins on both sides)
+            Note: This changes the entire paragraph(s) containing the affected range.
+
+        List conversion:
+        convert_to_list: Convert the affected text range to a bullet list.
+            Values: "UNORDERED" (bullet points) or "ORDERED" (numbered list)
+            Can be combined with text operations or used alone with range/search positioning.
+            Converts existing paragraphs within the range to list items.
 
         Preview mode:
         preview: If True, returns what would change without actually modifying the document.
@@ -506,6 +540,67 @@ async def modify_doc_text(
                        text="new text", preview=True)
         # Returns preview info with current_content, new_content, context, etc.
 
+        # Convert existing paragraphs to bullet list:
+        modify_doc_text(document_id="...",
+                       range={"search": "- Item one", "extend": "paragraph"},
+                       convert_to_list="UNORDERED")
+
+        # Convert range of text to numbered list:
+        modify_doc_text(document_id="...", start_index=100, end_index=200,
+                       convert_to_list="ORDERED")
+
+        # Insert new text AND convert it to a list:
+        modify_doc_text(document_id="...", location="end",
+                       text="Item 1\\nItem 2\\nItem 3\\n",
+                       convert_to_list="UNORDERED")
+
+        # Set line spacing to double (200%) for a range:
+        modify_doc_text(document_id="...", start_index=100, end_index=200,
+                       line_spacing=200)
+
+        # Set line spacing to 1.5x (150%) for entire section:
+        modify_doc_text(document_id="...",
+                       range={"section": "Introduction", "include_heading": True},
+                       line_spacing=150)
+
+        # Insert new paragraph with single spacing:
+        modify_doc_text(document_id="...", location="end",
+                       text="\\nNew paragraph with single spacing.\\n",
+                       line_spacing=100)
+
+        # Change a paragraph to Heading 2:
+        modify_doc_text(document_id="...", search="Section Title",
+                       position="replace", text="Section Title",
+                       heading_style="HEADING_2")
+
+        # Convert normal text to a title:
+        modify_doc_text(document_id="...", start_index=1, end_index=50,
+                       heading_style="TITLE")
+
+        # Change heading back to normal text:
+        modify_doc_text(document_id="...",
+                       range={"search": "Old Heading", "extend": "paragraph"},
+                       heading_style="NORMAL_TEXT")
+
+        # Center-align a paragraph:
+        modify_doc_text(document_id="...", search="Title Text",
+                       position="replace", text="Title Text",
+                       alignment="CENTER")
+
+        # Right-align a range of text:
+        modify_doc_text(document_id="...", start_index=100, end_index=200,
+                       alignment="END")
+
+        # Justify a section:
+        modify_doc_text(document_id="...",
+                       range={"section": "Introduction", "include_heading": False},
+                       alignment="JUSTIFIED")
+
+        # Combine alignment with heading style:
+        modify_doc_text(document_id="...", search="Chapter 1",
+                       position="replace", text="Chapter 1",
+                       heading_style="HEADING_1", alignment="CENTER")
+
     Returns:
         str: JSON string with operation details including position shift information.
 
@@ -574,14 +669,50 @@ async def modify_doc_text(
     # Validate that we have something to do
     if text is None and not any([
         bold is not None, italic is not None, underline is not None, strikethrough is not None,
-        font_size, font_family, link is not None, foreground_color is not None, background_color is not None
+        small_caps is not None, subscript is not None, superscript is not None, font_size, font_family, link is not None, foreground_color is not None,
+        background_color is not None, line_spacing is not None, heading_style is not None, alignment is not None, convert_to_list is not None
     ]):
         error = DocsErrorBuilder.missing_required_param(
-            param_name="text or formatting",
+            param_name="text or formatting or convert_to_list",
             context_description="for document modification",
-            valid_values=["text", "bold", "italic", "underline", "strikethrough", "font_size", "font_family", "link", "foreground_color", "background_color"]
+            valid_values=["text", "bold", "italic", "underline", "strikethrough", "small_caps", "subscript", "superscript", "font_size", "font_family", "link", "foreground_color", "background_color", "line_spacing", "heading_style", "alignment", "convert_to_list"]
         )
         return format_error(error)
+
+    # Validate convert_to_list parameter
+    if convert_to_list is not None and convert_to_list not in ["ORDERED", "UNORDERED"]:
+        return validator.create_invalid_param_error(
+            param_name="convert_to_list",
+            received=convert_to_list,
+            valid_values=["ORDERED", "UNORDERED"]
+        )
+
+    # Validate line_spacing parameter
+    if line_spacing is not None:
+        if not isinstance(line_spacing, (int, float)) or line_spacing < 50 or line_spacing > 1000:
+            return validator.create_invalid_param_error(
+                param_name="line_spacing",
+                received=str(line_spacing),
+                valid_values=["50-1000 (100=single, 150=1.5x, 200=double)"]
+            )
+
+    # Validate heading_style parameter
+    valid_heading_styles = ["HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "HEADING_5", "HEADING_6", "NORMAL_TEXT", "TITLE", "SUBTITLE"]
+    if heading_style is not None and heading_style not in valid_heading_styles:
+        return validator.create_invalid_param_error(
+            param_name="heading_style",
+            received=heading_style,
+            valid_values=valid_heading_styles
+        )
+
+    # Validate alignment parameter
+    valid_alignments = ["START", "CENTER", "END", "JUSTIFIED"]
+    if alignment is not None and alignment not in valid_alignments:
+        return validator.create_invalid_param_error(
+            param_name="alignment",
+            received=alignment,
+            valid_values=valid_alignments
+        )
 
     # Determine positioning mode
     use_range_mode = range is not None
@@ -805,7 +936,8 @@ async def modify_doc_text(
     # Validate text formatting params if provided
     has_formatting = any([
         bold is not None, italic is not None, underline is not None, strikethrough is not None,
-        font_size, font_family, link is not None, foreground_color is not None, background_color is not None
+        small_caps is not None, subscript is not None, superscript is not None, font_size, font_family, link is not None, foreground_color is not None,
+        background_color is not None
     ])
     formatting_params_list = []
     if bold is not None:
@@ -816,6 +948,12 @@ async def modify_doc_text(
         formatting_params_list.append("underline")
     if strikethrough is not None:
         formatting_params_list.append("strikethrough")
+    if small_caps is not None:
+        formatting_params_list.append("small_caps")
+    if subscript is not None:
+        formatting_params_list.append("subscript")
+    if superscript is not None:
+        formatting_params_list.append("superscript")
     if font_size:
         formatting_params_list.append("font_size")
     if font_family:
@@ -829,14 +967,14 @@ async def modify_doc_text(
 
     if has_formatting:
         is_valid, error_msg = validator.validate_text_formatting_params(
-            bold, italic, underline, strikethrough, font_size, font_family, link,
+            bold, italic, underline, strikethrough, small_caps, subscript, superscript, font_size, font_family, link,
             foreground_color, background_color
         )
         if not is_valid:
             return validator.create_invalid_param_error(
                 param_name="formatting",
                 received=str(formatting_params_list),
-                valid_values=["bold (bool)", "italic (bool)", "underline (bool)", "strikethrough (bool)", "font_size (1-400)", "font_family (string)", "link (URL string)", "foreground_color (hex/#FF0000 or named)", "background_color (hex or named)"],
+                valid_values=["bold (bool)", "italic (bool)", "underline (bool)", "strikethrough (bool)", "small_caps (bool)", "subscript (bool)", "superscript (bool)", "font_size (1-400)", "font_family (string)", "link (URL string)", "foreground_color (hex/#FF0000 or named)", "background_color (hex or named)"],
                 context=error_msg
             )
 
@@ -931,7 +1069,7 @@ async def modify_doc_text(
 
         requests.append(create_format_text_request(
             format_start, format_end, bold, italic, underline, strikethrough,
-            font_size, font_family, link, foreground_color, background_color
+            small_caps, subscript, superscript, font_size, font_family, link, foreground_color, background_color
         ))
 
         format_details = []
@@ -943,6 +1081,12 @@ async def modify_doc_text(
             format_details.append("underline")
         if strikethrough is not None:
             format_details.append("strikethrough")
+        if small_caps is not None:
+            format_details.append("small_caps")
+        if subscript is not None:
+            format_details.append("subscript")
+        if superscript is not None:
+            format_details.append("superscript")
         if font_size:
             format_details.append("font_size")
         if font_family:
@@ -962,6 +1106,93 @@ async def modify_doc_text(
             operation_type = OperationType.FORMAT
             actual_start_index = format_start
             actual_end_index = format_end
+
+    # Handle paragraph formatting (line spacing, heading style, and/or alignment)
+    if line_spacing is not None or heading_style is not None or alignment is not None:
+        # Determine the range for paragraph formatting
+        para_start = actual_start_index if actual_start_index is not None else start_index
+        para_end = actual_end_index if actual_end_index is not None else end_index
+
+        # For text insertion, the paragraph range is the newly inserted text
+        if text is not None and operation_type == OperationType.INSERT:
+            para_start = actual_start_index
+            para_end = actual_start_index + len(text)
+        elif text is not None and operation_type == OperationType.REPLACE:
+            para_start = actual_start_index
+            para_end = actual_start_index + len(text)
+
+        # Handle special case for paragraph formatting at index 0
+        if para_start == 0:
+            para_start = 1
+
+        # Validate we have a valid range for paragraph formatting
+        if para_start is not None and para_end is not None and para_end > para_start:
+            paragraph_request = create_paragraph_style_request(para_start, para_end, line_spacing, heading_style, alignment)
+            if paragraph_request:
+                requests.append(paragraph_request)
+                para_format_details = []
+                if line_spacing is not None:
+                    para_format_details.append(f"line_spacing={line_spacing}%")
+                    format_styles.append(f"line_spacing_{line_spacing}")
+                if heading_style is not None:
+                    para_format_details.append(f"heading_style={heading_style}")
+                    format_styles.append(f"heading_style_{heading_style}")
+                if alignment is not None:
+                    para_format_details.append(f"alignment={alignment}")
+                    format_styles.append(f"alignment_{alignment}")
+                operations.append(f"Applied paragraph formatting ({', '.join(para_format_details)}) to range {para_start}-{para_end}")
+
+                # If only paragraph formatting (no text or text style operation), set operation type
+                if operation_type is None:
+                    operation_type = OperationType.FORMAT
+                    actual_start_index = para_start
+                    actual_end_index = para_end
+        elif para_start is None or para_end is None or para_end <= para_start:
+            # Need a valid range for paragraph formatting when not inserting text
+            if text is None:
+                para_type = "line_spacing" if line_spacing is not None else ("heading_style" if heading_style is not None else "alignment")
+                error = DocsErrorBuilder.missing_required_param(
+                    param_name="end_index or range",
+                    context_description=f"for {para_type} (need a range of text to format)",
+                    valid_values=["start_index + end_index", "range parameter", "text (for new text insertion)"]
+                )
+                return format_error(error)
+
+    # Handle list conversion
+    if convert_to_list is not None:
+        # Determine the range for list conversion
+        list_start = actual_start_index if actual_start_index is not None else start_index
+        list_end = actual_end_index if actual_end_index is not None else end_index
+
+        # For text insertion, the list range is the newly inserted text
+        if text is not None and operation_type == OperationType.INSERT:
+            list_start = actual_start_index
+            list_end = actual_start_index + len(text)
+        elif text is not None and operation_type == OperationType.REPLACE:
+            list_start = actual_start_index
+            list_end = actual_start_index + len(text)
+
+        # Validate we have a valid range for list conversion
+        if list_start is not None and list_end is not None and list_end > list_start:
+            requests.append(create_bullet_list_request(list_start, list_end, convert_to_list))
+            list_type_display = "bullet" if convert_to_list == "UNORDERED" else "numbered"
+            operations.append(f"Converted to {list_type_display} list in range {list_start}-{list_end}")
+            format_styles.append(f"convert_to_{list_type_display}_list")
+
+            # If only list conversion (no text or formatting operation), set operation type
+            if operation_type is None:
+                operation_type = OperationType.FORMAT
+                actual_start_index = list_start
+                actual_end_index = list_end
+        elif list_start is None or list_end is None or list_end <= list_start:
+            # Need a valid range for list conversion when not inserting text
+            if text is None:
+                error = DocsErrorBuilder.missing_required_param(
+                    param_name="end_index or range",
+                    context_description="for convert_to_list (need a range of text to convert)",
+                    valid_values=["start_index + end_index", "range parameter", "text (for new text insertion)"]
+                )
+                return format_error(error)
 
     # Handle preview mode - return what would change without actually modifying
     import json
@@ -992,7 +1223,18 @@ async def modify_doc_text(
         if operation_type == OperationType.INSERT:
             preview_result["position_shift"] = text_length
             preview_result["new_content"] = text
-            preview_result["message"] = f"Would insert {text_length} characters at index {actual_start_index}"
+            msg = f"Would insert {text_length} characters at index {actual_start_index}"
+            if convert_to_list:
+                preview_result["convert_to_list"] = convert_to_list
+                list_type_display = "bullet" if convert_to_list == "UNORDERED" else "numbered"
+                msg += f" and convert to {list_type_display} list"
+            if line_spacing is not None:
+                preview_result["line_spacing"] = line_spacing
+                msg += f" and set line spacing to {line_spacing}%"
+            if heading_style is not None:
+                preview_result["heading_style"] = heading_style
+                msg += f" and set heading style to {heading_style}"
+            preview_result["message"] = msg
         elif operation_type == OperationType.REPLACE:
             original_length = (actual_end_index or actual_start_index) - actual_start_index
             preview_result["position_shift"] = text_length - original_length
@@ -1008,7 +1250,18 @@ async def modify_doc_text(
                     "before": current.get("context_before", ""),
                     "after": current.get("context_after", "")
                 }
-            preview_result["message"] = f"Would replace {original_length} characters with {text_length} characters at index {actual_start_index}"
+            msg = f"Would replace {original_length} characters with {text_length} characters at index {actual_start_index}"
+            if convert_to_list:
+                preview_result["convert_to_list"] = convert_to_list
+                list_type_display = "bullet" if convert_to_list == "UNORDERED" else "numbered"
+                msg += f" and convert to {list_type_display} list"
+            if line_spacing is not None:
+                preview_result["line_spacing"] = line_spacing
+                msg += f" and set line spacing to {line_spacing}%"
+            if heading_style is not None:
+                preview_result["heading_style"] = heading_style
+                msg += f" and set heading style to {heading_style}"
+            preview_result["message"] = msg
         elif operation_type == OperationType.DELETE:
             deleted_length = (actual_end_index or actual_start_index) - actual_start_index
             preview_result["position_shift"] = -deleted_length
@@ -1026,6 +1279,12 @@ async def modify_doc_text(
         elif operation_type == OperationType.FORMAT:
             preview_result["position_shift"] = 0
             preview_result["styles_to_apply"] = format_styles
+            if convert_to_list:
+                preview_result["convert_to_list"] = convert_to_list
+            if line_spacing is not None:
+                preview_result["line_spacing"] = line_spacing
+            if heading_style is not None:
+                preview_result["heading_style"] = heading_style
 
             # Extract current content at the format range
             if doc_data:
@@ -1047,12 +1306,81 @@ async def modify_doc_text(
 
         return json.dumps(preview_result, indent=2)
 
+    # Capture text before operation for undo support (delete/replace operations)
+    deleted_text_for_undo = None
+    original_text_for_undo = None
+    if operation_type in [OperationType.DELETE, OperationType.REPLACE] and actual_end_index:
+        # Ensure we have doc_data for text capture
+        try:
+            if 'doc_data' not in dir() or doc_data is None:
+                doc_data = await asyncio.to_thread(
+                    service.documents().get(documentId=document_id).execute
+                )
+            extracted = extract_text_at_range(doc_data, actual_start_index, actual_end_index)
+            captured_text = extracted.get("text", "")
+            if operation_type == OperationType.DELETE:
+                deleted_text_for_undo = captured_text
+            else:
+                original_text_for_undo = captured_text
+        except Exception as e:
+            logger.warning(f"Failed to capture text for undo: {e}")
+
     await asyncio.to_thread(
         service.documents().batchUpdate(
             documentId=document_id,
             body={'requests': requests}
         ).execute
     )
+
+    # Record operation for undo history (automatic tracking)
+    try:
+        history_manager = get_history_manager()
+        # Map OperationType to string for history manager
+        op_type_map = {
+            OperationType.INSERT: "insert_text",
+            OperationType.DELETE: "delete_text",
+            OperationType.REPLACE: "replace_text",
+            OperationType.FORMAT: "format_text",
+        }
+        history_op_type = op_type_map.get(operation_type, "unknown")
+
+        # Calculate position shift
+        position_shift = 0
+        if operation_type == OperationType.INSERT:
+            position_shift = len(text) if text else 0
+        elif operation_type == OperationType.DELETE:
+            position_shift = -(actual_end_index - actual_start_index) if actual_end_index else 0
+        elif operation_type == OperationType.REPLACE:
+            old_len = (actual_end_index - actual_start_index) if actual_end_index else 0
+            new_len = len(text) if text else 0
+            position_shift = new_len - old_len
+
+        # Determine undo capability
+        undo_capability = UndoCapability.FULL
+        undo_notes = None
+        if operation_type == OperationType.FORMAT:
+            undo_capability = UndoCapability.NONE
+            undo_notes = "Format undo requires capturing original formatting (not yet supported)"
+
+        history_manager.record_operation(
+            document_id=document_id,
+            operation_type=history_op_type,
+            operation_params={
+                "start_index": actual_start_index,
+                "end_index": actual_end_index,
+                "text": text,
+            },
+            start_index=actual_start_index,
+            end_index=actual_end_index,
+            position_shift=position_shift,
+            deleted_text=deleted_text_for_undo,
+            original_text=original_text_for_undo,
+            undo_capability=undo_capability,
+            undo_notes=undo_notes,
+        )
+        logger.debug(f"Recorded operation for undo: {history_op_type} at {actual_start_index}")
+    except Exception as e:
+        logger.warning(f"Failed to record operation for undo history: {e}")
 
     # Build structured operation result
 
@@ -1132,7 +1460,24 @@ async def find_and_replace_doc(
     Returns:
         str: JSON string with operation details.
 
-        When preview=False (default), returns replacement count.
+        When preview=False (default), returns structured operation result:
+        {
+            "success": true,
+            "operation": "find_replace",
+            "occurrences_replaced": 3,
+            "find_text": "TODO",
+            "replace_text": "DONE",
+            "match_case": false,
+            "position_shift_per_replacement": 1,
+            "total_position_shift": 3,
+            "affected_ranges": [
+                {"index": 1, "original_range": {"start": 15, "end": 19}},
+                {"index": 2, "original_range": {"start": 50, "end": 54}},
+                ...
+            ],
+            "message": "Replaced 3 occurrence(s) of 'TODO' with 'DONE'",
+            "link": "https://docs.google.com/document/d/.../edit"
+        }
 
         When preview=True, returns a preview response:
         {
@@ -1207,6 +1552,22 @@ async def find_and_replace_doc(
 
         return json.dumps(preview_result, indent=2)
 
+    # For non-preview mode, first get document to find all occurrence positions
+    # This allows us to report affected ranges in the structured response
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+    all_occurrences = find_all_occurrences_in_document(doc_data, find_text, match_case)
+
+    # Build matches list with original positions (before replacement)
+    len_diff = len(replace_text) - len(find_text)
+    matches = []
+    for idx, (start, end) in enumerate(all_occurrences, 1):
+        matches.append({
+            "index": idx,
+            "original_range": {"start": start, "end": end},
+        })
+
     # Execute the actual replacement
     requests = [create_find_replace_request(find_text, replace_text, match_case)]
 
@@ -1225,13 +1586,28 @@ async def find_and_replace_doc(
             replacements = reply['replaceAllText'].get('occurrencesChanged', 0)
 
     link = f"https://docs.google.com/document/d/{document_id}/edit"
-    message = f"Replaced {replacements} occurrence(s) of '{find_text}' with '{replace_text}' in document {document_id}. Link: {link}"
+    message = f"Replaced {replacements} occurrence(s) of '{find_text}' with '{replace_text}'"
 
     # Add hint when only 1 replacement was made - user might have wanted targeted replacement
     if replacements == 1:
-        message += "\n\nTip: For single replacements, you can also use modify_doc_text with search + position='replace' to target a specific occurrence."
+        message += ". Tip: For single replacements, you can also use modify_doc_text with search + position='replace' to target a specific occurrence."
 
-    return message
+    # Build structured response consistent with other tools
+    operation_result = {
+        "success": True,
+        "operation": "find_replace",
+        "occurrences_replaced": replacements,
+        "find_text": find_text,
+        "replace_text": replace_text,
+        "match_case": match_case,
+        "position_shift_per_replacement": len_diff,
+        "total_position_shift": len_diff * replacements,
+        "affected_ranges": matches,
+        "message": message,
+        "link": link,
+    }
+
+    return json.dumps(operation_result, indent=2)
 
 
 @server.tool()
@@ -1339,34 +1715,108 @@ async def insert_doc_image(
     user_google_email: str,
     document_id: str,
     image_source: str,
-    index: int,
+    index: int = None,
+    after_heading: str = None,
     width: int = 0,
     height: int = 0,
 ) -> str:
     """
     Inserts an image into a Google Doc from Drive or a URL.
 
+    SIMPLIFIED USAGE - No pre-flight call needed:
+    - Omit 'index' to append image at end of document (recommended)
+    - Use 'after_heading' to insert image after a specific heading
+    - Provide explicit 'index' only for precise positioning
+
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document to update
         image_source: Drive file ID or public image URL
-        index: Position to insert image (0-based)
+        index: Document position (optional, defaults to end of document)
+        after_heading: Insert after this heading (optional, case-insensitive)
         width: Image width in points (optional)
         height: Image height in points (optional)
 
     Returns:
         str: Confirmation message with insertion details
     """
-    logger.info(f"[insert_doc_image] Doc={document_id}, source={image_source}, index={index}")
+    logger.info(f"[insert_doc_image] Doc={document_id}, source={image_source}, index={index}, after_heading={after_heading}")
 
     # Input validation
     validator = ValidationManager()
 
-    # Handle the special case where we can't insert at the first section break
-    # If index is 0, bump it to 1 to avoid the section break
-    if index == 0:
-        logger.debug("Adjusting index from 0 to 1 to avoid first section break")
-        index = 1
+    # Validate mutual exclusivity of index and after_heading
+    if index is not None and after_heading is not None:
+        return (
+            "ERROR: Cannot specify both 'index' and 'after_heading'. "
+            "Use one or the other."
+        )
+
+    # Resolve insertion index
+    resolved_index = index
+    location_description = None
+
+    if index is not None:
+        # Explicit index provided - validate it
+        is_valid, error_msg = validator.validate_index(index, "Index")
+        if not is_valid:
+            return f"ERROR: {error_msg}"
+        # Handle the special case where we can't insert at the first section break
+        if index == 0:
+            logger.debug("Adjusting index from 0 to 1 to avoid first section break")
+            resolved_index = 1
+        location_description = f"at explicit index {resolved_index}"
+    else:
+        # Auto-detect insertion point - fetch document first
+        try:
+            doc_data = await asyncio.to_thread(
+                docs_service.documents().get(documentId=document_id).execute
+            )
+        except Exception as e:
+            return (
+                f"ERROR: Failed to fetch document for index calculation: "
+                f"{str(e)}"
+            )
+
+        if after_heading is not None:
+            # Insert after specified heading
+            insertion_point = find_section_insertion_point(
+                doc_data, after_heading, position='end'
+            )
+            if insertion_point is None:
+                # List available headings to help user
+                headings = get_all_headings(doc_data)
+                if headings:
+                    heading_list = ", ".join(
+                        [f'"{h["text"]}"' for h in headings[:5]]
+                    )
+                    more = (
+                        f" (and {len(headings) - 5} more)"
+                        if len(headings) > 5 else ""
+                    )
+                    return (
+                        f"ERROR: Heading '{after_heading}' not found. "
+                        f"Available headings: {heading_list}{more}"
+                    )
+                else:
+                    return (
+                        f"ERROR: Heading '{after_heading}' not found. "
+                        "Document has no headings."
+                    )
+            resolved_index = insertion_point
+            location_description = f"after heading '{after_heading}'"
+        else:
+            # Default: append to end of document
+            structure = parse_document_structure(doc_data)
+            total_length = structure['total_length']
+            # Use total_length - 1 for safe insertion point
+            resolved_index = total_length - 1 if total_length > 1 else 1
+            location_description = "at end of document"
+
+    logger.debug(
+        f"[insert_doc_image] Resolved index: {resolved_index} "
+        f"({location_description})"
+    )
 
     # Determine if source is a Drive file ID or URL
     is_drive_file = not (image_source.startswith('http://') or image_source.startswith('https://'))
@@ -1399,7 +1849,7 @@ async def insert_doc_image(
         source_description = "URL image"
 
     # Use helper to create image request
-    requests = [create_insert_image_request(index, image_uri, width, height)]
+    requests = [create_insert_image_request(resolved_index, image_uri, width, height)]
 
     await asyncio.to_thread(
         docs_service.documents().batchUpdate(
@@ -1413,7 +1863,10 @@ async def insert_doc_image(
         size_info = f" (size: {width or 'auto'}x{height or 'auto'} points)"
 
     link = f"https://docs.google.com/document/d/{document_id}/edit"
-    return f"Inserted {source_description}{size_info} at index {index} in document {document_id}. Link: {link}"
+    return (
+        f"Inserted {source_description}{size_info} {location_description} "
+        f"(index {resolved_index}) in document {document_id}. Link: {link}"
+    )
 
 @server.tool()
 @handle_http_errors("update_doc_headers_footers", service_type="docs")
@@ -1862,7 +2315,6 @@ async def batch_edit_doc(
 
 
 # Detail level type for get_doc_info
-from typing import Literal
 DetailLevel = Literal["summary", "structure", "tables", "headings", "all"]
 
 
@@ -3911,16 +4363,11 @@ resolve_comment = _comment_tools['resolve_comment']
 # Operation History and Undo Tools
 # =============================================================================
 
-from gdocs.managers.history_manager import (
-    get_history_manager,
-    UndoCapability,
-)
-from gdocs.docs_helpers import extract_text_at_range
-
 
 @server.tool()
 async def get_doc_operation_history(
     document_id: str,
+    user_google_email: str = None,
     limit: int = 10,
     include_undone: bool = False,
 ) -> str:
@@ -3937,6 +4384,7 @@ async def get_doc_operation_history(
 
     Args:
         document_id: ID of the document
+        user_google_email: Google email of the user (accepted for API consistency, not used)
         limit: Maximum number of operations to return (default: 10, max: 50)
         include_undone: Whether to include already-undone operations (default: False)
 
@@ -4141,7 +4589,7 @@ async def undo_doc_operation(
 
         return json.dumps({
             "success": True,
-            "message": f"Successfully undone operation",
+            "message": "Successfully undone operation",
             "operation_id": undo_result.operation_id,
             "reverse_operation": {
                 "type": op_type,
@@ -4260,12 +4708,13 @@ async def record_doc_operation(
     """
     Manually record an operation for undo tracking.
 
+    NOTE: Operations through modify_doc_text and batch_edit_doc are now
+    automatically recorded for undo support. This tool is only needed for
+    advanced scenarios or custom integrations where you bypass those tools.
+
     This tool allows recording operations that need undo support. Call this
     BEFORE performing the operation to capture the original text that will
     be deleted or replaced.
-
-    For most use cases, prefer using modify_doc_text with automatic tracking
-    (coming soon). This tool is for advanced scenarios or custom integrations.
 
     Args:
         user_google_email: User's Google email address

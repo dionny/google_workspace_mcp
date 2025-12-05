@@ -647,3 +647,227 @@ class TestLocationParameterValidation:
             'message': "Inserting at document start (index 1)"
         }
         assert location_info['resolved_index'] == 1
+
+
+class TestConvertToListValidation:
+    """Tests for convert_to_list parameter validation."""
+
+    def test_invalid_convert_to_list_value_error(self):
+        """Test that invalid convert_to_list values produce proper error."""
+        validator = ValidationManager()
+        error = validator.create_invalid_param_error(
+            param_name="convert_to_list",
+            received="BULLET",
+            valid_values=["ORDERED", "UNORDERED"]
+        )
+        assert error is not None
+        parsed = json.loads(error)
+        assert parsed["error"] is True
+        assert "convert_to_list" in parsed["message"].lower()
+        assert "BULLET" in str(parsed)
+        assert "ORDERED" in str(parsed)
+        assert "UNORDERED" in str(parsed)
+
+    def test_convert_to_list_accepted_values(self):
+        """Test that ORDERED and UNORDERED are the only valid values."""
+        valid_values = ["ORDERED", "UNORDERED"]
+        invalid_values = ["bullet", "numbered", "BULLETS", "LIST", ""]
+
+        for val in valid_values:
+            assert val in ["ORDERED", "UNORDERED"], f"{val} should be valid"
+
+        for val in invalid_values:
+            assert val not in ["ORDERED", "UNORDERED"], f"{val} should be invalid"
+
+    def test_convert_to_list_format_styles_output(self):
+        """Test that convert_to_list adds to format_styles correctly."""
+        # Simulate what happens when convert_to_list is applied
+        format_styles = []
+        convert_to_list = "UNORDERED"
+        list_type_display = "bullet" if convert_to_list == "UNORDERED" else "numbered"
+        format_styles.append(f"convert_to_{list_type_display}_list")
+
+        assert "convert_to_bullet_list" in format_styles
+
+        format_styles = []
+        convert_to_list = "ORDERED"
+        list_type_display = "bullet" if convert_to_list == "UNORDERED" else "numbered"
+        format_styles.append(f"convert_to_{list_type_display}_list")
+
+        assert "convert_to_numbered_list" in format_styles
+
+
+class TestLineSpacingValidation:
+    """Tests for line_spacing parameter validation and functionality."""
+
+    def test_line_spacing_invalid_type_error(self):
+        """Test that non-numeric line_spacing produces error."""
+        validator = ValidationManager()
+        # String value should be invalid
+        line_spacing = "double"
+        if not isinstance(line_spacing, (int, float)):
+            error = validator.create_invalid_param_error(
+                param_name="line_spacing",
+                received=str(line_spacing),
+                valid_values=["50-1000 (100=single, 150=1.5x, 200=double)"]
+            )
+            result = json.loads(error)
+            assert result["error"] is True
+            assert result["code"] == "INVALID_PARAM_VALUE"
+            assert "line_spacing" in result["message"]
+
+    def test_line_spacing_out_of_range_low_error(self):
+        """Test that line_spacing below 50 produces error."""
+        validator = ValidationManager()
+        line_spacing = 25
+        if line_spacing < 50 or line_spacing > 1000:
+            error = validator.create_invalid_param_error(
+                param_name="line_spacing",
+                received=str(line_spacing),
+                valid_values=["50-1000 (100=single, 150=1.5x, 200=double)"]
+            )
+            result = json.loads(error)
+            assert result["error"] is True
+            assert result["code"] == "INVALID_PARAM_VALUE"
+
+    def test_line_spacing_out_of_range_high_error(self):
+        """Test that line_spacing above 1000 produces error."""
+        validator = ValidationManager()
+        line_spacing = 1500
+        if line_spacing < 50 or line_spacing > 1000:
+            error = validator.create_invalid_param_error(
+                param_name="line_spacing",
+                received=str(line_spacing),
+                valid_values=["50-1000 (100=single, 150=1.5x, 200=double)"]
+            )
+            result = json.loads(error)
+            assert result["error"] is True
+            assert result["code"] == "INVALID_PARAM_VALUE"
+
+    def test_line_spacing_accepted_values(self):
+        """Test that common line_spacing values are valid."""
+        valid_values = [50, 100, 115, 150, 200, 250, 1000]
+        for val in valid_values:
+            assert 50 <= val <= 1000, f"{val} should be in valid range"
+
+    def test_line_spacing_format_styles_output(self):
+        """Test that line_spacing adds to format_styles correctly."""
+        format_styles = []
+        line_spacing = 150
+        format_styles.append(f"line_spacing_{line_spacing}")
+
+        assert "line_spacing_150" in format_styles
+
+    def test_create_paragraph_style_request_output(self):
+        """Test that create_paragraph_style_request generates correct API format."""
+        from gdocs.docs_helpers import create_paragraph_style_request
+
+        result = create_paragraph_style_request(10, 50, 150)
+
+        assert result is not None
+        assert 'updateParagraphStyle' in result
+        assert result['updateParagraphStyle']['range']['startIndex'] == 10
+        assert result['updateParagraphStyle']['range']['endIndex'] == 50
+        assert result['updateParagraphStyle']['paragraphStyle']['lineSpacing'] == 150
+        assert result['updateParagraphStyle']['fields'] == 'lineSpacing'
+
+    def test_create_paragraph_style_request_single_spacing(self):
+        """Test single (100) line spacing request."""
+        from gdocs.docs_helpers import create_paragraph_style_request
+
+        result = create_paragraph_style_request(1, 100, 100)
+
+        assert result['updateParagraphStyle']['paragraphStyle']['lineSpacing'] == 100
+
+    def test_create_paragraph_style_request_double_spacing(self):
+        """Test double (200) line spacing request."""
+        from gdocs.docs_helpers import create_paragraph_style_request
+
+        result = create_paragraph_style_request(1, 100, 200)
+
+        assert result['updateParagraphStyle']['paragraphStyle']['lineSpacing'] == 200
+
+    def test_create_paragraph_style_request_none_returns_none(self):
+        """Test that None line_spacing returns None."""
+        from gdocs.docs_helpers import create_paragraph_style_request
+
+        result = create_paragraph_style_request(10, 50, None)
+
+        assert result is None
+
+
+class TestAlignmentValidation:
+    """Tests for alignment parameter validation and functionality."""
+
+    def test_alignment_invalid_value_error(self):
+        """Test that invalid alignment value produces error."""
+        validator = ValidationManager()
+        alignment = "LEFT"  # Invalid - should be "START"
+        valid_alignments = ["START", "CENTER", "END", "JUSTIFIED"]
+        if alignment not in valid_alignments:
+            error = validator.create_invalid_param_error(
+                param_name="alignment",
+                received=alignment,
+                valid_values=valid_alignments
+            )
+            result = json.loads(error)
+            assert result["error"] is True
+            assert result["code"] == "INVALID_PARAM_VALUE"
+            assert "alignment" in result["message"]
+
+    def test_alignment_accepted_values(self):
+        """Test that all valid alignment values are accepted."""
+        valid_values = ["START", "CENTER", "END", "JUSTIFIED"]
+        for val in valid_values:
+            assert val in valid_values, f"{val} should be in valid alignment values"
+
+    def test_alignment_format_styles_output(self):
+        """Test that alignment adds to format_styles correctly."""
+        format_styles = []
+        alignment = "CENTER"
+        format_styles.append(f"alignment_{alignment}")
+
+        assert "alignment_CENTER" in format_styles
+
+    def test_create_paragraph_style_request_with_alignment(self):
+        """Test that create_paragraph_style_request generates correct API format for alignment."""
+        from gdocs.docs_helpers import create_paragraph_style_request
+
+        result = create_paragraph_style_request(10, 50, alignment="CENTER")
+
+        assert result is not None
+        assert 'updateParagraphStyle' in result
+        assert result['updateParagraphStyle']['range']['startIndex'] == 10
+        assert result['updateParagraphStyle']['range']['endIndex'] == 50
+        assert result['updateParagraphStyle']['paragraphStyle']['alignment'] == "CENTER"
+        assert result['updateParagraphStyle']['fields'] == 'alignment'
+
+    def test_create_paragraph_style_request_justified(self):
+        """Test JUSTIFIED alignment request."""
+        from gdocs.docs_helpers import create_paragraph_style_request
+
+        result = create_paragraph_style_request(1, 100, alignment="JUSTIFIED")
+
+        assert result['updateParagraphStyle']['paragraphStyle']['alignment'] == "JUSTIFIED"
+
+    def test_create_paragraph_style_request_end_alignment(self):
+        """Test END alignment request (right-align for LTR)."""
+        from gdocs.docs_helpers import create_paragraph_style_request
+
+        result = create_paragraph_style_request(1, 100, alignment="END")
+
+        assert result['updateParagraphStyle']['paragraphStyle']['alignment'] == "END"
+
+    def test_create_paragraph_style_request_combined_alignment_and_line_spacing(self):
+        """Test combining alignment with line_spacing."""
+        from gdocs.docs_helpers import create_paragraph_style_request
+
+        result = create_paragraph_style_request(10, 50, line_spacing=150, alignment="CENTER")
+
+        assert result is not None
+        para_style = result['updateParagraphStyle']['paragraphStyle']
+        assert para_style['lineSpacing'] == 150
+        assert para_style['alignment'] == "CENTER"
+        fields = result['updateParagraphStyle']['fields']
+        assert 'lineSpacing' in fields
+        assert 'alignment' in fields

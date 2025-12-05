@@ -1559,6 +1559,74 @@ class ScenarioTester:
                 )
             )
 
+        # Test 20c: Convert text to bullet list using modify_doc_text
+        try:
+            # First insert some plain text to convert
+            await self.call_tool(
+                "modify_doc_text",
+                location="end",
+                text=f"\n{self.test_marker} Convert Item 1\n{self.test_marker} Convert Item 2\n",
+            )
+            # Get current document length to figure out the range
+            result = await self.call_tool("get_doc_structure")
+            import json
+            struct = json.loads(result)
+            end_index = struct.get("total_length", 200) - 1
+            # Convert the last few lines to a bullet list
+            result = await self.call_tool(
+                "modify_doc_text",
+                start_index=max(1, end_index - 100),
+                end_index=end_index,
+                convert_to_list="UNORDERED",
+            )
+            passed = "success" in str(result).lower() or "list" in str(result).lower() or "bullet" in str(result).lower()
+            self.record(
+                TestResult(
+                    name="Convert text to bullet list",
+                    category="lists",
+                    passed=passed,
+                    message="Text converted to bullet list",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Convert text to bullet list",
+                    category="lists",
+                    passed=False,
+                    message="Failed",
+                    error=str(e),
+                )
+            )
+
+        # Test 20d: Insert text AND convert to numbered list in one operation
+        try:
+            result = await self.call_tool(
+                "modify_doc_text",
+                location="end",
+                text=f"\n{self.test_marker} Step 1\n{self.test_marker} Step 2\n{self.test_marker} Step 3\n",
+                convert_to_list="ORDERED",
+            )
+            passed = "success" in str(result).lower() or "numbered" in str(result).lower() or "list" in str(result).lower()
+            self.record(
+                TestResult(
+                    name="Insert and convert to numbered list",
+                    category="lists",
+                    passed=passed,
+                    message="Text inserted and converted to numbered list",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Insert and convert to numbered list",
+                    category="lists",
+                    passed=False,
+                    message="Failed",
+                    error=str(e),
+                )
+            )
+
     async def test_heading_navigation(self):
         """Test 21: Navigate between headings."""
         print("\n🧭 Category: Heading Navigation")
