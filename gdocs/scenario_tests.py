@@ -479,7 +479,7 @@ class ScenarioTester:
                 )
             )
 
-        # Test 4e: Text color (expected to fail - missing feature)
+        # Test 4e: Text color
         try:
             result = await self.call_tool(
                 "modify_doc_text",
@@ -487,12 +487,14 @@ class ScenarioTester:
                 position="replace",
                 foreground_color="#FF0000",
             )
+            result_dict = json.loads(result) if isinstance(result, str) else result
             self.record(
                 TestResult(
                     name="Change text color",
                     category="formatting",
-                    passed=True,
-                    message="Text color - FEATURE NOW IMPLEMENTED! 🎉",
+                    passed=result_dict.get("success", False),
+                    message="Text color applied",
+                    details=result_dict,
                 )
             )
         except Exception as e:
@@ -501,13 +503,12 @@ class ScenarioTester:
                     name="Change text color",
                     category="formatting",
                     passed=False,
-                    message="EXPECTED FAIL - Feature not implemented",
+                    message="Failed",
                     error=str(e),
-                    expected_fail=True,
                 )
             )
 
-        # Test 4f: Strikethrough (expected to fail - missing feature)
+        # Test 4f: Strikethrough
         try:
             result = await self.call_tool(
                 "modify_doc_text",
@@ -515,12 +516,14 @@ class ScenarioTester:
                 position="replace",
                 strikethrough=True,
             )
+            result_dict = json.loads(result) if isinstance(result, str) else result
             self.record(
                 TestResult(
                     name="Apply strikethrough",
                     category="formatting",
-                    passed=True,
-                    message="Strikethrough - FEATURE NOW IMPLEMENTED! 🎉",
+                    passed=result_dict.get("success", False),
+                    message="Strikethrough applied",
+                    details=result_dict,
                 )
             )
         except Exception as e:
@@ -529,9 +532,8 @@ class ScenarioTester:
                     name="Apply strikethrough",
                     category="formatting",
                     passed=False,
-                    message="EXPECTED FAIL - Feature not implemented",
+                    message="Failed",
                     error=str(e),
-                    expected_fail=True,
                 )
             )
 

@@ -514,13 +514,60 @@ def calculate_search_based_indices(
         return (False, None, None, f"Invalid position '{position}'. Use 'before', 'after', or 'replace'.")
 
 
+def _parse_color(color_str: str) -> Dict[str, Any]:
+    """
+    Parse a color string (hex or named) to Google Docs API color format.
+    
+    Args:
+        color_str: Color as hex (#FF0000, #F00) or CSS named color
+        
+    Returns:
+        Dictionary with rgbColor format for Google Docs API
+    """
+    # Handle hex colors
+    if color_str.startswith('#'):
+        hex_color = color_str.lstrip('#')
+        # Handle short hex (#F00 -> #FF0000)
+        if len(hex_color) == 3:
+            hex_color = ''.join(c*2 for c in hex_color)
+        if len(hex_color) != 6:
+            raise ValueError(f"Invalid hex color: {color_str}")
+        r = int(hex_color[0:2], 16) / 255.0
+        g = int(hex_color[2:4], 16) / 255.0
+        b = int(hex_color[4:6], 16) / 255.0
+        return {'color': {'rgbColor': {'red': r, 'green': g, 'blue': b}}}
+    
+    # Handle common named colors
+    named_colors = {
+        'red': (1.0, 0.0, 0.0),
+        'green': (0.0, 1.0, 0.0),
+        'blue': (0.0, 0.0, 1.0),
+        'yellow': (1.0, 1.0, 0.0),
+        'orange': (1.0, 0.65, 0.0),
+        'purple': (0.5, 0.0, 0.5),
+        'black': (0.0, 0.0, 0.0),
+        'white': (1.0, 1.0, 1.0),
+        'gray': (0.5, 0.5, 0.5),
+        'grey': (0.5, 0.5, 0.5),
+    }
+    color_lower = color_str.lower()
+    if color_lower in named_colors:
+        r, g, b = named_colors[color_lower]
+        return {'color': {'rgbColor': {'red': r, 'green': g, 'blue': b}}}
+    
+    raise ValueError(f"Unknown color format: {color_str}. Use hex (#FF0000) or named colors.")
+
+
 def build_text_style(
     bold: bool = None,
     italic: bool = None,
     underline: bool = None,
+    strikethrough: bool = None,
     font_size: int = None,
     font_family: str = None,
-    link: str = None
+    link: str = None,
+    foreground_color: str = None,
+    background_color: str = None,
 ) -> tuple[Dict[str, Any], list[str]]:
     """
     Build text style object for Google Docs API requests.
@@ -529,9 +576,12 @@ def build_text_style(
         bold: Whether text should be bold
         italic: Whether text should be italic
         underline: Whether text should be underlined
+        strikethrough: Whether text should have strikethrough
         font_size: Font size in points
         font_family: Font family name
         link: URL to create a hyperlink (use empty string "" to remove existing link)
+        foreground_color: Text color as hex (#FF0000) or named color (red, blue, etc.)
+        background_color: Background/highlight color as hex or named color
 
     Returns:
         Tuple of (text_style_dict, list_of_field_names)
@@ -551,6 +601,10 @@ def build_text_style(
         text_style['underline'] = underline
         fields.append('underline')
 
+    if strikethrough is not None:
+        text_style['strikethrough'] = strikethrough
+        fields.append('strikethrough')
+
     if font_size is not None:
         text_style['fontSize'] = {'magnitude': font_size, 'unit': 'PT'}
         fields.append('fontSize')
@@ -566,6 +620,14 @@ def build_text_style(
         else:
             text_style['link'] = {'url': link}
         fields.append('link')
+
+    if foreground_color is not None:
+        text_style['foregroundColor'] = _parse_color(foreground_color)
+        fields.append('foregroundColor')
+
+    if background_color is not None:
+        text_style['backgroundColor'] = _parse_color(background_color)
+        fields.append('backgroundColor')
 
     return text_style, fields
 
@@ -635,9 +697,12 @@ def create_format_text_request(
     bold: bool = None,
     italic: bool = None,
     underline: bool = None,
+    strikethrough: bool = None,
     font_size: int = None,
     font_family: str = None,
-    link: str = None
+    link: str = None,
+    foreground_color: str = None,
+    background_color: str = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Create an updateTextStyle request for Google Docs API.
@@ -648,14 +713,20 @@ def create_format_text_request(
         bold: Whether text should be bold
         italic: Whether text should be italic
         underline: Whether text should be underlined
+        strikethrough: Whether text should have strikethrough
         font_size: Font size in points
         font_family: Font family name
         link: URL to create a hyperlink (use empty string "" to remove existing link)
+        foreground_color: Text color as hex (#FF0000) or named color
+        background_color: Background/highlight color as hex or named color
 
     Returns:
         Dictionary representing the updateTextStyle request, or None if no styles provided
     """
-    text_style, fields = build_text_style(bold, italic, underline, font_size, font_family, link)
+    text_style, fields = build_text_style(
+        bold, italic, underline, strikethrough, font_size, font_family, link,
+        foreground_color, background_color
+    )
     
     if not text_style:
         return None

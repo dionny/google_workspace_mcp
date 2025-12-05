@@ -334,9 +334,12 @@ async def modify_doc_text(
     bold: bool = None,
     italic: bool = None,
     underline: bool = None,
+    strikethrough: bool = None,
     font_size: int = None,
     font_family: str = None,
     link: str = None,
+    foreground_color: str = None,
+    background_color: str = None,
     search: str = None,
     position: str = None,
     occurrence: int = 1,
@@ -411,10 +414,13 @@ async def modify_doc_text(
         bold: Whether to make text bold (True/False/None to leave unchanged)
         italic: Whether to make text italic (True/False/None to leave unchanged)
         underline: Whether to underline text (True/False/None to leave unchanged)
+        strikethrough: Whether to strikethrough text (True/False/None to leave unchanged)
         font_size: Font size in points
         font_family: Font family name (e.g., "Arial", "Times New Roman")
         link: URL to create a hyperlink. Use empty string "" to remove an existing link.
             Supports http://, https://, or # (for internal document bookmarks).
+        foreground_color: Text color as hex (#FF0000, #F00) or named color (red, blue, green, etc.)
+        background_color: Background/highlight color as hex or named color
 
         Preview mode:
         preview: If True, returns what would change without actually modifying the document.
@@ -794,7 +800,10 @@ async def modify_doc_text(
             end_index = None
 
     # Validate text formatting params if provided
-    has_formatting = any([bold is not None, italic is not None, underline is not None, font_size, font_family, link is not None])
+    has_formatting = any([
+        bold is not None, italic is not None, underline is not None, strikethrough is not None,
+        font_size, font_family, link is not None, foreground_color is not None, background_color is not None
+    ])
     formatting_params_list = []
     if bold is not None:
         formatting_params_list.append("bold")
@@ -802,12 +811,18 @@ async def modify_doc_text(
         formatting_params_list.append("italic")
     if underline is not None:
         formatting_params_list.append("underline")
+    if strikethrough is not None:
+        formatting_params_list.append("strikethrough")
     if font_size:
         formatting_params_list.append("font_size")
     if font_family:
         formatting_params_list.append("font_family")
     if link is not None:
         formatting_params_list.append("link")
+    if foreground_color is not None:
+        formatting_params_list.append("foreground_color")
+    if background_color is not None:
+        formatting_params_list.append("background_color")
 
     if has_formatting:
         is_valid, error_msg = validator.validate_text_formatting_params(bold, italic, underline, font_size, font_family, link)
@@ -815,7 +830,7 @@ async def modify_doc_text(
             return validator.create_invalid_param_error(
                 param_name="formatting",
                 received=str(formatting_params_list),
-                valid_values=["bold (bool)", "italic (bool)", "underline (bool)", "font_size (1-400)", "font_family (string)", "link (URL string)"],
+                valid_values=["bold (bool)", "italic (bool)", "underline (bool)", "strikethrough (bool)", "font_size (1-400)", "font_family (string)", "link (URL string)", "foreground_color (hex/#FF0000 or named)", "background_color (hex or named)"],
                 context=error_msg
             )
 
@@ -908,7 +923,10 @@ async def modify_doc_text(
         if format_end is not None and format_end <= format_start:
             format_end = format_start + 1
 
-        requests.append(create_format_text_request(format_start, format_end, bold, italic, underline, font_size, font_family, link))
+        requests.append(create_format_text_request(
+            format_start, format_end, bold, italic, underline, strikethrough,
+            font_size, font_family, link, foreground_color, background_color
+        ))
 
         format_details = []
         if bold is not None:
@@ -917,12 +935,18 @@ async def modify_doc_text(
             format_details.append("italic")
         if underline is not None:
             format_details.append("underline")
+        if strikethrough is not None:
+            format_details.append("strikethrough")
         if font_size:
             format_details.append("font_size")
         if font_family:
             format_details.append("font_family")
         if link is not None:
             format_details.append("link")
+        if foreground_color is not None:
+            format_details.append("foreground_color")
+        if background_color is not None:
+            format_details.append("background_color")
 
         format_styles = format_details
         operations.append(f"Applied formatting ({', '.join(format_details)}) to range {format_start}-{format_end}")
