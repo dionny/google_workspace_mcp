@@ -2,12 +2,39 @@
 Google Docs Document Structure Parsing and Analysis
 
 This module provides utilities for parsing and analyzing the structure
-of Google Docs documents, including finding tables, cells, and other elements.
+of Google Docs documents, including finding tables, cells, headings, and other elements.
 """
 import logging
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# Google Docs heading types mapped to levels
+HEADING_TYPES = {
+    'HEADING_1': 1,
+    'HEADING_2': 2,
+    'HEADING_3': 3,
+    'HEADING_4': 4,
+    'HEADING_5': 5,
+    'HEADING_6': 6,
+    'TITLE': 0,  # Document title style
+}
+
+# Element type names for structural navigation
+ELEMENT_TYPE_NAMES = {
+    'heading1': 'HEADING_1',
+    'heading2': 'HEADING_2',
+    'heading3': 'HEADING_3',
+    'heading4': 'HEADING_4',
+    'heading5': 'HEADING_5',
+    'heading6': 'HEADING_6',
+    'title': 'TITLE',
+    'paragraph': 'NORMAL_TEXT',
+    'table': 'table',
+    'bullet_list': 'bullet_list',
+    'numbered_list': 'numbered_list',
+}
 
 
 def parse_document_structure(doc_data: dict[str, Any]) -> dict[str, Any]:
@@ -328,7 +355,7 @@ def analyze_document_complexity(doc_data: dict[str, Any]) -> dict[str, Any]:
     # Add table statistics
     if structure['tables']:
         total_cells = sum(
-            table['rows'] * table['columns'] 
+            table['rows'] * table['columns']
             for table in structure['tables']
         )
         stats['total_table_cells'] = total_cells
@@ -336,5 +363,655 @@ def analyze_document_complexity(doc_data: dict[str, Any]) -> dict[str, Any]:
             (t['rows'] * t['columns'] for t in structure['tables']),
             default=0
         )
-    
+
     return stats
+
+
+def _get_paragraph_style_type(paragraph: dict[str, Any]) -> str:
+    """
+    Get the style type of a paragraph (heading level, normal text, etc.).
+
+    Args:
+        paragraph: Paragraph element from document
+
+    Returns:
+        Style type string (e.g., 'HEADING_1', 'NORMAL_TEXT')
+    """
+    style = paragraph.get('paragraphStyle', {})
+    named_style = style.get('namedStyleType', 'NORMAL_TEXT')
+    return named_style
+
+
+def _is_list_paragraph(paragraph: dict[str, Any]) -> Optional[str]:
+    """
+    Check if a paragraph is part of a list.
+
+    Args:
+        paragraph: Paragraph element from document
+
+    Returns:
+        'bullet_list' or 'numbered_list' if list, None otherwise
+    """
+    bullet = paragraph.get('bullet')
+    if not bullet:
+        return None
+
+    # Check the nesting level - all list items have bullets
+    list_id = bullet.get('listId')
+    if list_id:
+        # Google Docs uses different glyph types for different list styles
+        # We determine type based on the list properties in the document
+        return 'bullet_list'  # Default; actual type requires checking document lists
+
+    return None
+
+
+def extract_structural_elements(doc_data: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Extract all structural elements from a document with detailed type information.
+
+    This function identifies headings, paragraphs, lists, tables, and other
+    structural elements with their positions and content.
+
+    Args:
+        doc_data: Raw document data from Google Docs API
+
+    Returns:
+        List of structural element dictionaries with type, text, positions, and metadata
+    """
+    elements = []
+    body = doc_data.get('body', {})
+    content = body.get('content', [])
+    lists_info = doc_data.get('lists', {})
+
+    # Track list context for grouping list items
+    current_list = None
+
+    for element in content:
+        start_idx = element.get('startIndex', 0)
+        end_idx = element.get('endIndex', 0)
+
+        if 'paragraph' in element:
+            para = element['paragraph']
+            text = _extract_paragraph_text(para).strip()
+            style_type = _get_paragraph_style_type(para)
+
+            # Check if this is a heading
+            if style_type in HEADING_TYPES:
+                level = HEADING_TYPES[style_type]
+                elem_type = f'heading{level}' if level > 0 else 'title'
+
+                elements.append({
+                    'type': elem_type,
+                    'text': text,
+                    'start_index': start_idx,
+                    'end_index': end_idx,
+                    'level': level,
+                    'style_type': style_type
+                })
+                current_list = None
+
+            elif _is_list_paragraph(para):
+                # This is a list item
+                bullet = para.get('bullet', {})
+                list_id = bullet.get('listId')
+                nesting_level = bullet.get('nestingLevel', 0)
+
+                # Determine list type from document lists
+                list_type = 'bullet_list'
+                if list_id and list_id in lists_info:
+                    list_props = lists_info[list_id].get('listProperties', {})
+                    nesting_props = list_props.get('nestingLevels', [])
+                    if nesting_props and nesting_level < len(nesting_props):
+                        glyph_type = nesting_props[nesting_level].get('glyphType')
+                        if glyph_type and glyph_type != 'GLYPH_TYPE_UNSPECIFIED':
+                            list_type = 'numbered_list'
+
+                # Group consecutive list items
+                if current_list and current_list['list_id'] == list_id:
+                    # Add to existing list
+                    current_list['items'].append({
+                        'text': text,
+                        'start_index': start_idx,
+                        'end_index': end_idx,
+                        'nesting_level': nesting_level
+                    })
+                    current_list['end_index'] = end_idx
+                else:
+                    # Start new list
+                    if current_list:
+                        elements.append(current_list)
+
+                    current_list = {
+                        'type': list_type,
+                        'list_type': list_type.replace('_list', ''),
+                        'start_index': start_idx,
+                        'end_index': end_idx,
+                        'list_id': list_id,
+                        'items': [{
+                            'text': text,
+                            'start_index': start_idx,
+                            'end_index': end_idx,
+                            'nesting_level': nesting_level
+                        }]
+                    }
+            else:
+                # Regular paragraph
+                if current_list:
+                    elements.append(current_list)
+                    current_list = None
+
+                # Only add non-empty paragraphs
+                if text:
+                    elements.append({
+                        'type': 'paragraph',
+                        'text': text,
+                        'start_index': start_idx,
+                        'end_index': end_idx
+                    })
+
+        elif 'table' in element:
+            if current_list:
+                elements.append(current_list)
+                current_list = None
+
+            table = element['table']
+            rows = len(table.get('tableRows', []))
+            cols = len(table.get('tableRows', [{}])[0].get('tableCells', [])) if rows > 0 else 0
+
+            elements.append({
+                'type': 'table',
+                'start_index': start_idx,
+                'end_index': end_idx,
+                'rows': rows,
+                'columns': cols
+            })
+
+        elif 'sectionBreak' in element:
+            if current_list:
+                elements.append(current_list)
+                current_list = None
+
+        elif 'tableOfContents' in element:
+            if current_list:
+                elements.append(current_list)
+                current_list = None
+
+            elements.append({
+                'type': 'table_of_contents',
+                'start_index': start_idx,
+                'end_index': end_idx
+            })
+
+    # Don't forget any trailing list
+    if current_list:
+        elements.append(current_list)
+
+    return elements
+
+
+def build_headings_outline(elements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Build a hierarchical outline from document headings.
+
+    Args:
+        elements: List of structural elements from extract_structural_elements
+
+    Returns:
+        Hierarchical list of headings with nested children
+    """
+    headings = [e for e in elements if e['type'].startswith('heading') or e['type'] == 'title']
+
+    if not headings:
+        return []
+
+    # Build hierarchy
+    outline = []
+    stack = []  # Stack of (level, heading_dict) tuples
+
+    for heading in headings:
+        level = heading.get('level', 0)
+        heading_item = {
+            'level': level,
+            'text': heading['text'],
+            'start_index': heading['start_index'],
+            'end_index': heading['end_index'],
+            'children': []
+        }
+
+        # Pop items from stack until we find a parent (lower level number)
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+
+        if stack:
+            # Add as child of the top of stack
+            stack[-1][1]['children'].append(heading_item)
+        else:
+            # Top-level heading
+            outline.append(heading_item)
+
+        stack.append((level, heading_item))
+
+    return outline
+
+
+def find_section_by_heading(
+    doc_data: dict[str, Any],
+    heading_text: str,
+    match_case: bool = False
+) -> Optional[dict[str, Any]]:
+    """
+    Find a section by its heading text.
+
+    A section includes all content from the heading until the next heading
+    of the same or higher level (smaller number = higher level).
+
+    Args:
+        doc_data: Raw document data from Google Docs API
+        heading_text: Text of the heading to find
+        match_case: Whether to match case exactly
+
+    Returns:
+        Dictionary with section info including start_index, end_index, content, and subsections
+        Returns None if heading not found
+    """
+    elements = extract_structural_elements(doc_data)
+
+    # Find the target heading
+    target_heading = None
+    target_idx = -1
+
+    search_text = heading_text if match_case else heading_text.lower()
+
+    for i, elem in enumerate(elements):
+        if elem['type'].startswith('heading') or elem['type'] == 'title':
+            elem_text = elem['text'] if match_case else elem['text'].lower()
+            if elem_text.strip() == search_text.strip():
+                target_heading = elem
+                target_idx = i
+                break
+
+    if target_heading is None:
+        return None
+
+    target_level = target_heading.get('level', 0)
+    section_start = target_heading['start_index']
+    section_end = None
+
+    # Find where this section ends
+    # It ends when we hit a heading of same or higher level (smaller number)
+    for i in range(target_idx + 1, len(elements)):
+        elem = elements[i]
+        if elem['type'].startswith('heading') or elem['type'] == 'title':
+            elem_level = elem.get('level', 0)
+            if elem_level <= target_level:
+                section_end = elem['start_index']
+                break
+
+    # If no ending heading found, section goes to end of document
+    if section_end is None:
+        # Get document end
+        body = doc_data.get('body', {})
+        content = body.get('content', [])
+        if content:
+            section_end = content[-1].get('endIndex', section_start + 1)
+        else:
+            section_end = section_start + 1
+
+    # Extract section content
+    section_elements = []
+    subsections = []
+
+    for i in range(target_idx + 1, len(elements)):
+        elem = elements[i]
+        if elem['start_index'] >= section_end:
+            break
+
+        if elem['type'].startswith('heading') or elem['type'] == 'title':
+            # This is a subsection
+            subsections.append({
+                'heading': elem['text'],
+                'level': elem.get('level', 0),
+                'start_index': elem['start_index'],
+                'end_index': elem['end_index']
+            })
+
+        section_elements.append(elem)
+
+    # Build content text
+    content_parts = []
+    for elem in section_elements:
+        if 'text' in elem:
+            content_parts.append(elem['text'])
+        elif elem['type'] == 'bullet_list' or elem['type'] == 'numbered_list':
+            for item in elem.get('items', []):
+                content_parts.append(f"  • {item['text']}")
+
+    return {
+        'heading': target_heading['text'],
+        'level': target_level,
+        'start_index': section_start,
+        'end_index': section_end,
+        'content': '\n'.join(content_parts),
+        'elements': section_elements,
+        'subsections': subsections
+    }
+
+
+def get_all_headings(doc_data: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Get all headings in the document with their positions and levels.
+
+    Args:
+        doc_data: Raw document data from Google Docs API
+
+    Returns:
+        List of heading dictionaries with text, level, and position info
+    """
+    elements = extract_structural_elements(doc_data)
+    return [
+        {
+            'text': e['text'],
+            'level': e.get('level', 0),
+            'type': e['type'],
+            'start_index': e['start_index'],
+            'end_index': e['end_index']
+        }
+        for e in elements
+        if e['type'].startswith('heading') or e['type'] == 'title'
+    ]
+
+
+def find_section_insertion_point(
+    doc_data: dict[str, Any],
+    heading_text: str,
+    position: str = 'end',
+    match_case: bool = False
+) -> Optional[int]:
+    """
+    Find the insertion point for content within a section.
+
+    Args:
+        doc_data: Raw document data from Google Docs API
+        heading_text: Text of the heading identifying the section
+        position: Where to insert - 'start' (after heading), 'end' (end of section)
+        match_case: Whether to match case exactly
+
+    Returns:
+        Index for insertion, or None if section not found
+    """
+    section = find_section_by_heading(doc_data, heading_text, match_case)
+    if not section:
+        return None
+
+    if position == 'start':
+        # Insert right after the heading
+        elements = extract_structural_elements(doc_data)
+        for elem in elements:
+            if (elem['type'].startswith('heading') or elem['type'] == 'title') and \
+               elem['text'].strip() == section['heading'].strip():
+                return elem['end_index']
+        return section['start_index'] + len(section['heading']) + 1
+    else:
+        # Insert at end of section
+        return section['end_index']
+
+
+def find_elements_by_type(
+    doc_data: dict[str, Any],
+    element_type: str
+) -> list[dict[str, Any]]:
+    """
+    Find all elements of a specific type in the document.
+
+    This function identifies all occurrences of a given element type
+    (tables, lists, headings, paragraphs) and returns their positions
+    and metadata.
+
+    Args:
+        doc_data: Raw document data from Google Docs API
+        element_type: Type of element to find. Supported values:
+            - 'table': All tables in the document
+            - 'heading': All headings (any level)
+            - 'heading1' through 'heading6': Specific heading levels
+            - 'title': Document title style elements
+            - 'paragraph': Regular paragraphs (non-heading, non-list)
+            - 'bullet_list': Bulleted lists
+            - 'numbered_list': Numbered/ordered lists
+            - 'list': Both bullet and numbered lists
+            - 'table_of_contents': Table of contents elements
+
+    Returns:
+        List of element dictionaries, each containing:
+            - type: Element type string
+            - start_index: Starting character position
+            - end_index: Ending character position
+            - Additional fields depending on element type:
+                - For tables: rows, columns
+                - For headings: text, level
+                - For paragraphs: text
+                - For lists: items (list of item dicts)
+
+    Example:
+        # Find all tables
+        tables = find_elements_by_type(doc_data, 'table')
+        for table in tables:
+            print(f"Table at {table['start_index']}: {table['rows']}x{table['columns']}")
+
+        # Find all H2 headings
+        h2s = find_elements_by_type(doc_data, 'heading2')
+        for h in h2s:
+            print(f"H2: {h['text']} at position {h['start_index']}")
+    """
+    elements = extract_structural_elements(doc_data)
+
+    # Normalize element type for matching
+    search_type = element_type.lower().strip()
+
+    # Map common aliases
+    type_aliases = {
+        'heading': ['heading1', 'heading2', 'heading3', 'heading4', 'heading5', 'heading6', 'title'],
+        'list': ['bullet_list', 'numbered_list'],
+        'toc': ['table_of_contents'],
+    }
+
+    # Determine which types to match
+    if search_type in type_aliases:
+        match_types = type_aliases[search_type]
+    else:
+        match_types = [search_type]
+
+    # Filter elements by type
+    matched = []
+    for elem in elements:
+        elem_type = elem.get('type', '').lower()
+        if elem_type in match_types:
+            matched.append(elem)
+
+    return matched
+
+
+def get_element_ancestors(
+    doc_data: dict[str, Any],
+    index: int
+) -> list[dict[str, Any]]:
+    """
+    Find the parent section/heading hierarchy for an element at a given position.
+
+    This function traces the hierarchical path from the document root down to
+    the element at the specified index, showing which sections contain it.
+
+    Args:
+        doc_data: Raw document data from Google Docs API
+        index: Character position in the document
+
+    Returns:
+        List of ancestor headings from root to most specific, each containing:
+            - type: Heading type (e.g., 'heading1', 'heading2')
+            - text: Heading text
+            - level: Heading level (0=title, 1-6 for headings)
+            - start_index: Start position of the heading
+            - end_index: End position of the heading
+            - section_end: Where this section ends (next same/higher level heading)
+
+        Returns empty list if the index is before any heading or document is empty.
+
+    Example:
+        # Find what section contains position 500
+        ancestors = get_element_ancestors(doc_data, 500)
+        for a in ancestors:
+            print(f"{'  ' * a['level']}{a['text']}")
+
+        # Might output:
+        # Introduction (level 1)
+        #   Background (level 2)
+        #     Technical Details (level 3)
+    """
+    elements = extract_structural_elements(doc_data)
+
+    # Extract all headings with their section ranges
+    headings = []
+    for i, elem in enumerate(elements):
+        if elem['type'].startswith('heading') or elem['type'] == 'title':
+            level = elem.get('level', 0)
+
+            # Determine section end: next heading of same or higher level
+            section_end = None
+            for j in range(i + 1, len(elements)):
+                next_elem = elements[j]
+                if next_elem['type'].startswith('heading') or next_elem['type'] == 'title':
+                    next_level = next_elem.get('level', 0)
+                    if next_level <= level:
+                        section_end = next_elem['start_index']
+                        break
+
+            # If no ending heading found, section goes to document end
+            if section_end is None:
+                body = doc_data.get('body', {})
+                content = body.get('content', [])
+                if content:
+                    section_end = content[-1].get('endIndex', elem['end_index'])
+                else:
+                    section_end = elem['end_index']
+
+            headings.append({
+                'type': elem['type'],
+                'text': elem.get('text', ''),
+                'level': level,
+                'start_index': elem['start_index'],
+                'end_index': elem['end_index'],
+                'section_end': section_end
+            })
+
+    # Find all ancestors that contain this index
+    ancestors = []
+    for heading in headings:
+        # Check if this heading's section contains the index
+        # Section starts at heading start and ends at section_end
+        if heading['start_index'] <= index < heading['section_end']:
+            ancestors.append(heading)
+
+    # Sort by level to get hierarchy from root to leaf
+    ancestors.sort(key=lambda x: x['level'])
+
+    return ancestors
+
+
+def get_heading_siblings(
+    doc_data: dict[str, Any],
+    heading_text: str,
+    match_case: bool = False
+) -> dict[str, Any]:
+    """
+    Find the previous and next headings at the same level as the specified heading.
+
+    This function helps navigate between sibling sections in a document,
+    allowing movement to the previous or next section at the same hierarchy level.
+
+    Args:
+        doc_data: Raw document data from Google Docs API
+        heading_text: Text of the heading to find siblings for
+        match_case: Whether to match case exactly when finding the heading
+
+    Returns:
+        Dictionary containing:
+            - found: Boolean indicating if the heading was found
+            - heading: The matched heading info (if found)
+            - level: The heading level
+            - previous: Previous sibling heading info, or None if first at this level
+            - next: Next sibling heading info, or None if last at this level
+            - siblings_count: Total count of headings at this level
+            - position_in_siblings: 1-based position among siblings (e.g., 2 of 5)
+
+        Returns {"found": False} if heading not found.
+
+    Example:
+        # Navigate between H2 sections
+        result = get_heading_siblings(doc_data, "Methods")
+        if result['found']:
+            if result['previous']:
+                print(f"Previous: {result['previous']['text']}")
+            if result['next']:
+                print(f"Next: {result['next']['text']}")
+            print(f"Position: {result['position_in_siblings']} of {result['siblings_count']}")
+    """
+    elements = extract_structural_elements(doc_data)
+
+    # Find the target heading
+    target_heading = None
+    target_idx = -1
+    search_text = heading_text if match_case else heading_text.lower()
+
+    headings_at_level = []
+
+    for i, elem in enumerate(elements):
+        if elem['type'].startswith('heading') or elem['type'] == 'title':
+            elem_text = elem.get('text', '')
+            compare_text = elem_text if match_case else elem_text.lower()
+
+            if compare_text.strip() == search_text.strip():
+                target_heading = elem
+                target_idx = i
+
+    if target_heading is None:
+        return {'found': False}
+
+    target_level = target_heading.get('level', 0)
+
+    # Find all headings at the same level
+    for elem in elements:
+        if elem['type'].startswith('heading') or elem['type'] == 'title':
+            if elem.get('level', 0) == target_level:
+                headings_at_level.append({
+                    'type': elem['type'],
+                    'text': elem.get('text', ''),
+                    'level': elem.get('level', 0),
+                    'start_index': elem['start_index'],
+                    'end_index': elem['end_index']
+                })
+
+    # Find position in siblings list
+    position = -1
+    for i, h in enumerate(headings_at_level):
+        if h['start_index'] == target_heading['start_index']:
+            position = i
+            break
+
+    previous_sibling = headings_at_level[position - 1] if position > 0 else None
+    next_sibling = headings_at_level[position + 1] if position < len(headings_at_level) - 1 else None
+
+    return {
+        'found': True,
+        'heading': {
+            'type': target_heading['type'],
+            'text': target_heading.get('text', ''),
+            'level': target_level,
+            'start_index': target_heading['start_index'],
+            'end_index': target_heading['end_index']
+        },
+        'level': target_level,
+        'previous': previous_sibling,
+        'next': next_sibling,
+        'siblings_count': len(headings_at_level),
+        'position_in_siblings': position + 1  # 1-based
+    }

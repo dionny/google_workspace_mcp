@@ -494,6 +494,135 @@ class DocsErrorBuilder:
             suggestion=required_action
         )
 
+    @staticmethod
+    def api_error(
+        operation: str,
+        error_message: str,
+        document_id: Optional[str] = None
+    ) -> StructuredError:
+        """Error from Google API call."""
+        context_data = {"operation": operation}
+        if document_id:
+            context_data["document_id"] = document_id
+
+        return StructuredError(
+            code=ErrorCode.API_ERROR.value,
+            message=f"API error during {operation}: {error_message}",
+            reason="The Google Docs API returned an error.",
+            suggestion="Check the error message for details. Common issues: invalid document ID, insufficient permissions, or rate limiting.",
+            context=ErrorContext(
+                received=context_data,
+                possible_causes=[
+                    "Document ID may be incorrect",
+                    "You may not have permission to access this document",
+                    "The document may have been deleted",
+                    "API rate limits may have been exceeded"
+                ]
+            )
+        )
+
+    @staticmethod
+    def invalid_image_source(
+        image_source: str,
+        actual_mime_type: Optional[str] = None,
+        error_detail: Optional[str] = None
+    ) -> StructuredError:
+        """Error when image source is invalid or inaccessible."""
+        is_drive_file = not (image_source.startswith('http://') or image_source.startswith('https://'))
+
+        if actual_mime_type and not actual_mime_type.startswith('image/'):
+            return StructuredError(
+                code=ErrorCode.INVALID_PARAM_VALUE.value,
+                message=f"File is not an image (MIME type: {actual_mime_type})",
+                reason="The specified file is not a valid image format.",
+                suggestion="Provide a valid image file (JPEG, PNG, GIF, etc.) or image URL.",
+                context=ErrorContext(
+                    received={"image_source": image_source, "mime_type": actual_mime_type},
+                    expected={"mime_type": "image/* (e.g., image/jpeg, image/png)"}
+                )
+            )
+
+        if is_drive_file:
+            return StructuredError(
+                code=ErrorCode.OPERATION_FAILED.value,
+                message=f"Could not access Drive file: {error_detail or 'unknown error'}",
+                reason="The Drive file could not be accessed.",
+                suggestion="Verify the file ID is correct and you have permission to access it.",
+                context=ErrorContext(
+                    received={"file_id": image_source},
+                    possible_causes=[
+                        "File ID is incorrect",
+                        "File was deleted or moved",
+                        "You don't have permission to access the file",
+                        "File is not shared with the service account"
+                    ]
+                )
+            )
+        else:
+            return StructuredError(
+                code=ErrorCode.OPERATION_FAILED.value,
+                message=f"Could not access image URL: {error_detail or 'unknown error'}",
+                reason="The image URL could not be accessed.",
+                suggestion="Verify the URL is publicly accessible and returns a valid image.",
+                context=ErrorContext(
+                    received={"url": image_source},
+                    possible_causes=[
+                        "URL is invalid or broken",
+                        "Image requires authentication",
+                        "Server is unreachable",
+                        "URL does not point to an image"
+                    ]
+                )
+            )
+
+    @staticmethod
+    def pdf_export_error(
+        document_id: str,
+        stage: str,
+        error_detail: str
+    ) -> StructuredError:
+        """Error during PDF export operation."""
+        suggestions = {
+            "access": "Verify the document ID and ensure you have access permissions.",
+            "export": "The document may be too large or contain unsupported elements. Try exporting a smaller document.",
+            "upload": "Check Drive permissions and storage quota."
+        }
+
+        return StructuredError(
+            code=ErrorCode.OPERATION_FAILED.value,
+            message=f"PDF export failed at {stage} stage: {error_detail}",
+            reason=f"The PDF export operation encountered an error during {stage}.",
+            suggestion=suggestions.get(stage, "Check the error details and try again."),
+            context=ErrorContext(
+                received={"document_id": document_id, "stage": stage},
+                possible_causes=[
+                    "Document may be too large",
+                    "Document may contain unsupported elements",
+                    "Insufficient Drive storage quota",
+                    "Permission issues with target folder"
+                ]
+            )
+        )
+
+    @staticmethod
+    def invalid_document_type(
+        document_id: str,
+        file_name: str,
+        actual_mime_type: str,
+        expected_mime_type: str = "application/vnd.google-apps.document"
+    ) -> StructuredError:
+        """Error when file is not the expected Google Docs type."""
+        return StructuredError(
+            code=ErrorCode.INVALID_PARAM_VALUE.value,
+            message=f"File '{file_name}' is not a Google Doc",
+            reason=f"Expected a Google Doc but found {actual_mime_type}.",
+            suggestion="Only native Google Docs can be used with this operation. Convert the file to Google Docs format first.",
+            context=ErrorContext(
+                received={"document_id": document_id, "mime_type": actual_mime_type},
+                expected={"mime_type": expected_mime_type}
+            )
+        )
+
 
 def format_error(error: StructuredError) -> str:
     """

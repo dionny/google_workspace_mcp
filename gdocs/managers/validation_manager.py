@@ -126,48 +126,58 @@ class ValidationManager:
         italic: Optional[bool] = None,
         underline: Optional[bool] = None,
         font_size: Optional[int] = None,
-        font_family: Optional[str] = None
+        font_family: Optional[str] = None,
+        link: Optional[str] = None
     ) -> Tuple[bool, str]:
         """
         Validate text formatting parameters.
-        
+
         Args:
             bold: Bold setting
             italic: Italic setting
             underline: Underline setting
             font_size: Font size in points
             font_family: Font family name
-            
+            link: URL for hyperlink (empty string "" removes link)
+
         Returns:
             Tuple of (is_valid, error_message)
         """
         # Check if at least one formatting option is provided
-        formatting_params = [bold, italic, underline, font_size, font_family]
+        formatting_params = [bold, italic, underline, font_size, font_family, link]
         if all(param is None for param in formatting_params):
-            return False, "At least one formatting parameter must be provided (bold, italic, underline, font_size, or font_family)"
-        
+            return False, "At least one formatting parameter must be provided (bold, italic, underline, font_size, font_family, or link)"
+
         # Validate boolean parameters
         for param, name in [(bold, 'bold'), (italic, 'italic'), (underline, 'underline')]:
             if param is not None and not isinstance(param, bool):
                 return False, f"{name} parameter must be boolean (True/False), got {type(param).__name__}"
-        
+
         # Validate font size
         if font_size is not None:
             if not isinstance(font_size, int):
                 return False, f"font_size must be an integer, got {type(font_size).__name__}"
-            
+
             min_size, max_size = self.validation_rules['font_size_range']
             if not (min_size <= font_size <= max_size):
                 return False, f"font_size must be between {min_size} and {max_size} points, got {font_size}"
-        
+
         # Validate font family
         if font_family is not None:
             if not isinstance(font_family, str):
                 return False, f"font_family must be a string, got {type(font_family).__name__}"
-            
+
             if not font_family.strip():
                 return False, "font_family cannot be empty"
-        
+
+        # Validate link
+        if link is not None:
+            if not isinstance(link, str):
+                return False, f"link must be a string, got {type(link).__name__}"
+            # Empty string is allowed (removes link), but non-empty must look like a URL
+            if link and not (link.startswith('http://') or link.startswith('https://') or link.startswith('#')):
+                return False, f"link must be a valid URL starting with http://, https://, or # (for internal bookmarks), got '{link}'"
+
         return True, ""
     
     def validate_index(self, index: int, context: str = "Index") -> Tuple[bool, str]:
@@ -647,5 +657,61 @@ class ValidationManager:
             received_value=received,
             valid_values=valid_values,
             context_description=context
+        )
+        return format_error(error)
+
+    def create_api_error(
+        self,
+        operation: str,
+        error_message: str,
+        document_id: Optional[str] = None
+    ) -> str:
+        """Create a structured error for API failures."""
+        error = DocsErrorBuilder.api_error(
+            operation=operation,
+            error_message=error_message,
+            document_id=document_id
+        )
+        return format_error(error)
+
+    def create_image_error(
+        self,
+        image_source: str,
+        actual_mime_type: Optional[str] = None,
+        error_detail: Optional[str] = None
+    ) -> str:
+        """Create a structured error for image source issues."""
+        error = DocsErrorBuilder.invalid_image_source(
+            image_source=image_source,
+            actual_mime_type=actual_mime_type,
+            error_detail=error_detail
+        )
+        return format_error(error)
+
+    def create_pdf_export_error(
+        self,
+        document_id: str,
+        stage: str,
+        error_detail: str
+    ) -> str:
+        """Create a structured error for PDF export failures."""
+        error = DocsErrorBuilder.pdf_export_error(
+            document_id=document_id,
+            stage=stage,
+            error_detail=error_detail
+        )
+        return format_error(error)
+
+    def create_invalid_document_type_error(
+        self,
+        document_id: str,
+        file_name: str,
+        actual_mime_type: str
+    ) -> str:
+        """Create a structured error for wrong document type."""
+        error = DocsErrorBuilder.invalid_document_type(
+            document_id=document_id,
+            file_name=file_name,
+            actual_mime_type=actual_mime_type
         )
         return format_error(error)

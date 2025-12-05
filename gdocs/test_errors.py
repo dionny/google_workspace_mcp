@@ -516,3 +516,134 @@ class TestErrorOutputFormat:
         # Example should contain actual function calls
         example_str = str(error.example)
         assert "modify_doc_text" in example_str
+
+
+class TestParseDocsIndexError:
+    """Tests for _parse_docs_index_error function in core/utils.py."""
+
+    def test_parses_index_less_than_segment_end_with_length(self):
+        """Parses 'Index X must be less than the end index of the referenced segment, Y'."""
+        from core.utils import _parse_docs_index_error
+
+        error_msg = (
+            "Invalid requests[0].updateTextStyle: Index 500 must be less than "
+            "the end index of the referenced segment, 200."
+        )
+        result = _parse_docs_index_error(error_msg)
+
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed["error"] is True
+        assert parsed["code"] == "INDEX_OUT_OF_BOUNDS"
+        assert "500" in parsed["message"]
+        assert parsed["context"]["received"]["index"] == 500
+        assert parsed["context"]["document_length"] == 200
+        assert "inspect_doc_structure" in parsed["suggestion"]
+
+    def test_parses_index_less_than_segment_end_without_length(self):
+        """Handles case where document length is not included in error message."""
+        from core.utils import _parse_docs_index_error
+
+        error_msg = "Index 1000 must be less than the end index of the referenced segment"
+        result = _parse_docs_index_error(error_msg)
+
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed["code"] == "INDEX_OUT_OF_BOUNDS"
+        assert "1000" in parsed["message"]
+        assert parsed["context"]["received"]["index"] == 1000
+        assert "document_length" not in parsed["context"]
+
+    def test_parses_insertion_bounds_error(self):
+        """Parses 'insertion index must be inside the bounds of an existing paragraph'."""
+        from core.utils import _parse_docs_index_error
+
+        error_msg = (
+            "Invalid requests[0].insertText: The insertion index must be inside "
+            "the bounds of an existing paragraph."
+        )
+        result = _parse_docs_index_error(error_msg)
+
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed["error"] is True
+        assert parsed["code"] == "INDEX_OUT_OF_BOUNDS"
+        assert "outside document bounds" in parsed["message"]
+        assert "empty document" in parsed["suggestion"].lower() or "index 1" in parsed["example"]["empty_doc"]
+
+    def test_returns_none_for_unrelated_error(self):
+        """Returns None for errors that are not index-related."""
+        from core.utils import _parse_docs_index_error
+
+        error_msg = "Invalid requests[0].updateTextStyle: At least one field must be listed in 'fields'."
+        result = _parse_docs_index_error(error_msg)
+        assert result is None
+
+    def test_returns_none_for_empty_error(self):
+        """Returns None for empty error string."""
+        from core.utils import _parse_docs_index_error
+
+        result = _parse_docs_index_error("")
+        assert result is None
+
+    def test_case_insensitive_parsing(self):
+        """Parses error messages regardless of case."""
+        from core.utils import _parse_docs_index_error
+
+        error_msg = "INDEX 300 MUST BE LESS THAN THE END INDEX OF THE REFERENCED SEGMENT, 100."
+        result = _parse_docs_index_error(error_msg)
+
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed["context"]["received"]["index"] == 300
+
+
+class TestLocationParameterValidation:
+    """Tests for location parameter in modify_doc_text validation."""
+
+    def test_invalid_location_value_error(self):
+        """Test that invalid location values produce proper error."""
+        validator = ValidationManager()
+        error = validator.create_invalid_param_error(
+            param_name="location",
+            received="middle",
+            valid_values=["start", "end"]
+        )
+        assert error is not None
+        parsed = json.loads(error)
+        assert parsed["error"] is True
+        assert "location" in parsed["message"].lower()
+        assert "middle" in str(parsed)
+        assert "start" in str(parsed)
+        assert "end" in str(parsed)
+
+    def test_conflicting_params_error(self):
+        """Test that conflicting location + start_index produces proper error."""
+        error = DocsErrorBuilder.conflicting_params(
+            params=["location", "start_index", "end_index"],
+            message="Cannot use 'location' parameter with explicit 'start_index' or 'end_index'"
+        )
+        assert error is not None
+        assert error.code == ErrorCode.CONFLICTING_PARAMS.value
+        assert "location" in error.message.lower()
+        assert "start_index" in error.message.lower()
+
+    def test_location_info_structure(self):
+        """Test that location_info dict has expected structure."""
+        location_info = {
+            'location': 'end',
+            'resolved_index': 500,
+            'message': "Appending at document end (index 500)"
+        }
+        assert location_info['location'] == 'end'
+        assert isinstance(location_info['resolved_index'], int)
+        assert 'message' in location_info
+
+    def test_location_start_resolves_to_index_1(self):
+        """Test that location='start' resolves to index 1 (after section break)."""
+        location_info = {
+            'location': 'start',
+            'resolved_index': 1,
+            'message': "Inserting at document start (index 1)"
+        }
+        assert location_info['resolved_index'] == 1

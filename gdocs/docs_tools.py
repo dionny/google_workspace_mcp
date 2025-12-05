@@ -33,6 +33,7 @@ from gdocs.docs_helpers import (
     build_operation_result,
     resolve_range,
     RangeResult,
+    extract_text_at_range,
 )
 
 # Import document structure and table utilities
@@ -44,7 +45,10 @@ from gdocs.docs_structure import (
     build_headings_outline,
     find_section_by_heading,
     get_all_headings,
-    find_section_insertion_point
+    find_section_insertion_point,
+    find_elements_by_type,
+    get_element_ancestors,
+    get_heading_siblings
 )
 from gdocs.docs_tables import (
     extract_table_as_data
@@ -332,6 +336,7 @@ async def modify_doc_text(
     underline: bool = None,
     font_size: int = None,
     font_family: str = None,
+    link: str = None,
     search: str = None,
     position: str = None,
     occurrence: int = 1,
@@ -339,30 +344,39 @@ async def modify_doc_text(
     heading: str = None,
     section_position: str = None,
     range: Dict[str, Any] = None,
+    location: str = None,
+    preview: bool = False,
 ) -> str:
     """
     Modifies text in a Google Doc - can insert/replace text and/or apply formatting.
 
-    Supports four positioning modes:
-    1. Index-based: Use start_index/end_index to specify exact positions
-    2. Search-based: Use search/position to find text and operate relative to it
-    3. Heading-based: Use heading/section_position to target a specific section
-    4. Range-based: Use range parameter for semantic text selection
+    Supports five positioning modes:
+    1. Location-based: Use location='end' or location='start' for common operations
+    2. Index-based: Use start_index/end_index to specify exact positions
+    3. Search-based: Use search/position to find text and operate relative to it
+    4. Heading-based: Use heading/section_position to target a specific section
+    5. Range-based: Use range parameter for semantic text selection
 
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document to update
 
+        Location-based positioning (simplest):
+        location: Semantic location for insertion. Values:
+            - "end": Append to document end (most common operation)
+            - "start": Insert at document beginning (after initial section break)
+
         Index-based positioning (traditional):
         start_index: Start position for operation (0-based)
         end_index: End position for text replacement/formatting
 
-        Search-based positioning:
+        Search-based positioning (replaces ONE occurrence):
         search: Text to search for in the document
         position: Where to insert relative to search result:
             - "before": Insert before the found text
             - "after": Insert after the found text
-            - "replace": Replace the found text entirely
+            - "replace": Replace the found text (ONE occurrence only!)
+                         For replacing ALL occurrences, use find_and_replace_doc instead
         occurrence: Which occurrence to target (1=first, 2=second, -1=last). Default: 1
         match_case: Whether to match case exactly. Default: True
 
@@ -399,8 +413,20 @@ async def modify_doc_text(
         underline: Whether to underline text (True/False/None to leave unchanged)
         font_size: Font size in points
         font_family: Font family name (e.g., "Arial", "Times New Roman")
+        link: URL to create a hyperlink. Use empty string "" to remove an existing link.
+            Supports http://, https://, or # (for internal document bookmarks).
+
+        Preview mode:
+        preview: If True, returns what would change without actually modifying the document.
+            Useful for validating operations before applying them. Default: False
 
     Examples:
+        # Append to document end (simplest - location-based):
+        modify_doc_text(document_id="...", location="end", text="\\n[New content]")
+
+        # Insert at document beginning:
+        modify_doc_text(document_id="...", location="start", text="Prepended text\\n")
+
         # Insert at end of a specific section (heading-based):
         modify_doc_text(document_id="...", heading="The Problem",
                        section_position="end", text="\\n[New content]")
@@ -413,13 +439,18 @@ async def modify_doc_text(
         modify_doc_text(document_id="...", search="Chapter 1", position="after",
                        text=" [Updated]")
 
-        # Replace specific text:
+        # Replace a SPECIFIC occurrence (first by default):
+        # Note: To replace ALL occurrences, use find_and_replace_doc instead
         modify_doc_text(document_id="...", search="old heading", position="replace",
                        text="new heading")
 
-        # Replace second occurrence:
+        # Replace the SECOND occurrence specifically:
         modify_doc_text(document_id="...", search="TODO", position="replace",
                        text="DONE", occurrence=2)
+
+        # Replace the LAST occurrence:
+        modify_doc_text(document_id="...", search="error", position="replace",
+                       text="fixed", occurrence=-1)
 
         # Traditional index-based (still supported):
         modify_doc_text(document_id="...", start_index=10, end_index=20,
@@ -430,6 +461,18 @@ async def modify_doc_text(
                        bold=True, italic=True)
         # This inserts "IMPORTANT:" at position 100 and automatically formats it.
         # The formatting range is calculated as [start_index, start_index + len(text)].
+
+        # Add a hyperlink to existing text:
+        modify_doc_text(document_id="...", search="click here", position="replace",
+                       text="click here", link="https://example.com")
+
+        # Insert new linked text:
+        modify_doc_text(document_id="...", location="end",
+                       text="Visit our website", link="https://example.com")
+
+        # Remove a hyperlink from text (use empty string):
+        modify_doc_text(document_id="...", search="linked text", position="replace",
+                       text="linked text", link="")
 
         # Range-based: Replace everything between two search terms:
         modify_doc_text(document_id="...",
@@ -451,6 +494,11 @@ async def modify_doc_text(
         modify_doc_text(document_id="...",
                        range={"search": "error", "before_chars": 50, "after_chars": 100},
                        italic=True)
+
+        # Preview mode - see what would change without modifying:
+        modify_doc_text(document_id="...", search="old text", position="replace",
+                       text="new text", preview=True)
+        # Returns preview info with current_content, new_content, context, etc.
 
     Returns:
         str: JSON string with operation details including position shift information.
@@ -487,8 +535,26 @@ async def modify_doc_text(
         # result["position_shift"] = 3
         # For next edit originally at 200: use 200 + result["position_shift"] = 203
         ```
+
+        When preview=True, returns a preview response instead:
+        {
+            "preview": true,
+            "would_modify": true,
+            "operation": "replace",
+            "affected_range": {"start": 100, "end": 108},
+            "position_shift": -3,
+            "current_content": "old text",
+            "new_content": "new text",
+            "context": {
+                "before": "...text before the affected range...",
+                "after": "...text after the affected range..."
+            },
+            "positioning_info": {"search_text": "old text", ...},
+            "message": "Would replace 8 characters with 8 characters at index 100",
+            "link": "https://docs.google.com/document/d/.../edit"
+        }
     """
-    logger.info(f"[modify_doc_text] Doc={document_id}, search={search}, position={position}, "
+    logger.info(f"[modify_doc_text] Doc={document_id}, location={location}, search={search}, position={position}, "
                 f"heading={heading}, section_position={section_position}, range={range is not None}, "
                 f"start={start_index}, end={end_index}, text={text is not None}")
 
@@ -500,11 +566,11 @@ async def modify_doc_text(
         return structured_error
 
     # Validate that we have something to do
-    if text is None and not any([bold is not None, italic is not None, underline is not None, font_size, font_family]):
+    if text is None and not any([bold is not None, italic is not None, underline is not None, font_size, font_family, link is not None]):
         error = DocsErrorBuilder.missing_required_param(
             param_name="text or formatting",
             context_description="for document modification",
-            valid_values=["text", "bold", "italic", "underline", "font_size", "font_family"]
+            valid_values=["text", "bold", "italic", "underline", "font_size", "font_family", "link"]
         )
         return format_error(error)
 
@@ -512,11 +578,27 @@ async def modify_doc_text(
     use_range_mode = range is not None
     use_search_mode = search is not None
     use_heading_mode = heading is not None
+    use_location_mode = location is not None
 
-    # Validate positioning parameters - range mode takes priority, then heading, then search, then index
+    # Validate positioning parameters - range mode takes priority, then location, then heading, then search, then index
     if use_range_mode:
-        if heading is not None or search is not None or start_index is not None or end_index is not None:
+        if location is not None or heading is not None or search is not None or start_index is not None or end_index is not None:
             logger.warning("Multiple positioning parameters provided; range mode takes precedence")
+    elif use_location_mode:
+        if location not in ['start', 'end']:
+            return validator.create_invalid_param_error(
+                param_name="location",
+                received=location,
+                valid_values=["start", "end"]
+            )
+        if start_index is not None or end_index is not None:
+            error = DocsErrorBuilder.conflicting_params(
+                params=["location", "start_index", "end_index"],
+                message="Cannot use 'location' parameter with explicit 'start_index' or 'end_index'"
+            )
+            return format_error(error)
+        if heading is not None or search is not None:
+            logger.warning("Multiple positioning parameters provided; location mode takes precedence")
     elif use_heading_mode:
         if not section_position:
             return validator.create_missing_param_error(
@@ -553,15 +635,45 @@ async def modify_doc_text(
             return validator.create_missing_param_error(
                 param_name="positioning",
                 context="for document modification",
-                valid_values=["range", "heading+section_position", "search+position", "start_index"]
+                valid_values=["location", "range", "heading+section_position", "search+position", "start_index"]
             )
 
     # Track search results for response
     search_info = {}
     range_result_info = None  # For range-based operations
+    location_info = None  # For location-based operations
+
+    # If using location mode, resolve to indices by fetching document
+    if use_location_mode:
+        # Get document to determine total length
+        doc_data = await asyncio.to_thread(
+            service.documents().get(documentId=document_id).execute
+        )
+
+        structure = parse_document_structure(doc_data)
+        total_length = structure['total_length']
+
+        if location == 'end':
+            # Use total_length - 1 for safe insertion (last valid index)
+            resolved_end_index = total_length - 1 if total_length > 1 else 1
+            start_index = resolved_end_index
+            location_info = {
+                'location': 'end',
+                'resolved_index': resolved_end_index,
+                'message': f"Appending at document end (index {resolved_end_index})"
+            }
+        else:  # location == 'start'
+            start_index = 1  # After the initial section break at index 0
+            location_info = {
+                'location': 'start',
+                'resolved_index': 1,
+                'message': "Inserting at document start (index 1)"
+            }
+        end_index = None  # Location mode is always insert, not replace
+        search_info = location_info
 
     # If using range mode, resolve the range to indices
-    if use_range_mode:
+    elif use_range_mode:
         # Get document
         doc_data = await asyncio.to_thread(
             service.documents().get(documentId=document_id).execute
@@ -682,7 +794,7 @@ async def modify_doc_text(
             end_index = None
 
     # Validate text formatting params if provided
-    has_formatting = any([bold is not None, italic is not None, underline is not None, font_size, font_family])
+    has_formatting = any([bold is not None, italic is not None, underline is not None, font_size, font_family, link is not None])
     formatting_params_list = []
     if bold is not None:
         formatting_params_list.append("bold")
@@ -694,14 +806,16 @@ async def modify_doc_text(
         formatting_params_list.append("font_size")
     if font_family:
         formatting_params_list.append("font_family")
+    if link is not None:
+        formatting_params_list.append("link")
 
     if has_formatting:
-        is_valid, error_msg = validator.validate_text_formatting_params(bold, italic, underline, font_size, font_family)
+        is_valid, error_msg = validator.validate_text_formatting_params(bold, italic, underline, font_size, font_family, link)
         if not is_valid:
             return validator.create_invalid_param_error(
                 param_name="formatting",
                 received=str(formatting_params_list),
-                valid_values=["bold (bool)", "italic (bool)", "underline (bool)", "font_size (1-400)", "font_family (string)"],
+                valid_values=["bold (bool)", "italic (bool)", "underline (bool)", "font_size (1-400)", "font_family (string)", "link (URL string)"],
                 context=error_msg
             )
 
@@ -731,26 +845,38 @@ async def modify_doc_text(
     actual_end_index = end_index
     format_styles = []
 
-    # Handle text insertion/replacement
+    # Handle text insertion/replacement/deletion
     if text is not None:
         if end_index is not None and end_index > start_index:
-            # Text replacement
-            operation_type = OperationType.REPLACE
-            if start_index == 0:
-                # Special case: Cannot delete at index 0 (first section break)
-                # Instead, we insert new text at index 1 and then delete the old text
-                actual_start_index = 1
-                requests.append(create_insert_text_request(1, text))
-                adjusted_end = end_index + len(text)
-                requests.append(create_delete_range_request(1 + len(text), adjusted_end))
-                operations.append(f"Replaced text from index {start_index} to {end_index}")
+            if text == "":
+                # Empty text with range = delete operation (no insert needed)
+                operation_type = OperationType.DELETE
+                if start_index == 0:
+                    # Cannot delete at index 0 (first section break), start from 1
+                    actual_start_index = 1
+                    requests.append(create_delete_range_request(1, end_index))
+                    operations.append(f"Deleted text from index 1 to {end_index}")
+                else:
+                    requests.append(create_delete_range_request(start_index, end_index))
+                    operations.append(f"Deleted text from index {start_index} to {end_index}")
             else:
-                # Normal replacement: delete old text, then insert new text
-                requests.extend([
-                    create_delete_range_request(start_index, end_index),
-                    create_insert_text_request(start_index, text)
-                ])
-                operations.append(f"Replaced text from index {start_index} to {end_index}")
+                # Text replacement
+                operation_type = OperationType.REPLACE
+                if start_index == 0:
+                    # Special case: Cannot delete at index 0 (first section break)
+                    # Instead, we insert new text at index 1 and then delete the old text
+                    actual_start_index = 1
+                    requests.append(create_insert_text_request(1, text))
+                    adjusted_end = end_index + len(text)
+                    requests.append(create_delete_range_request(1 + len(text), adjusted_end))
+                    operations.append(f"Replaced text from index {start_index} to {end_index}")
+                else:
+                    # Normal replacement: delete old text, then insert new text
+                    requests.extend([
+                        create_delete_range_request(start_index, end_index),
+                        create_insert_text_request(start_index, text)
+                    ])
+                    operations.append(f"Replaced text from index {start_index} to {end_index}")
         else:
             # Text insertion
             operation_type = OperationType.INSERT
@@ -782,7 +908,7 @@ async def modify_doc_text(
         if format_end is not None and format_end <= format_start:
             format_end = format_start + 1
 
-        requests.append(create_format_text_request(format_start, format_end, bold, italic, underline, font_size, font_family))
+        requests.append(create_format_text_request(format_start, format_end, bold, italic, underline, font_size, font_family, link))
 
         format_details = []
         if bold is not None:
@@ -795,6 +921,8 @@ async def modify_doc_text(
             format_details.append("font_size")
         if font_family:
             format_details.append("font_family")
+        if link is not None:
+            format_details.append("link")
 
         format_styles = format_details
         operations.append(f"Applied formatting ({', '.join(format_details)}) to range {format_start}-{format_end}")
@@ -805,6 +933,90 @@ async def modify_doc_text(
             actual_start_index = format_start
             actual_end_index = format_end
 
+    # Handle preview mode - return what would change without actually modifying
+    import json
+    if preview:
+        # For preview, we need doc_data to extract current content
+        # If we don't have it from positioning resolution, fetch it now
+        if not any([use_location_mode, use_range_mode, use_heading_mode, use_search_mode]):
+            # Index-based mode - need to fetch document for preview
+            doc_data = await asyncio.to_thread(
+                service.documents().get(documentId=document_id).execute
+            )
+
+        # Calculate what would change
+        preview_result = {
+            "preview": True,
+            "would_modify": True,
+            "operation": operation_type.value if operation_type else "unknown",
+            "affected_range": {
+                "start": actual_start_index,
+                "end": actual_end_index if actual_end_index else actual_start_index
+            },
+            "positioning_info": search_info if search_info else {},
+            "link": f"https://docs.google.com/document/d/{document_id}/edit"
+        }
+
+        # Calculate position shift
+        text_length = len(text) if text else 0
+        if operation_type == OperationType.INSERT:
+            preview_result["position_shift"] = text_length
+            preview_result["new_content"] = text
+            preview_result["message"] = f"Would insert {text_length} characters at index {actual_start_index}"
+        elif operation_type == OperationType.REPLACE:
+            original_length = (actual_end_index or actual_start_index) - actual_start_index
+            preview_result["position_shift"] = text_length - original_length
+            preview_result["original_length"] = original_length
+            preview_result["new_length"] = text_length
+            preview_result["new_content"] = text
+
+            # Extract current content at the range
+            if doc_data:
+                current = extract_text_at_range(doc_data, actual_start_index, actual_end_index or actual_start_index)
+                preview_result["current_content"] = current.get("text", "")
+                preview_result["context"] = {
+                    "before": current.get("context_before", ""),
+                    "after": current.get("context_after", "")
+                }
+            preview_result["message"] = f"Would replace {original_length} characters with {text_length} characters at index {actual_start_index}"
+        elif operation_type == OperationType.DELETE:
+            deleted_length = (actual_end_index or actual_start_index) - actual_start_index
+            preview_result["position_shift"] = -deleted_length
+            preview_result["deleted_length"] = deleted_length
+
+            # Extract current content at the delete range
+            if doc_data:
+                current = extract_text_at_range(doc_data, actual_start_index, actual_end_index or actual_start_index)
+                preview_result["current_content"] = current.get("text", "")
+                preview_result["context"] = {
+                    "before": current.get("context_before", ""),
+                    "after": current.get("context_after", "")
+                }
+            preview_result["message"] = f"Would delete {deleted_length} characters from index {actual_start_index} to {actual_end_index}"
+        elif operation_type == OperationType.FORMAT:
+            preview_result["position_shift"] = 0
+            preview_result["styles_to_apply"] = format_styles
+
+            # Extract current content at the format range
+            if doc_data:
+                format_end_idx = actual_end_index or actual_start_index
+                current = extract_text_at_range(doc_data, actual_start_index, format_end_idx)
+                preview_result["current_content"] = current.get("text", "")
+                preview_result["context"] = {
+                    "before": current.get("context_before", ""),
+                    "after": current.get("context_after", "")
+                }
+            preview_result["message"] = f"Would apply formatting ({', '.join(format_styles)}) to range {actual_start_index}-{actual_end_index}"
+        else:
+            preview_result["position_shift"] = 0
+            preview_result["message"] = "Would perform operation"
+
+        # Add resolved range info for range-based operations
+        if range_result_info:
+            preview_result['resolved_range'] = range_result_info
+
+        return json.dumps(preview_result, indent=2)
+
     await asyncio.to_thread(
         service.documents().batchUpdate(
             documentId=document_id,
@@ -813,7 +1025,6 @@ async def modify_doc_text(
     )
 
     # Build structured operation result
-    import json
 
     # Determine final operation type for combined operations
     if text is not None and has_formatting:
@@ -855,22 +1066,118 @@ async def find_and_replace_doc(
     find_text: str,
     replace_text: str,
     match_case: bool = False,
+    preview: bool = False,
 ) -> str:
     """
-    Finds and replaces text throughout a Google Doc.
+    Replaces ALL occurrences of text throughout a Google Doc.
+
+    Use this tool when you want to replace EVERY instance of text in the document.
+    For replacing a SPECIFIC occurrence (first, second, or last), use modify_doc_text
+    with search + position='replace' instead.
+
+    Comparison:
+    | Tool                  | Replaces       | Use Case                              |
+    |-----------------------|----------------|---------------------------------------|
+    | find_and_replace_doc  | ALL occurrences| Global search-replace (like Ctrl+H)   |
+    | modify_doc_text       | ONE occurrence | Replace specific instance by position |
+
+    Examples:
+        # Replace ALL "TODO" with "DONE":
+        find_and_replace_doc(document_id="...", find_text="TODO", replace_text="DONE")
+
+        # Preview what would be replaced before committing:
+        find_and_replace_doc(document_id="...", find_text="TODO", replace_text="DONE", preview=True)
+
+        # Replace only the FIRST "TODO": use modify_doc_text instead
+        modify_doc_text(document_id="...", search="TODO", position="replace", text="DONE")
 
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document to update
-        find_text: Text to search for
+        find_text: Text to search for (will replace ALL matches)
         replace_text: Text to replace with
-        match_case: Whether to match case exactly
+        match_case: Whether to match case exactly (default: False)
+        preview: If True, returns what would be replaced without making changes (default: False)
 
     Returns:
-        str: Confirmation message with replacement count
-    """
-    logger.info(f"[find_and_replace_doc] Doc={document_id}, find='{find_text}', replace='{replace_text}'")
+        str: JSON string with operation details.
 
+        When preview=False (default), returns replacement count.
+
+        When preview=True, returns a preview response:
+        {
+            "preview": true,
+            "would_modify": true,
+            "occurrences_found": 3,
+            "find_text": "TODO",
+            "replace_text": "DONE",
+            "matches": [
+                {
+                    "index": 1,
+                    "range": {"start": 15, "end": 19},
+                    "context": {"before": "...", "after": "..."}
+                },
+                ...
+            ],
+            "position_shift_per_replacement": -1,
+            "total_position_shift": -3,
+            "message": "Would replace 3 occurrences..."
+        }
+    """
+    logger.info(f"[find_and_replace_doc] Doc={document_id}, find='{find_text}', replace='{replace_text}', preview={preview}")
+
+    import json
+
+    # Handle preview mode - find all occurrences without modifying
+    if preview:
+        doc_data = await asyncio.to_thread(
+            service.documents().get(documentId=document_id).execute
+        )
+
+        all_occurrences = find_all_occurrences_in_document(doc_data, find_text, match_case)
+        link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+        # Calculate position shift
+        len_diff = len(replace_text) - len(find_text)
+
+        # Build matches list with context
+        matches = []
+        for idx, (start, end) in enumerate(all_occurrences, 1):
+            match_info = {
+                "index": idx,
+                "range": {"start": start, "end": end},
+            }
+            # Extract context for each match
+            context = extract_text_at_range(doc_data, start, end)
+            if context.get("found"):
+                match_info["text"] = context.get("text", "")
+                match_info["context"] = {
+                    "before": context.get("context_before", ""),
+                    "after": context.get("context_after", "")
+                }
+            matches.append(match_info)
+
+        preview_result = {
+            "preview": True,
+            "would_modify": len(all_occurrences) > 0,
+            "occurrences_found": len(all_occurrences),
+            "find_text": find_text,
+            "replace_text": replace_text,
+            "match_case": match_case,
+            "matches": matches,
+            "position_shift_per_replacement": len_diff,
+            "total_position_shift": len_diff * len(all_occurrences),
+            "link": link,
+        }
+
+        if len(all_occurrences) == 0:
+            preview_result["message"] = f"No occurrences of '{find_text}' found in document"
+        else:
+            preview_result["message"] = f"Would replace {len(all_occurrences)} occurrence(s) of '{find_text}' with '{replace_text}'"
+
+        return json.dumps(preview_result, indent=2)
+
+    # Execute the actual replacement
     requests = [create_find_replace_request(find_text, replace_text, match_case)]
 
     result = await asyncio.to_thread(
@@ -888,7 +1195,13 @@ async def find_and_replace_doc(
             replacements = reply['replaceAllText'].get('occurrencesChanged', 0)
 
     link = f"https://docs.google.com/document/d/{document_id}/edit"
-    return f"Replaced {replacements} occurrence(s) of '{find_text}' with '{replace_text}' in document {document_id}. Link: {link}"
+    message = f"Replaced {replacements} occurrence(s) of '{find_text}' with '{replace_text}' in document {document_id}. Link: {link}"
+
+    # Add hint when only 1 replacement was made - user might have wanted targeted replacement
+    if replacements == 1:
+        message += "\n\nTip: For single replacements, you can also use modify_doc_text with search + position='replace' to target a specific occurrence."
+
+    return message
 
 
 @server.tool()
@@ -1156,6 +1469,14 @@ async def batch_update_doc(
     operations: List[Dict[str, Any]],
 ) -> str:
     """
+    DEPRECATED: Use batch_edit_doc instead.
+
+    This tool is maintained for backward compatibility. The new batch_edit_doc tool
+    combines all features from batch_update_doc and batch_modify_doc with:
+    - Search-based positioning (insert before/after search text)
+    - Automatic position adjustment
+    - Both naming conventions (insert/insert_text, etc.)
+
     Executes multiple document operations in a single atomic batch update.
 
     Args:
@@ -1252,6 +1573,11 @@ async def batch_modify_doc(
     auto_adjust_positions: bool = True,
 ) -> str:
     """
+    DEPRECATED: Use batch_edit_doc instead.
+
+    This tool is maintained for backward compatibility. The new batch_edit_doc tool
+    provides identical functionality with a clearer name.
+
     Execute multiple document operations atomically with search-based positioning.
 
     This tool enables efficient batch editing with:
@@ -1372,6 +1698,269 @@ async def batch_modify_doc(
 
 
 @server.tool()
+@handle_http_errors("batch_edit_doc", service_type="docs")
+@require_google_service("docs", "docs_write")
+async def batch_edit_doc(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    operations: List[Dict[str, Any]],
+    auto_adjust_positions: bool = True,
+) -> str:
+    """
+    Execute multiple document operations atomically with search-based positioning.
+
+    This is the RECOMMENDED batch editing tool, combining features from both
+    batch_update_doc and batch_modify_doc. Use this tool for all batch operations.
+
+    Features:
+    - Search-based positioning (insert before/after search text)
+    - Automatic position adjustment for sequential operations
+    - Per-operation results with position shift tracking
+    - Atomic execution (all succeed or all fail)
+    - Accepts BOTH naming conventions (e.g., "insert" or "insert_text")
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to update
+        operations: List of operations. Each operation can use either:
+            - Index-based: {"type": "insert_text", "index": 100, "text": "Hello"}
+            - Search-based: {"type": "insert", "search": "Conclusion", "position": "before", "text": "New text"}
+
+        auto_adjust_positions: If True (default), automatically adjusts positions
+            for subsequent operations based on cumulative shifts from earlier operations.
+
+    Supported operation types (both naming styles work):
+        - insert / insert_text: Insert text at position
+        - delete / delete_text: Delete text range
+        - replace / replace_text: Replace text range with new text
+        - format / format_text: Apply formatting (bold, italic, underline, font_size, font_family)
+        - insert_table: Insert table at position
+        - insert_page_break: Insert page break
+        - find_replace: Find and replace all occurrences
+
+    Search-based positioning options:
+        - search: Text to find in the document
+        - position: "before" (insert before match), "after" (insert after), "replace" (replace match)
+        - occurrence: Which occurrence to target (1=first, 2=second, -1=last)
+        - match_case: Whether to match case exactly (default: True)
+
+    Example operations:
+        [
+            {"type": "insert", "search": "Conclusion", "position": "before",
+             "text": "\\n\\nNew section content.\\n"},
+            {"type": "format", "search": "Important Note", "position": "replace",
+             "bold": True, "font_size": 14},
+            {"type": "insert_text", "index": 1, "text": "Header text\\n"},
+            {"type": "find_replace", "find_text": "old term", "replace_text": "new term"}
+        ]
+
+    Returns:
+        JSON string with detailed results including:
+        - success: Overall success status
+        - operations_completed: Number of operations executed
+        - results: Per-operation details with position shifts
+        - total_position_shift: Cumulative position change
+        - document_link: Link to edited document
+
+        Example response:
+        {
+            "success": true,
+            "operations_completed": 2,
+            "total_operations": 2,
+            "results": [
+                {
+                    "index": 0,
+                    "type": "insert",
+                    "success": true,
+                    "description": "insert 'New section...' at 150",
+                    "position_shift": 20,
+                    "affected_range": {"start": 150, "end": 170},
+                    "resolved_index": 150
+                },
+                {
+                    "index": 1,
+                    "type": "format",
+                    "success": true,
+                    "description": "format 180-195 (bold=True)",
+                    "position_shift": 0,
+                    "affected_range": {"start": 180, "end": 195}
+                }
+            ],
+            "total_position_shift": 20,
+            "message": "Successfully executed 2 operation(s)",
+            "document_link": "https://docs.google.com/document/d/.../edit"
+        }
+
+        Using position_shift for chained operations:
+        ```python
+        # First operation at index 100 inserts 15 chars
+        result1 = batch_edit_doc(doc_id, [{"type": "insert", "index": 100, "text": "15 char string."}])
+        # result1["results"][0]["position_shift"] = 15
+
+        # For a subsequent edit originally targeting index 200:
+        # new_index = 200 + result1["total_position_shift"] = 215
+        ```
+    """
+    import json
+
+    logger.debug(f"[batch_edit_doc] Doc={document_id}, operations={len(operations)}")
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, error_msg = validator.validate_document_id(document_id)
+    if not is_valid:
+        return json.dumps({"success": False, "error": error_msg}, indent=2)
+
+    if not operations or not isinstance(operations, list):
+        return json.dumps({
+            "success": False,
+            "error": "Operations must be a non-empty list"
+        }, indent=2)
+
+    # Use BatchOperationManager with enhanced search support
+    batch_manager = BatchOperationManager(service)
+
+    result = await batch_manager.execute_batch_with_search(
+        document_id,
+        operations,
+        auto_adjust_positions=auto_adjust_positions
+    )
+
+    return json.dumps(result.to_dict(), indent=2)
+
+
+# Detail level type for get_doc_info
+from typing import Literal
+DetailLevel = Literal["summary", "structure", "tables", "headings", "all"]
+
+
+@server.tool()
+@handle_http_errors("get_doc_info", is_read_only=True, service_type="docs")
+@require_google_service("docs", "docs_read")
+async def get_doc_info(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    detail: DetailLevel = "all",
+) -> str:
+    """
+    Get comprehensive document information with configurable detail level.
+
+    This is the recommended tool for understanding document structure before
+    making modifications. It combines information from document analysis
+    and structural elements into a single response.
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to analyze
+        detail: Level of detail to return:
+            - "summary": Quick stats, element counts, safe insertion indices (fast)
+            - "structure": Full element hierarchy with positions
+            - "tables": Table-focused view with dimensions and positions
+            - "headings": Just the headings outline for navigation
+            - "all": Everything combined (default)
+
+    Returns:
+        str: JSON containing document information based on requested detail level
+
+    Example Usage:
+        # Quick check before table insertion:
+        get_doc_info(doc_id, detail="summary")
+
+        # Navigate document structure:
+        get_doc_info(doc_id, detail="headings")
+
+        # Full analysis:
+        get_doc_info(doc_id)  # Returns all info
+    """
+    import json
+    logger.debug(f"[get_doc_info] Doc={document_id}, detail={detail}")
+
+    # Input validation
+    validator = ValidationManager()
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    # Get the document once
+    doc = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    result = {
+        'title': doc.get('title', 'Untitled'),
+        'document_id': document_id,
+        'detail_level': detail
+    }
+
+    # Summary info (always included for context)
+    complexity = analyze_document_complexity(doc)
+    result['total_length'] = complexity.get('total_length', 1)
+    result['safe_insertion_index'] = max(1, complexity.get('total_length', 1) - 1)
+
+    if detail in ("summary", "all"):
+        # Quick stats and safe insertion indices
+        result['statistics'] = {
+            'total_elements': complexity.get('total_elements', 0),
+            'paragraphs': complexity.get('paragraphs', 0),
+            'tables': complexity.get('tables', 0),
+            'lists': complexity.get('lists', 0),
+            'complexity_score': complexity.get('complexity_score', 'simple')
+        }
+
+    if detail in ("structure", "all"):
+        # Full element hierarchy
+        structure = parse_document_structure(doc)
+        elements = []
+        for element in structure['body']:
+            elem_info = {
+                'type': element['type'],
+                'start_index': element['start_index'],
+                'end_index': element['end_index']
+            }
+            if element['type'] == 'paragraph':
+                elem_info['text_preview'] = element.get('text', '')[:100]
+            elif element['type'] == 'table':
+                elem_info['rows'] = element['rows']
+                elem_info['columns'] = element['columns']
+            elements.append(elem_info)
+        result['elements'] = elements
+
+    if detail in ("tables", "all"):
+        # Table-focused view
+        tables = find_tables(doc)
+        table_list = []
+        for i, table in enumerate(tables):
+            table_data = extract_table_as_data(table)
+            table_list.append({
+                'index': i,
+                'position': {'start': table['start_index'], 'end': table['end_index']},
+                'dimensions': {'rows': table['rows'], 'columns': table['columns']},
+                'preview': table_data[:3] if table_data else []  # First 3 rows
+            })
+        result['tables'] = table_list if table_list else []
+
+    if detail in ("headings", "all"):
+        # Headings outline for navigation
+        all_elements = extract_structural_elements(doc)
+        headings_outline = build_headings_outline(all_elements)
+        result['headings_outline'] = _clean_outline(headings_outline)
+
+        # Also include flat heading list for quick reference
+        headings = [e for e in all_elements if e['type'].startswith('heading')]
+        result['headings'] = [
+            {'level': h.get('level', 0), 'text': h.get('text', ''),
+             'start_index': h['start_index'], 'end_index': h['end_index']}
+            for h in headings
+        ]
+
+    link = f"https://docs.google.com/document/d/{document_id}/edit"
+    return f"Document info for {document_id} (detail={detail}):\n\n{json.dumps(result, indent=2)}\n\nLink: {link}"
+
+
+@server.tool()
 @handle_http_errors("inspect_doc_structure", is_read_only=True, service_type="docs")
 @require_google_service("docs", "docs_read")
 async def inspect_doc_structure(
@@ -1381,28 +1970,13 @@ async def inspect_doc_structure(
     detailed: bool = False,
 ) -> str:
     """
-    Essential tool for finding safe insertion points and understanding document structure.
+    [LEGACY] Find safe insertion points and document structure.
 
-    USE THIS FOR:
-    - Finding the correct index for table insertion
-    - Understanding document layout before making changes
-    - Locating existing tables and their positions
-    - Getting document statistics and complexity info
+    DEPRECATED: Use get_doc_info() instead for a unified interface.
+    - get_doc_info(doc_id, detail="summary") - equivalent to inspect_doc_structure(detailed=False)
+    - get_doc_info(doc_id, detail="all") - equivalent to inspect_doc_structure(detailed=True)
 
-    CRITICAL FOR TABLE OPERATIONS:
-    ALWAYS call this BEFORE creating tables to get a safe insertion index.
-
-    WHAT THE OUTPUT SHOWS:
-    - total_elements: Number of document elements
-    - total_length: Maximum safe index for insertion
-    - tables: Number of existing tables
-    - table_details: Position and dimensions of each table
-
-    WORKFLOW:
-    Step 1: Call this function
-    Step 2: Note the "total_length" value
-    Step 3: Use an index < total_length for table insertion
-    Step 4: Create your table
+    This function is maintained for backward compatibility.
 
     Args:
         user_google_email: User's Google email address
@@ -1498,11 +2072,16 @@ async def get_doc_structure(
     element_types: List[str] = None,
 ) -> str:
     """
-    Get a hierarchical view of the document's structural elements.
+    [LEGACY] Get a hierarchical view of the document's structural elements.
 
-    Returns headings, paragraphs, tables, lists, and other structural elements
-    with their positions and content. Useful for understanding document layout
-    and navigation.
+    DEPRECATED: Use get_doc_info() instead for a unified interface.
+    - get_doc_info(doc_id, detail="structure") - for full element hierarchy
+    - get_doc_info(doc_id, detail="headings") - for headings outline only
+
+    Note: get_doc_info does not support element_types filtering. If you need
+    specific element type filtering, continue using this function.
+
+    This function is maintained for backward compatibility.
 
     Args:
         user_google_email: User's Google email address
@@ -1515,21 +2094,6 @@ async def get_doc_structure(
             - elements: List of structural elements with type, text, and positions
             - headings_outline: Hierarchical outline of headings
             - statistics: Count of each element type
-
-    Example Response:
-        {
-            "elements": [
-                {"type": "heading1", "text": "Introduction", "start_index": 1, "end_index": 13, "level": 1},
-                {"type": "paragraph", "text": "This is content...", "start_index": 14, "end_index": 50},
-                {"type": "heading2", "text": "Details", "start_index": 51, "end_index": 58, "level": 2}
-            ],
-            "headings_outline": [
-                {"level": 1, "text": "Introduction", "children": [
-                    {"level": 2, "text": "Details", "children": []}
-                ]}
-            ],
-            "statistics": {"heading1": 1, "heading2": 1, "paragraph": 1}
-        }
     """
     logger.debug(f"[get_doc_structure] Doc={document_id}, filters={element_types}")
 
@@ -1716,20 +2280,17 @@ async def create_table_with_data(
     user_google_email: str,
     document_id: str,
     table_data: List[List[str]],
-    index: int,
+    index: int = None,
+    after_heading: str = None,
     bold_headers: bool = True,
 ) -> str:
     """
     Creates a table and populates it with data in one reliable operation.
 
-    CRITICAL: YOU MUST CALL inspect_doc_structure FIRST TO GET THE INDEX!
-
-    MANDATORY WORKFLOW - DO THESE STEPS IN ORDER:
-
-    Step 1: ALWAYS call inspect_doc_structure first
-    Step 2: Use the 'total_length' value from inspect_doc_structure as your index
-    Step 3: Format data as 2D list: [["col1", "col2"], ["row1col1", "row1col2"]]
-    Step 4: Call this function with the correct index and data
+    SIMPLIFIED USAGE - No pre-flight call needed:
+    - Omit 'index' to append table at end of document (recommended)
+    - Use 'after_heading' to insert table after a specific heading
+    - Provide explicit 'index' only for precise positioning
 
     EXAMPLE DATA FORMAT:
     table_data = [
@@ -1738,10 +2299,10 @@ async def create_table_with_data(
         ["Data4", "Data5", "Data6"]           # Row 2 - second data row
     ]
 
-    CRITICAL INDEX REQUIREMENTS:
-    - NEVER use index values like 1, 2, 10 without calling inspect_doc_structure first
-    - ALWAYS get index from inspect_doc_structure 'total_length' field
-    - Index must be a valid insertion point in the document
+    USAGE PATTERNS:
+    1. Append to end (simplest): create_table_with_data(doc_id, data)
+    2. After heading: create_table_with_data(doc_id, data, after_heading="Data Section")
+    3. Explicit index: create_table_with_data(doc_id, data, index=42)
 
     DATA FORMAT REQUIREMENTS:
     - Must be 2D list of strings only
@@ -1753,14 +2314,18 @@ async def create_table_with_data(
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document to update
-        table_data: 2D list of strings - EXACT format: [["col1", "col2"], ["row1col1", "row1col2"]]
-        index: Document position (MANDATORY: get from inspect_doc_structure 'total_length')
+        table_data: 2D list of strings [["col1", "col2"], ["row1", "row2"]]
+        index: Document position (optional, defaults to end of document)
+        after_heading: Insert after this heading (optional, case-insensitive)
         bold_headers: Whether to make first row bold (default: true)
 
     Returns:
         str: Confirmation with table details and link
     """
-    logger.debug(f"[create_table_with_data] Doc={document_id}, index={index}")
+    logger.debug(
+        f"[create_table_with_data] Doc={document_id}, "
+        f"index={index}, after_heading={after_heading}"
+    )
 
     # Input validation
     validator = ValidationManager()
@@ -1773,23 +2338,90 @@ async def create_table_with_data(
     if not is_valid:
         return f"ERROR: {error_msg}"
 
-    is_valid, error_msg = validator.validate_index(index, "Index")
-    if not is_valid:
-        return f"ERROR: {error_msg}"
+    # Resolve insertion index
+    resolved_index = index
+    location_description = None
+
+    if index is not None and after_heading is not None:
+        return (
+            "ERROR: Cannot specify both 'index' and 'after_heading'. "
+            "Use one or the other."
+        )
+
+    if index is not None:
+        # Explicit index provided - validate it
+        is_valid, error_msg = validator.validate_index(index, "Index")
+        if not is_valid:
+            return f"ERROR: {error_msg}"
+        location_description = f"at explicit index {index}"
+    else:
+        # Auto-detect insertion point - fetch document first
+        try:
+            doc_data = await asyncio.to_thread(
+                service.documents().get(documentId=document_id).execute
+            )
+        except Exception as e:
+            return (
+                f"ERROR: Failed to fetch document for index calculation: "
+                f"{str(e)}"
+            )
+
+        if after_heading is not None:
+            # Insert after specified heading
+            insertion_point = find_section_insertion_point(
+                doc_data, after_heading, position='end'
+            )
+            if insertion_point is None:
+                # List available headings to help user
+                headings = get_all_headings(doc_data)
+                if headings:
+                    heading_list = ", ".join(
+                        [f'"{h["text"]}"' for h in headings[:5]]
+                    )
+                    more = (
+                        f" (and {len(headings) - 5} more)"
+                        if len(headings) > 5 else ""
+                    )
+                    return (
+                        f"ERROR: Heading '{after_heading}' not found. "
+                        f"Available headings: {heading_list}{more}"
+                    )
+                else:
+                    return (
+                        f"ERROR: Heading '{after_heading}' not found. "
+                        "Document has no headings."
+                    )
+            resolved_index = insertion_point
+            location_description = f"after heading '{after_heading}'"
+        else:
+            # Default: append to end of document
+            structure = parse_document_structure(doc_data)
+            total_length = structure['total_length']
+            # Use total_length - 1 for safe insertion point
+            resolved_index = total_length - 1 if total_length > 1 else 1
+            location_description = "at end of document"
+
+    logger.debug(
+        f"[create_table_with_data] Resolved index: {resolved_index} "
+        f"({location_description})"
+    )
 
     # Use TableOperationManager to handle the complex logic
     table_manager = TableOperationManager(service)
 
-    # Try to create the table, and if it fails due to index being at document end, retry with index-1
+    # Try to create table; retry with index-1 if at document boundary
     success, message, metadata = await table_manager.create_and_populate_table(
-        document_id, table_data, index, bold_headers
+        document_id, table_data, resolved_index, bold_headers
     )
 
-    # If it failed due to index being at or beyond document end, retry with adjusted index
+    # If it failed due to index at/beyond document end, retry with adjusted idx
     if not success and "must be less than the end index" in message:
-        logger.debug(f"Index {index} is at document boundary, retrying with index {index - 1}")
+        logger.debug(
+            f"Index {resolved_index} is at document boundary, "
+            f"retrying with index {resolved_index - 1}"
+        )
         success, message, metadata = await table_manager.create_and_populate_table(
-            document_id, table_data, index - 1, bold_headers
+            document_id, table_data, resolved_index - 1, bold_headers
         )
 
     if success:
@@ -1797,7 +2429,10 @@ async def create_table_with_data(
         rows = metadata.get('rows', 0)
         columns = metadata.get('columns', 0)
 
-        return f"SUCCESS: {message}. Table: {rows}x{columns}, Index: {index}. Link: {link}"
+        return (
+            f"SUCCESS: {message}. Table: {rows}x{columns}, "
+            f"inserted {location_description}. Link: {link}"
+        )
     else:
         return f"ERROR: {message}"
 
@@ -2222,6 +2857,1016 @@ async def preview_search_results(
     return f"Search preview for document {document_id}:\n\n{json.dumps(result, indent=2)}\n\nLink: {link}"
 
 
+@server.tool()
+@handle_http_errors("find_doc_elements", is_read_only=True, service_type="docs")
+@require_google_service("docs", "docs_read")
+async def find_doc_elements(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    element_type: str,
+) -> str:
+    """
+    Find all elements of a specific type in a Google Doc.
+
+    Use this tool to locate all tables, headings, lists, or other structural
+    elements in a document. Returns positions and metadata for each element.
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to search
+        element_type: Type of element to find. Supported values:
+            - 'table': All tables in the document
+            - 'heading': All headings (any level)
+            - 'heading1' through 'heading6': Specific heading levels
+            - 'title': Document title style elements
+            - 'paragraph': Regular paragraphs (non-heading, non-list)
+            - 'bullet_list': Bulleted lists
+            - 'numbered_list': Numbered/ordered lists
+            - 'list': Both bullet and numbered lists
+            - 'table_of_contents': Table of contents elements
+
+    Returns:
+        str: JSON containing:
+            - count: Number of elements found
+            - element_type: The type that was searched
+            - elements: List of element details including positions and metadata
+
+    Example Response for element_type='table':
+        {
+            "count": 2,
+            "element_type": "table",
+            "elements": [
+                {"type": "table", "start_index": 150, "end_index": 350, "rows": 3, "columns": 4},
+                {"type": "table", "start_index": 500, "end_index": 650, "rows": 2, "columns": 3}
+            ]
+        }
+
+    Example Response for element_type='heading2':
+        {
+            "count": 3,
+            "element_type": "heading2",
+            "elements": [
+                {"type": "heading2", "text": "Introduction", "start_index": 10, "end_index": 22, "level": 2},
+                {"type": "heading2", "text": "Methods", "start_index": 150, "end_index": 158, "level": 2},
+                {"type": "heading2", "text": "Results", "start_index": 450, "end_index": 458, "level": 2}
+            ]
+        }
+
+    Use Cases:
+        - Find all tables before inserting data
+        - Navigate to specific heading levels
+        - Count structural elements in a document
+        - Locate all lists for formatting changes
+    """
+    import json
+
+    logger.debug(f"[find_doc_elements] Doc={document_id}, element_type={element_type}")
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    if not element_type or not element_type.strip():
+        error = DocsErrorBuilder.missing_required_param(
+            param_name="element_type",
+            context_description="for element search",
+            valid_values=["table", "heading", "heading1-6", "paragraph", "bullet_list", "numbered_list", "list"]
+        )
+        return format_error(error)
+
+    # Get the document
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Find elements
+    elements = find_elements_by_type(doc_data, element_type)
+
+    # Clean up elements for output
+    clean_elements = []
+    for elem in elements:
+        clean_elem = {
+            'type': elem['type'],
+            'start_index': elem['start_index'],
+            'end_index': elem['end_index']
+        }
+        if 'text' in elem:
+            clean_elem['text'] = elem['text']
+        if 'level' in elem:
+            clean_elem['level'] = elem['level']
+        if 'rows' in elem:
+            clean_elem['rows'] = elem['rows']
+            clean_elem['columns'] = elem.get('columns', 0)
+        if 'items' in elem:
+            clean_elem['item_count'] = len(elem['items'])
+            clean_elem['items'] = [
+                {'text': item['text'], 'start_index': item['start_index'], 'end_index': item['end_index']}
+                for item in elem['items']
+            ]
+        clean_elements.append(clean_elem)
+
+    result = {
+        'count': len(clean_elements),
+        'element_type': element_type,
+        'elements': clean_elements
+    }
+
+    link = f"https://docs.google.com/document/d/{document_id}/edit"
+    return f"Found {len(clean_elements)} element(s) of type '{element_type}' in document {document_id}:\n\n{json.dumps(result, indent=2)}\n\nLink: {link}"
+
+
+@server.tool()
+@handle_http_errors("get_element_context", is_read_only=True, service_type="docs")
+@require_google_service("docs", "docs_read")
+async def get_element_context(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    index: int,
+) -> str:
+    """
+    Find the parent section/heading hierarchy for an element at a given position.
+
+    Use this tool to determine which section(s) contain a specific position in
+    the document. Returns the full hierarchy from document root to the most
+    specific containing heading.
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to analyze
+        index: Character position in the document to analyze
+
+    Returns:
+        str: JSON containing:
+            - index: The position that was queried
+            - ancestors: List of containing headings from root to leaf, each with:
+                - type: Heading type (e.g., 'heading1', 'heading2')
+                - text: Heading text
+                - level: Heading level (0=title, 1-6 for headings)
+                - start_index: Start position of the heading
+                - end_index: End position of the heading
+                - section_end: Where this section ends
+            - depth: Number of heading levels containing this position
+            - innermost_section: The most specific heading containing the position
+
+    Example Response:
+        {
+            "index": 500,
+            "ancestors": [
+                {"type": "heading1", "text": "Introduction", "level": 1,
+                 "start_index": 10, "end_index": 22, "section_end": 800},
+                {"type": "heading2", "text": "Background", "level": 2,
+                 "start_index": 150, "end_index": 162, "section_end": 600}
+            ],
+            "depth": 2,
+            "innermost_section": {"type": "heading2", "text": "Background", ...}
+        }
+
+    Use Cases:
+        - Determine which section contains a search result
+        - Navigate document structure from a specific position
+        - Find context for error messages about specific positions
+        - Build breadcrumb navigation for document positions
+    """
+    import json
+
+    logger.debug(f"[get_element_context] Doc={document_id}, index={index}")
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    if index < 0:
+        error = DocsErrorBuilder.invalid_param(
+            param_name="index",
+            received_value=str(index),
+            valid_values=["non-negative integer"],
+            context_description="document position"
+        )
+        return format_error(error)
+
+    # Get the document
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Get ancestors
+    ancestors = get_element_ancestors(doc_data, index)
+
+    result = {
+        'index': index,
+        'ancestors': ancestors,
+        'depth': len(ancestors),
+        'innermost_section': ancestors[-1] if ancestors else None
+    }
+
+    link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    if ancestors:
+        innermost = ancestors[-1]
+        summary = f"Position {index} is within section '{innermost['text']}' (level {innermost['level']}) with {len(ancestors)} containing section(s)"
+    else:
+        summary = f"Position {index} is not within any heading section"
+
+    return f"{summary}:\n\n{json.dumps(result, indent=2)}\n\nLink: {link}"
+
+
+@server.tool()
+@handle_http_errors("navigate_heading_siblings", is_read_only=True, service_type="docs")
+@require_google_service("docs", "docs_read")
+async def navigate_heading_siblings(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    heading: str,
+    match_case: bool = False,
+) -> str:
+    """
+    Find the previous and next headings at the same level as a specified heading.
+
+    Use this tool to navigate between sibling sections in a document,
+    helping move to previous or next sections at the same hierarchy level.
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to analyze
+        heading: Text of the heading to find siblings for
+        match_case: Whether to match case exactly when finding the heading
+
+    Returns:
+        str: JSON containing:
+            - found: Boolean indicating if the heading was found
+            - heading: The matched heading info
+            - level: The heading level
+            - previous: Previous sibling heading info, or null if first at this level
+            - next: Next sibling heading info, or null if last at this level
+            - siblings_count: Total count of headings at this level
+            - position_in_siblings: 1-based position among siblings (e.g., 2 of 5)
+
+    Example Response:
+        {
+            "found": true,
+            "heading": {"type": "heading2", "text": "Methods", "level": 2,
+                       "start_index": 150, "end_index": 158},
+            "level": 2,
+            "previous": {"type": "heading2", "text": "Introduction", "level": 2,
+                        "start_index": 10, "end_index": 22},
+            "next": {"type": "heading2", "text": "Results", "level": 2,
+                    "start_index": 450, "end_index": 458},
+            "siblings_count": 4,
+            "position_in_siblings": 2
+        }
+
+    Use Cases:
+        - Navigate sequentially through document sections
+        - Find adjacent sections for comparison or movement
+        - Understand document structure at a specific level
+        - Build next/previous navigation for section editing
+    """
+    import json
+
+    logger.debug(f"[navigate_heading_siblings] Doc={document_id}, heading={heading}, match_case={match_case}")
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    if not heading or not heading.strip():
+        error = DocsErrorBuilder.missing_required_param(
+            param_name="heading",
+            context_description="for sibling navigation",
+            valid_values=["non-empty heading text"]
+        )
+        return format_error(error)
+
+    # Get the document
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Get siblings
+    result = get_heading_siblings(doc_data, heading, match_case)
+
+    link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    if not result['found']:
+        # Provide helpful error with available headings
+        all_headings = get_all_headings(doc_data)
+        heading_list = [h['text'] for h in all_headings] if all_headings else []
+        return validator.create_heading_not_found_error(
+            heading=heading,
+            available_headings=heading_list,
+            match_case=match_case
+        )
+
+    summary_parts = [f"Heading '{result['heading']['text']}' (level {result['level']})"]
+    summary_parts.append(f"Position {result['position_in_siblings']} of {result['siblings_count']} headings at this level")
+    if result['previous']:
+        summary_parts.append(f"Previous: '{result['previous']['text']}'")
+    else:
+        summary_parts.append("No previous sibling (first at this level)")
+    if result['next']:
+        summary_parts.append(f"Next: '{result['next']['text']}'")
+    else:
+        summary_parts.append("No next sibling (last at this level)")
+
+    return f"{' | '.join(summary_parts)}:\n\n{json.dumps(result, indent=2)}\n\nLink: {link}"
+
+
+# ============================================================================
+# SMART CONTENT EXTRACTION TOOLS
+# ============================================================================
+
+
+@server.tool()
+@handle_http_errors("extract_links", is_read_only=True, service_type="docs")
+@require_google_service("docs", "docs_read")
+async def extract_links(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    include_section_context: bool = True,
+) -> str:
+    """
+    Extract all hyperlinks from a Google Doc with their text and URLs.
+
+    This tool identifies all linked text in the document and returns structured
+    data about each link including:
+    - The linked text (anchor text)
+    - The destination URL
+    - Position in the document
+    - Section context (which heading it appears under)
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to extract links from
+        include_section_context: Whether to include which section each link is in (default: True)
+
+    Returns:
+        str: JSON containing:
+            - total_links: Number of links found
+            - links: List of link details including:
+                - text: The anchor text of the link
+                - url: The destination URL
+                - start_index: Character position where link starts
+                - end_index: Character position where link ends
+                - section: (if include_section_context) The heading this link is under
+            - document_link: Link to open the document
+
+    Example Response:
+        {
+            "total_links": 5,
+            "links": [
+                {
+                    "text": "Google",
+                    "url": "https://google.com",
+                    "start_index": 150,
+                    "end_index": 156,
+                    "section": "References"
+                }
+            ],
+            "document_link": "https://docs.google.com/document/d/..."
+        }
+    """
+    import json
+
+    logger.debug(f"[extract_links] Doc={document_id}")
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    # Get the document
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Get headings for section context
+    headings = []
+    if include_section_context:
+        headings = get_all_headings(doc_data)
+
+    def find_section_for_index(idx: int) -> str:
+        """Find which section heading a given index falls under."""
+        if not headings:
+            return ""
+        current_section = ""
+        for heading in headings:
+            if heading['start_index'] <= idx:
+                current_section = heading['text']
+            else:
+                break
+        return current_section
+
+    # Traverse document to find all links
+    links = []
+    body = doc_data.get('body', {})
+    content = body.get('content', [])
+
+    def process_elements(elements: list, depth: int = 0) -> None:
+        """Recursively process elements to extract links."""
+        if depth > 10:  # Prevent infinite recursion
+            return
+
+        for element in elements:
+            if 'paragraph' in element:
+                paragraph = element['paragraph']
+                for para_elem in paragraph.get('elements', []):
+                    if 'textRun' in para_elem:
+                        text_run = para_elem['textRun']
+                        text_style = text_run.get('textStyle', {})
+
+                        # Check for link in text style
+                        if 'link' in text_style:
+                            link_info = text_style['link']
+                            url = link_info.get('url', '')
+
+                            # Skip internal document bookmarks
+                            if url and not url.startswith('#'):
+                                link_text = text_run.get('content', '').strip()
+                                start_idx = para_elem.get('startIndex', 0)
+                                end_idx = para_elem.get('endIndex', 0)
+
+                                link_entry = {
+                                    'text': link_text,
+                                    'url': url,
+                                    'start_index': start_idx,
+                                    'end_index': end_idx,
+                                }
+
+                                if include_section_context:
+                                    link_entry['section'] = find_section_for_index(start_idx)
+
+                                links.append(link_entry)
+
+            elif 'table' in element:
+                # Process table cells
+                table = element['table']
+                for row in table.get('tableRows', []):
+                    for cell in row.get('tableCells', []):
+                        process_elements(cell.get('content', []), depth + 1)
+
+    process_elements(content)
+
+    link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    result = {
+        'total_links': len(links),
+        'links': links,
+        'document_link': link
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@server.tool()
+@handle_http_errors("extract_images", is_read_only=True, service_type="docs")
+@require_google_service("docs", "docs_read")
+async def extract_images(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    include_section_context: bool = True,
+) -> str:
+    """
+    Extract all images from a Google Doc with their URLs and positions.
+
+    This tool identifies all inline images in the document and returns
+    structured data about each image including:
+    - Image URL (for viewing/downloading)
+    - Dimensions (width, height)
+    - Position in the document
+    - Section context (which heading it appears under)
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to extract images from
+        include_section_context: Whether to include which section each image is in (default: True)
+
+    Returns:
+        str: JSON containing:
+            - total_images: Number of images found
+            - images: List of image details including:
+                - object_id: Internal ID of the image object
+                - content_uri: URL to access the image content
+                - source_uri: Original source URL (if available)
+                - width_pt: Width in points
+                - height_pt: Height in points
+                - start_index: Character position of the image
+                - section: (if include_section_context) The heading this image is under
+            - document_link: Link to open the document
+
+    Example Response:
+        {
+            "total_images": 3,
+            "images": [
+                {
+                    "object_id": "kix.abc123",
+                    "content_uri": "https://lh3.googleusercontent.com/...",
+                    "width_pt": 400,
+                    "height_pt": 300,
+                    "start_index": 250,
+                    "section": "Diagrams"
+                }
+            ],
+            "document_link": "https://docs.google.com/document/d/..."
+        }
+    """
+    import json
+
+    logger.debug(f"[extract_images] Doc={document_id}")
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    # Get the document
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Get inline objects registry
+    inline_objects = doc_data.get('inlineObjects', {})
+
+    # Get headings for section context
+    headings = []
+    if include_section_context:
+        headings = get_all_headings(doc_data)
+
+    def find_section_for_index(idx: int) -> str:
+        """Find which section heading a given index falls under."""
+        if not headings:
+            return ""
+        current_section = ""
+        for heading in headings:
+            if heading['start_index'] <= idx:
+                current_section = heading['text']
+            else:
+                break
+        return current_section
+
+    # Map to track inline object references and their positions
+    image_refs = {}  # object_id -> start_index
+
+    body = doc_data.get('body', {})
+    content = body.get('content', [])
+
+    def process_elements(elements: list, depth: int = 0) -> None:
+        """Recursively process elements to find inline object references."""
+        if depth > 10:
+            return
+
+        for element in elements:
+            if 'paragraph' in element:
+                paragraph = element['paragraph']
+                for para_elem in paragraph.get('elements', []):
+                    if 'inlineObjectElement' in para_elem:
+                        obj_elem = para_elem['inlineObjectElement']
+                        obj_id = obj_elem.get('inlineObjectId')
+                        if obj_id:
+                            start_idx = para_elem.get('startIndex', 0)
+                            image_refs[obj_id] = start_idx
+
+            elif 'table' in element:
+                table = element['table']
+                for row in table.get('tableRows', []):
+                    for cell in row.get('tableCells', []):
+                        process_elements(cell.get('content', []), depth + 1)
+
+    process_elements(content)
+
+    # Build image list from inline objects registry
+    images = []
+    for obj_id, obj_data in inline_objects.items():
+        props = obj_data.get('inlineObjectProperties', {})
+        embedded_obj = props.get('embeddedObject', {})
+
+        # Get image properties
+        image_props = embedded_obj.get('imageProperties', {})
+        content_uri = image_props.get('contentUri', '')
+        source_uri = image_props.get('sourceUri', '')
+
+        # Get size
+        size = embedded_obj.get('size', {})
+        width = size.get('width', {})
+        height = size.get('height', {})
+
+        width_pt = width.get('magnitude', 0) if width.get('unit') == 'PT' else width.get('magnitude', 0)
+        height_pt = height.get('magnitude', 0) if height.get('unit') == 'PT' else height.get('magnitude', 0)
+
+        start_idx = image_refs.get(obj_id, 0)
+
+        image_entry = {
+            'object_id': obj_id,
+            'content_uri': content_uri,
+            'width_pt': width_pt,
+            'height_pt': height_pt,
+            'start_index': start_idx,
+        }
+
+        if source_uri:
+            image_entry['source_uri'] = source_uri
+
+        if include_section_context:
+            image_entry['section'] = find_section_for_index(start_idx)
+
+        images.append(image_entry)
+
+    # Sort by position in document
+    images.sort(key=lambda x: x['start_index'])
+
+    link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    result = {
+        'total_images': len(images),
+        'images': images,
+        'document_link': link
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@server.tool()
+@handle_http_errors("extract_code_blocks", is_read_only=True, service_type="docs")
+@require_google_service("docs", "docs_read")
+async def extract_code_blocks(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    include_section_context: bool = True,
+) -> str:
+    """
+    Extract code-formatted text blocks from a Google Doc.
+
+    This tool identifies text that appears to be code based on formatting:
+    - Monospace fonts (Courier New, Consolas, Monaco, etc.)
+    - Background-colored text blocks
+    - Consecutive monospace-formatted lines
+
+    Note: Google Docs doesn't have native code blocks like Markdown, so
+    detection is heuristic-based on common code formatting conventions.
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to extract code from
+        include_section_context: Whether to include which section each code block is in (default: True)
+
+    Returns:
+        str: JSON containing:
+            - total_code_blocks: Number of code blocks found
+            - code_blocks: List of code block details including:
+                - content: The code text
+                - font_family: The font used (e.g., "Courier New")
+                - start_index: Character position where code starts
+                - end_index: Character position where code ends
+                - has_background: Whether background color is set
+                - section: (if include_section_context) The heading this code is under
+            - document_link: Link to open the document
+
+    Example Response:
+        {
+            "total_code_blocks": 2,
+            "code_blocks": [
+                {
+                    "content": "def hello():\\n    print('Hello')",
+                    "font_family": "Courier New",
+                    "start_index": 150,
+                    "end_index": 185,
+                    "has_background": true,
+                    "section": "Implementation"
+                }
+            ],
+            "document_link": "https://docs.google.com/document/d/..."
+        }
+    """
+    import json
+
+    logger.debug(f"[extract_code_blocks] Doc={document_id}")
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    # Get the document
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Common monospace fonts used for code
+    MONOSPACE_FONTS = {
+        'courier new', 'consolas', 'monaco', 'menlo', 'source code pro',
+        'fira code', 'jetbrains mono', 'roboto mono', 'ubuntu mono',
+        'droid sans mono', 'liberation mono', 'dejavu sans mono',
+        'lucida console', 'andale mono', 'courier'
+    }
+
+    # Get headings for section context
+    headings = []
+    if include_section_context:
+        headings = get_all_headings(doc_data)
+
+    def find_section_for_index(idx: int) -> str:
+        """Find which section heading a given index falls under."""
+        if not headings:
+            return ""
+        current_section = ""
+        for heading in headings:
+            if heading['start_index'] <= idx:
+                current_section = heading['text']
+            else:
+                break
+        return current_section
+
+    def is_code_formatted(text_style: dict) -> tuple[bool, str, bool]:
+        """Check if text style indicates code formatting.
+
+        Returns:
+            Tuple of (is_code, font_family, has_background)
+        """
+        # Check font family
+        font_info = text_style.get('weightedFontFamily', {})
+        font_family = font_info.get('fontFamily', '').lower()
+
+        is_monospace = any(mono in font_family for mono in MONOSPACE_FONTS)
+
+        # Check background color
+        bg_color = text_style.get('backgroundColor', {})
+        has_background = bool(bg_color.get('color', {}))
+
+        return is_monospace, font_info.get('fontFamily', ''), has_background
+
+    # Collect code-formatted text runs
+    code_runs = []
+
+    body = doc_data.get('body', {})
+    content = body.get('content', [])
+
+    def process_elements(elements: list, depth: int = 0) -> None:
+        """Recursively process elements to find code-formatted text."""
+        if depth > 10:
+            return
+
+        for element in elements:
+            if 'paragraph' in element:
+                paragraph = element['paragraph']
+                for para_elem in paragraph.get('elements', []):
+                    if 'textRun' in para_elem:
+                        text_run = para_elem['textRun']
+                        text_style = text_run.get('textStyle', {})
+                        text_content = text_run.get('content', '')
+
+                        is_code, font_family, has_background = is_code_formatted(text_style)
+
+                        if is_code and text_content.strip():
+                            code_runs.append({
+                                'content': text_content,
+                                'font_family': font_family,
+                                'start_index': para_elem.get('startIndex', 0),
+                                'end_index': para_elem.get('endIndex', 0),
+                                'has_background': has_background
+                            })
+
+            elif 'table' in element:
+                table = element['table']
+                for row in table.get('tableRows', []):
+                    for cell in row.get('tableCells', []):
+                        process_elements(cell.get('content', []), depth + 1)
+
+    process_elements(content)
+
+    # Merge consecutive code runs into blocks
+    code_blocks = []
+    current_block = None
+
+    for run in sorted(code_runs, key=lambda x: x['start_index']):
+        if current_block is None:
+            current_block = run.copy()
+        elif run['start_index'] <= current_block['end_index'] + 1:
+            # Consecutive or overlapping - merge
+            current_block['content'] += run['content']
+            current_block['end_index'] = max(current_block['end_index'], run['end_index'])
+            current_block['has_background'] = current_block['has_background'] or run['has_background']
+        else:
+            # Gap - save current block and start new one
+            if include_section_context:
+                current_block['section'] = find_section_for_index(current_block['start_index'])
+            code_blocks.append(current_block)
+            current_block = run.copy()
+
+    # Don't forget the last block
+    if current_block:
+        if include_section_context:
+            current_block['section'] = find_section_for_index(current_block['start_index'])
+        code_blocks.append(current_block)
+
+    link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    result = {
+        'total_code_blocks': len(code_blocks),
+        'code_blocks': code_blocks,
+        'document_link': link
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@server.tool()
+@handle_http_errors("extract_document_summary", is_read_only=True, service_type="docs")
+@require_google_service("docs", "docs_read")
+async def extract_document_summary(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    max_preview_words: int = 30,
+) -> str:
+    """
+    Generate a structural summary/outline of a Google Doc.
+
+    This tool provides a high-level overview of the document including:
+    - Hierarchical heading structure (outline)
+    - Section statistics (word counts, element counts)
+    - Document metadata
+    - Content distribution
+
+    Useful for:
+    - Understanding document structure before making changes
+    - Finding specific sections by browsing the outline
+    - Assessing document size and complexity
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to summarize
+        max_preview_words: Maximum words to include in section previews (default: 30)
+
+    Returns:
+        str: JSON containing:
+            - title: Document title
+            - total_characters: Total character count
+            - total_headings: Number of headings
+            - total_paragraphs: Number of paragraphs
+            - total_tables: Number of tables
+            - total_lists: Number of lists
+            - outline: Hierarchical heading structure with:
+                - text: Heading text
+                - level: Heading level (1-6)
+                - start_index: Position in document
+                - preview: First N words of section content
+                - children: Nested subheadings
+            - document_link: Link to open the document
+
+    Example Response:
+        {
+            "title": "Project Proposal",
+            "total_characters": 15420,
+            "total_headings": 8,
+            "total_paragraphs": 42,
+            "total_tables": 2,
+            "total_lists": 5,
+            "outline": [
+                {
+                    "text": "Introduction",
+                    "level": 1,
+                    "start_index": 1,
+                    "preview": "This document outlines the proposed approach for...",
+                    "children": [
+                        {
+                            "text": "Background",
+                            "level": 2,
+                            ...
+                        }
+                    ]
+                }
+            ],
+            "document_link": "https://docs.google.com/document/d/..."
+        }
+    """
+    import json
+
+    logger.debug(f"[extract_document_summary] Doc={document_id}")
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    # Get the document
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Get structural elements
+    elements = extract_structural_elements(doc_data)
+
+    # Count elements by type
+    counts = {
+        'headings': 0,
+        'paragraphs': 0,
+        'tables': 0,
+        'lists': 0
+    }
+
+    for elem in elements:
+        elem_type = elem.get('type', '')
+        if elem_type.startswith('heading') or elem_type == 'title':
+            counts['headings'] += 1
+        elif elem_type == 'paragraph':
+            counts['paragraphs'] += 1
+        elif elem_type == 'table':
+            counts['tables'] += 1
+        elif elem_type in ('bullet_list', 'numbered_list'):
+            counts['lists'] += 1
+
+    # Calculate total characters
+    body = doc_data.get('body', {})
+    content = body.get('content', [])
+    total_chars = 0
+    if content:
+        total_chars = content[-1].get('endIndex', 0) - 1  # Subtract 1 for start index
+
+    # Build outline with previews
+    outline = build_headings_outline(elements)
+
+    def get_section_preview(heading_start: int, heading_end: int) -> str:
+        """Get preview text from section content."""
+        preview_parts = []
+        word_count = 0
+
+        for elem in elements:
+            if elem['start_index'] > heading_end:
+                # We're past this heading
+                if elem.get('type', '').startswith('heading'):
+                    # Hit next heading, stop
+                    break
+
+            if elem['start_index'] > heading_start:
+                text = elem.get('text', '')
+                if text:
+                    words = text.split()
+                    for word in words:
+                        if word_count >= max_preview_words:
+                            break
+                        preview_parts.append(word)
+                        word_count += 1
+                    if word_count >= max_preview_words:
+                        break
+
+        preview = ' '.join(preview_parts)
+        if word_count >= max_preview_words:
+            preview += '...'
+        return preview
+
+    def add_previews_to_outline(outline_items: list, elements_list: list) -> None:
+        """Recursively add preview text to outline items."""
+        for i, item in enumerate(outline_items):
+            # Find section end (next sibling heading start or document end)
+            section_end = total_chars
+            if i + 1 < len(outline_items):
+                section_end = outline_items[i + 1]['start_index']
+
+            item['preview'] = get_section_preview(item['start_index'], section_end)
+
+            if item.get('children'):
+                add_previews_to_outline(item['children'], elements_list)
+
+    add_previews_to_outline(outline, elements)
+
+    link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    result = {
+        'title': doc_data.get('title', ''),
+        'total_characters': total_chars,
+        'total_headings': counts['headings'],
+        'total_paragraphs': counts['paragraphs'],
+        'total_tables': counts['tables'],
+        'total_lists': counts['lists'],
+        'outline': outline,
+        'document_link': link
+    }
+
+    return json.dumps(result, indent=2)
+
+
 # Create comment management tools for documents
 _comment_tools = create_comment_tools("document", "document_id")
 
@@ -2230,3 +3875,508 @@ read_doc_comments = _comment_tools['read_comments']
 create_doc_comment = _comment_tools['create_comment']
 reply_to_comment = _comment_tools['reply_to_comment']
 resolve_comment = _comment_tools['resolve_comment']
+
+
+# =============================================================================
+# Operation History and Undo Tools
+# =============================================================================
+
+from gdocs.managers.history_manager import (
+    get_history_manager,
+    UndoCapability,
+)
+from gdocs.docs_helpers import extract_text_at_range
+
+
+@server.tool()
+async def get_doc_operation_history(
+    document_id: str,
+    limit: int = 10,
+    include_undone: bool = False,
+) -> str:
+    """
+    Get the operation history for a Google Doc.
+
+    This tool returns a list of recent operations performed on the document
+    through the MCP tools. Each operation includes details about what was
+    changed and whether it can be undone.
+
+    Note: History is stored in-memory and is lost when the MCP server restarts.
+    Operations performed outside this MCP server (e.g., in the Google Docs UI)
+    are not tracked.
+
+    Args:
+        document_id: ID of the document
+        limit: Maximum number of operations to return (default: 10, max: 50)
+        include_undone: Whether to include already-undone operations (default: False)
+
+    Returns:
+        str: JSON containing:
+            - document_id: The document ID
+            - operations: List of operations, most recent first, each containing:
+                - id: Unique operation ID
+                - timestamp: When the operation was performed (ISO 8601)
+                - operation_type: Type of operation (insert_text, delete_text, etc.)
+                - start_index: Start position of the operation
+                - end_index: End position (for range operations)
+                - position_shift: How much positions shifted
+                - undo_capability: "full", "partial", or "none"
+                - undone: Whether this operation has been undone
+                - undo_notes: Any notes about undo limitations
+            - total_operations: Total number of tracked operations
+            - undoable_count: Number of operations that can be undone
+
+    Example Response:
+        {
+            "document_id": "1abc123...",
+            "operations": [
+                {
+                    "id": "op_20250604123456_1",
+                    "timestamp": "2025-06-04T12:34:56Z",
+                    "operation_type": "insert_text",
+                    "start_index": 100,
+                    "position_shift": 15,
+                    "undo_capability": "full",
+                    "undone": false
+                }
+            ],
+            "total_operations": 5,
+            "undoable_count": 3
+        }
+    """
+    import json
+
+    logger.debug(f"[get_doc_operation_history] Doc={document_id}, limit={limit}")
+
+    # Validate inputs
+    if not document_id or not document_id.strip():
+        return json.dumps({
+            "success": False,
+            "error": "document_id is required"
+        }, indent=2)
+
+    limit = min(max(1, limit), 50)  # Clamp between 1 and 50
+
+    manager = get_history_manager()
+    operations = manager.get_history(document_id, limit=limit, include_undone=include_undone)
+
+    # Count undoable operations
+    undoable_count = sum(
+        1 for op in operations
+        if not op.get('undone') and op.get('undo_capability') != 'none'
+    )
+
+    result = {
+        "document_id": document_id,
+        "operations": operations,
+        "total_operations": len(operations),
+        "undoable_count": undoable_count,
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@server.tool()
+@handle_http_errors("undo_doc_operation", service_type="docs")
+@require_google_service("docs", "docs_write")
+async def undo_doc_operation(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    operation_id: str = None,
+) -> str:
+    """
+    Undo the last operation performed on a Google Doc.
+
+    This tool reverses the most recent undoable operation by executing a
+    compensating operation (e.g., re-inserting deleted text, deleting
+    inserted text, or restoring replaced text).
+
+    Important Limitations:
+    - Only operations performed through this MCP server can be undone
+    - History is stored in-memory and lost on server restart
+    - Undo may fail if the document was modified externally
+    - Some operations (find_replace, insert_table) cannot be undone
+    - Format undo requires original formatting to be captured
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document
+        operation_id: Specific operation ID to undo (optional, defaults to last undoable)
+
+    Returns:
+        str: JSON containing:
+            - success: Whether the undo was successful
+            - message: Description of what was undone
+            - operation_id: ID of the undone operation
+            - reverse_operation: Details of the reverse operation executed
+            - error: Error message if undo failed
+
+    Example Response (success):
+        {
+            "success": true,
+            "message": "Successfully undone: insert_text",
+            "operation_id": "op_20250604123456_1",
+            "reverse_operation": {
+                "type": "delete_text",
+                "start_index": 100,
+                "end_index": 115
+            },
+            "document_link": "https://docs.google.com/document/d/.../edit"
+        }
+
+    Example Response (failure):
+        {
+            "success": false,
+            "message": "No undoable operations found",
+            "error": "All operations have been undone or cannot be undone"
+        }
+    """
+    import json
+
+    logger.info(f"[undo_doc_operation] Doc={document_id}, OpID={operation_id}")
+
+    # Validate document_id
+    validator = ValidationManager()
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    manager = get_history_manager()
+
+    # Generate the undo operation
+    undo_result = manager.generate_undo_operation(document_id)
+
+    if not undo_result.success:
+        return json.dumps({
+            "success": False,
+            "message": undo_result.message,
+            "error": undo_result.error,
+        }, indent=2)
+
+    # Execute the reverse operation
+    reverse_op = undo_result.reverse_operation
+    op_type = reverse_op.get("type")
+
+    try:
+        requests = []
+
+        if op_type == "insert_text":
+            requests.append(create_insert_text_request(
+                reverse_op["index"],
+                reverse_op["text"]
+            ))
+        elif op_type == "delete_text":
+            requests.append(create_delete_range_request(
+                reverse_op["start_index"],
+                reverse_op["end_index"]
+            ))
+        elif op_type == "replace_text":
+            # Replace = delete + insert
+            requests.append(create_delete_range_request(
+                reverse_op["start_index"],
+                reverse_op["end_index"]
+            ))
+            requests.append(create_insert_text_request(
+                reverse_op["start_index"],
+                reverse_op["text"]
+            ))
+        elif op_type == "format_text":
+            requests.append(create_format_text_request(
+                reverse_op["start_index"],
+                reverse_op["end_index"],
+                reverse_op.get("bold"),
+                reverse_op.get("italic"),
+                reverse_op.get("underline"),
+                reverse_op.get("font_size"),
+                reverse_op.get("font_family")
+            ))
+        else:
+            return json.dumps({
+                "success": False,
+                "message": f"Unknown reverse operation type: {op_type}",
+                "error": "Cannot execute undo"
+            }, indent=2)
+
+        # Execute the batch update
+        await asyncio.to_thread(
+            service.documents().batchUpdate(
+                documentId=document_id,
+                body={'requests': requests}
+            ).execute
+        )
+
+        # Mark the operation as undone
+        manager.mark_undone(document_id, undo_result.operation_id)
+
+        return json.dumps({
+            "success": True,
+            "message": f"Successfully undone operation",
+            "operation_id": undo_result.operation_id,
+            "reverse_operation": {
+                "type": op_type,
+                "description": reverse_op.get("description", ""),
+            },
+            "document_link": f"https://docs.google.com/document/d/{document_id}/edit"
+        }, indent=2)
+
+    except Exception as e:
+        logger.error(f"Failed to execute undo: {str(e)}")
+        return json.dumps({
+            "success": False,
+            "message": "Failed to execute undo operation",
+            "operation_id": undo_result.operation_id,
+            "error": str(e)
+        }, indent=2)
+
+
+@server.tool()
+async def clear_doc_history(
+    document_id: str,
+) -> str:
+    """
+    Clear the operation history for a Google Doc.
+
+    This removes all tracked operations for the specified document,
+    making undo unavailable for previous operations.
+
+    Args:
+        document_id: ID of the document
+
+    Returns:
+        str: JSON containing:
+            - success: Whether the history was cleared
+            - message: Description of the result
+            - document_id: The document ID
+
+    Example Response:
+        {
+            "success": true,
+            "message": "Cleared history for document",
+            "document_id": "1abc123..."
+        }
+    """
+    import json
+
+    logger.info(f"[clear_doc_history] Doc={document_id}")
+
+    if not document_id or not document_id.strip():
+        return json.dumps({
+            "success": False,
+            "error": "document_id is required"
+        }, indent=2)
+
+    manager = get_history_manager()
+    cleared = manager.clear_history(document_id)
+
+    return json.dumps({
+        "success": True,
+        "message": "Cleared history for document" if cleared else "No history existed for document",
+        "document_id": document_id
+    }, indent=2)
+
+
+@server.tool()
+async def get_history_stats() -> str:
+    """
+    Get statistics about tracked operation history across all documents.
+
+    This tool provides an overview of the history tracking system,
+    including how many documents and operations are being tracked.
+
+    Returns:
+        str: JSON containing:
+            - documents_tracked: Number of documents with tracked history
+            - total_operations: Total operations across all documents
+            - undone_operations: Number of operations that have been undone
+            - operations_per_document: Dictionary mapping document IDs to operation counts
+
+    Example Response:
+        {
+            "documents_tracked": 3,
+            "total_operations": 25,
+            "undone_operations": 5,
+            "operations_per_document": {
+                "1abc123...": 10,
+                "2def456...": 8,
+                "3ghi789...": 7
+            }
+        }
+    """
+    import json
+
+    logger.debug("[get_history_stats]")
+
+    manager = get_history_manager()
+    stats = manager.get_stats()
+
+    return json.dumps(stats, indent=2)
+
+
+@server.tool()
+@handle_http_errors("record_doc_operation", service_type="docs")
+@require_google_service("docs", "docs_read")
+async def record_doc_operation(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    operation_type: str,
+    start_index: int,
+    end_index: int = None,
+    text: str = None,
+    position_shift: int = 0,
+    capture_deleted_text: bool = True,
+) -> str:
+    """
+    Manually record an operation for undo tracking.
+
+    This tool allows recording operations that need undo support. Call this
+    BEFORE performing the operation to capture the original text that will
+    be deleted or replaced.
+
+    For most use cases, prefer using modify_doc_text with automatic tracking
+    (coming soon). This tool is for advanced scenarios or custom integrations.
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document
+        operation_type: Type of operation. Supported values:
+            - "insert_text": Inserting new text
+            - "delete_text": Deleting existing text
+            - "replace_text": Replacing text with new text
+            - "format_text": Applying formatting changes
+        start_index: Start position of the operation
+        end_index: End position for range operations (delete/replace/format)
+        text: Text being inserted or replacing original (for insert/replace)
+        position_shift: How much positions will shift (calculated if not provided)
+        capture_deleted_text: If True, captures text at range before operation (for undo)
+
+    Returns:
+        str: JSON containing:
+            - success: Whether the operation was recorded
+            - operation_id: Unique ID for the recorded operation
+            - undo_capability: "full", "partial", or "none"
+            - deleted_text: Text that was captured (if applicable)
+            - message: Description of what was recorded
+
+    Example - Recording a delete operation:
+        record_doc_operation(
+            document_id="1abc...",
+            operation_type="delete_text",
+            start_index=100,
+            end_index=150
+        )
+        # This captures the text at positions 100-150 so it can be restored on undo
+
+    Example - Recording an insert operation:
+        record_doc_operation(
+            document_id="1abc...",
+            operation_type="insert_text",
+            start_index=100,
+            text="Hello World"
+        )
+        # Undo will delete the inserted text
+    """
+    import json
+
+    logger.info(f"[record_doc_operation] Doc={document_id}, Type={operation_type}, Start={start_index}")
+
+    # Validate inputs
+    validator = ValidationManager()
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    valid_types = ["insert_text", "delete_text", "replace_text", "format_text"]
+    if operation_type not in valid_types:
+        return json.dumps({
+            "success": False,
+            "error": f"Invalid operation_type. Must be one of: {', '.join(valid_types)}"
+        }, indent=2)
+
+    if start_index < 0:
+        return json.dumps({
+            "success": False,
+            "error": "start_index must be non-negative"
+        }, indent=2)
+
+    # Determine undo capability
+    undo_capability = UndoCapability.FULL
+    undo_notes = None
+    deleted_text = None
+    original_text = None
+
+    # Capture text if needed for undo
+    if capture_deleted_text and operation_type in ["delete_text", "replace_text"]:
+        if end_index is None or end_index <= start_index:
+            return json.dumps({
+                "success": False,
+                "error": "end_index is required and must be greater than start_index for delete/replace operations"
+            }, indent=2)
+
+        # Fetch document to capture the text
+        doc_data = await asyncio.to_thread(
+            service.documents().get(documentId=document_id).execute
+        )
+
+        # Extract the text at the range
+        extracted = extract_text_at_range(doc_data, start_index, end_index)
+        captured_text = extracted.get("text", "")
+
+        if operation_type == "delete_text":
+            deleted_text = captured_text
+        else:  # replace_text
+            original_text = captured_text
+
+    # Calculate position shift if not provided
+    if position_shift == 0:
+        if operation_type == "insert_text":
+            position_shift = len(text) if text else 0
+        elif operation_type == "delete_text":
+            position_shift = -(end_index - start_index) if end_index else 0
+        elif operation_type == "replace_text":
+            old_len = (end_index - start_index) if end_index else 0
+            new_len = len(text) if text else 0
+            position_shift = new_len - old_len
+
+    # Handle operation-specific undo limitations
+    if operation_type == "format_text":
+        undo_capability = UndoCapability.NONE
+        undo_notes = "Format undo requires capturing original formatting (not yet supported)"
+
+    # Record the operation
+    manager = get_history_manager()
+    snapshot = manager.record_operation(
+        document_id=document_id,
+        operation_type=operation_type,
+        operation_params={
+            "start_index": start_index,
+            "end_index": end_index,
+            "text": text,
+        },
+        start_index=start_index,
+        end_index=end_index,
+        position_shift=position_shift,
+        deleted_text=deleted_text,
+        original_text=original_text,
+        undo_capability=undo_capability,
+        undo_notes=undo_notes,
+    )
+
+    result = {
+        "success": True,
+        "operation_id": snapshot.id,
+        "operation_type": operation_type,
+        "undo_capability": undo_capability.value,
+        "message": f"Recorded {operation_type} operation"
+    }
+
+    if deleted_text is not None:
+        result["deleted_text_preview"] = deleted_text[:100] + "..." if len(deleted_text) > 100 else deleted_text
+        result["deleted_text_length"] = len(deleted_text)
+
+    if original_text is not None:
+        result["original_text_preview"] = original_text[:100] + "..." if len(original_text) > 100 else original_text
+        result["original_text_length"] = len(original_text)
+
+    return json.dumps(result, indent=2)

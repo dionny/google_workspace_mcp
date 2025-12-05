@@ -9,10 +9,24 @@ from .table_operation_manager import TableOperationManager
 from .header_footer_manager import HeaderFooterManager
 from .validation_manager import ValidationManager
 from .batch_operation_manager import BatchOperationManager
+from .history_manager import (
+    HistoryManager,
+    OperationSnapshot,
+    UndoResult,
+    UndoCapability,
+    get_history_manager,
+    reset_history_manager,
+)
 
 __all__ = [
     'TableOperationManager',
-    'HeaderFooterManager', 
+    'HeaderFooterManager',
     'ValidationManager',
-    'BatchOperationManager'
+    'BatchOperationManager',
+    'HistoryManager',
+    'OperationSnapshot',
+    'UndoResult',
+    'UndoCapability',
+    'get_history_manager',
+    'reset_history_manager',
 ]
