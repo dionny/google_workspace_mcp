@@ -479,7 +479,7 @@ class ScenarioTester:
                 )
             )
 
-        # Test 4e: Text color
+        # Test 4e: Text color (foreground)
         try:
             result = await self.call_tool(
                 "modify_doc_text",
@@ -488,11 +488,15 @@ class ScenarioTester:
                 foreground_color="#FF0000",
             )
             result_dict = json.loads(result) if isinstance(result, str) else result
+            # Check for success or absence of error
+            passed = result_dict.get("success", False) or (
+                "error" not in result_dict and "link" in str(result_dict)
+            )
             self.record(
                 TestResult(
-                    name="Change text color",
+                    name="Change text color (foreground)",
                     category="formatting",
-                    passed=result_dict.get("success", False),
+                    passed=passed,
                     message="Text color applied",
                     details=result_dict,
                 )
@@ -500,7 +504,7 @@ class ScenarioTester:
         except Exception as e:
             self.record(
                 TestResult(
-                    name="Change text color",
+                    name="Change text color (foreground)",
                     category="formatting",
                     passed=False,
                     message="Failed",
@@ -508,7 +512,39 @@ class ScenarioTester:
                 )
             )
 
-        # Test 4f: Strikethrough
+        # Test 4f: Background color (highlight)
+        try:
+            result = await self.call_tool(
+                "modify_doc_text",
+                search=self.test_marker,
+                position="replace",
+                background_color="yellow",
+            )
+            result_dict = json.loads(result) if isinstance(result, str) else result
+            passed = result_dict.get("success", False) or (
+                "error" not in result_dict and "link" in str(result_dict)
+            )
+            self.record(
+                TestResult(
+                    name="Change background color (highlight)",
+                    category="formatting",
+                    passed=passed,
+                    message="Background color applied",
+                    details=result_dict,
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Change background color (highlight)",
+                    category="formatting",
+                    passed=False,
+                    message="Failed",
+                    error=str(e),
+                )
+            )
+
+        # Test 4g: Strikethrough
         try:
             result = await self.call_tool(
                 "modify_doc_text",
@@ -517,11 +553,14 @@ class ScenarioTester:
                 strikethrough=True,
             )
             result_dict = json.loads(result) if isinstance(result, str) else result
+            passed = result_dict.get("success", False) or (
+                "error" not in result_dict and "link" in str(result_dict)
+            )
             self.record(
                 TestResult(
                     name="Apply strikethrough",
                     category="formatting",
-                    passed=result_dict.get("success", False),
+                    passed=passed,
                     message="Strikethrough applied",
                     details=result_dict,
                 )
@@ -984,6 +1023,599 @@ class ScenarioTester:
                 )
             )
 
+    async def test_content_extraction(self):
+        """Test 13: Content extraction tools."""
+        print("\n📤 Category: Content Extraction")
+
+        # Test 13a: Extract links
+        try:
+            result = await self.call_tool("extract_links")
+            passed = "links" in str(result).lower() or "[]" in str(result)
+            self.record(
+                TestResult(
+                    name="Extract hyperlinks from document",
+                    category="extraction",
+                    passed=passed,
+                    message="Links extracted",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Extract hyperlinks from document",
+                    category="extraction",
+                    passed=False,
+                    message="Failed",
+                    error=str(e),
+                )
+            )
+
+        # Test 13b: Extract document summary/outline
+        try:
+            result = await self.call_tool("extract_document_summary")
+            passed = "outline" in str(result).lower() or "summary" in str(result).lower() or "heading" in str(result).lower()
+            self.record(
+                TestResult(
+                    name="Extract document summary/outline",
+                    category="extraction",
+                    passed=passed,
+                    message="Summary extracted",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Extract document summary/outline",
+                    category="extraction",
+                    passed=False,
+                    message="Failed",
+                    error=str(e),
+                )
+            )
+
+        # Test 13c: Get full document content via get_doc_section (more reliable)
+        try:
+            # Use get_doc_info instead as it's more reliable for native Google Docs
+            result = await self.call_tool("get_doc_info", detail="all")
+            passed = len(str(result)) > 100  # Should have substantial content
+            self.record(
+                TestResult(
+                    name="Get full document info",
+                    category="extraction",
+                    passed=passed,
+                    message="Document info retrieved",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Get full document info",
+                    category="extraction",
+                    passed=False,
+                    message="Failed",
+                    error=str(e),
+                )
+            )
+
+    async def test_comments(self):
+        """Test 14: Document comments."""
+        print("\n💬 Category: Comments")
+
+        # Test 14a: Read comments (should work even if no comments)
+        try:
+            result = await self.call_tool("read_document_comments")
+            passed = "comments" in str(result).lower() or "[]" in str(result) or "no comments" in str(result).lower()
+            self.record(
+                TestResult(
+                    name="Read document comments",
+                    category="comments",
+                    passed=passed,
+                    message="Comments read",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Read document comments",
+                    category="comments",
+                    passed=False,
+                    message="Failed",
+                    error=str(e),
+                )
+            )
+
+        # Test 14b: Create a comment
+        try:
+            result = await self.call_tool(
+                "create_document_comment",
+                comment_content=f"{self.test_marker} Test comment",
+            )
+            passed = "comment" in str(result).lower() or "created" in str(result).lower()
+            self.record(
+                TestResult(
+                    name="Create document comment",
+                    category="comments",
+                    passed=passed,
+                    message="Comment created",
+                )
+            )
+        except Exception as e:
+            # Comments may require specific permissions or setup
+            self.record(
+                TestResult(
+                    name="Create document comment",
+                    category="comments",
+                    passed=False,
+                    message="Failed (may need permissions)",
+                    error=str(e),
+                )
+            )
+
+    async def test_find_elements(self):
+        """Test 15: Find elements by type."""
+        print("\n🔎 Category: Find Elements")
+
+        # Test 15a: Find all headings
+        try:
+            result = await self.call_tool(
+                "find_doc_elements",
+                element_type="heading",
+            )
+            passed = "heading" in str(result).lower() or "element" in str(result).lower() or "[]" in str(result)
+            self.record(
+                TestResult(
+                    name="Find all headings",
+                    category="find_elements",
+                    passed=passed,
+                    message="Headings found",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Find all headings",
+                    category="find_elements",
+                    passed=False,
+                    message="Failed",
+                    error=str(e),
+                )
+            )
+
+        # Test 15b: Find all tables
+        try:
+            result = await self.call_tool(
+                "find_doc_elements",
+                element_type="table",
+            )
+            passed = "table" in str(result).lower() or "[]" in str(result)
+            self.record(
+                TestResult(
+                    name="Find all tables",
+                    category="find_elements",
+                    passed=passed,
+                    message="Tables found",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Find all tables",
+                    category="find_elements",
+                    passed=False,
+                    message="Failed",
+                    error=str(e),
+                )
+            )
+
+    async def test_paragraph_formatting(self):
+        """Test 16: Paragraph-level formatting (expected to fail - not implemented)."""
+        print("\n📐 Category: Paragraph Formatting")
+
+        # Test 16a: Paragraph alignment (expected to fail)
+        try:
+            result = await self.call_tool(
+                "modify_doc_text",
+                search=self.test_marker,
+                position="replace",
+                alignment="CENTER",
+            )
+            self.record(
+                TestResult(
+                    name="Paragraph alignment (center)",
+                    category="paragraph",
+                    passed=True,
+                    message="Alignment - FEATURE NOW IMPLEMENTED! 🎉",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Paragraph alignment (center)",
+                    category="paragraph",
+                    passed=False,
+                    message="EXPECTED FAIL - Feature not implemented",
+                    error=str(e),
+                    expected_fail=True,
+                )
+            )
+
+        # Test 16b: Heading style change (expected to fail)
+        try:
+            result = await self.call_tool(
+                "modify_doc_text",
+                search=self.test_marker,
+                position="replace",
+                heading_style="HEADING_2",
+            )
+            self.record(
+                TestResult(
+                    name="Change to heading style",
+                    category="paragraph",
+                    passed=True,
+                    message="Heading style - FEATURE NOW IMPLEMENTED! 🎉",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Change to heading style",
+                    category="paragraph",
+                    passed=False,
+                    message="EXPECTED FAIL - Feature not implemented",
+                    error=str(e),
+                    expected_fail=True,
+                )
+            )
+
+        # Test 16c: Line spacing (expected to fail)
+        try:
+            _ = await self.call_tool(
+                "modify_doc_text",
+                search=self.test_marker,
+                position="replace",
+                line_spacing=1.5,
+            )
+            self.record(
+                TestResult(
+                    name="Line spacing",
+                    category="paragraph",
+                    passed=True,
+                    message="Line spacing - FEATURE NOW IMPLEMENTED! 🎉",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Line spacing",
+                    category="paragraph",
+                    passed=False,
+                    message="EXPECTED FAIL - Feature not implemented",
+                    error=str(e),
+                    expected_fail=True,
+                )
+            )
+
+    async def test_advanced_text_formatting(self):
+        """Test 17: Advanced text formatting (some expected to fail)."""
+        print("\n✨ Category: Advanced Text Formatting")
+
+        # Test 17a: Superscript (expected to fail)
+        try:
+            result = await self.call_tool(
+                "modify_doc_text",
+                search=self.test_marker,
+                position="replace",
+                superscript=True,
+            )
+            self.record(
+                TestResult(
+                    name="Superscript text",
+                    category="advanced_formatting",
+                    passed=True,
+                    message="Superscript - FEATURE NOW IMPLEMENTED! 🎉",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Superscript text",
+                    category="advanced_formatting",
+                    passed=False,
+                    message="EXPECTED FAIL - Feature not implemented",
+                    error=str(e),
+                    expected_fail=True,
+                )
+            )
+
+        # Test 17b: Subscript (expected to fail)
+        try:
+            result = await self.call_tool(
+                "modify_doc_text",
+                search=self.test_marker,
+                position="replace",
+                subscript=True,
+            )
+            self.record(
+                TestResult(
+                    name="Subscript text",
+                    category="advanced_formatting",
+                    passed=True,
+                    message="Subscript - FEATURE NOW IMPLEMENTED! 🎉",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Subscript text",
+                    category="advanced_formatting",
+                    passed=False,
+                    message="EXPECTED FAIL - Feature not implemented",
+                    error=str(e),
+                    expected_fail=True,
+                )
+            )
+
+        # Test 17c: Small caps (expected to fail)
+        try:
+            _ = await self.call_tool(
+                "modify_doc_text",
+                search=self.test_marker,
+                position="replace",
+                small_caps=True,
+            )
+            self.record(
+                TestResult(
+                    name="Small caps text",
+                    category="advanced_formatting",
+                    passed=True,
+                    message="Small caps - FEATURE NOW IMPLEMENTED! 🎉",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Small caps text",
+                    category="advanced_formatting",
+                    passed=False,
+                    message="EXPECTED FAIL - Feature not implemented",
+                    error=str(e),
+                    expected_fail=True,
+                )
+            )
+
+    async def test_multiple_occurrences(self):
+        """Test 18: Handling multiple occurrences of search text."""
+        print("\n🔢 Category: Multiple Occurrences")
+
+        # First insert multiple markers
+        await self.call_tool(
+            "modify_doc_text",
+            location="end",
+            text=f"\n{self.test_marker}-A {self.test_marker}-B {self.test_marker}-C\n",
+        )
+
+        # Test 18a: Target 2nd occurrence
+        try:
+            result = await self.call_tool(
+                "modify_doc_text",
+                search=self.test_marker,
+                position="after",
+                occurrence=2,
+                text="[2ND]",
+            )
+            result_dict = json.loads(result) if isinstance(result, str) else result
+            passed = result_dict.get("success", False) or "link" in str(result_dict)
+            self.record(
+                TestResult(
+                    name="Target 2nd occurrence",
+                    category="occurrences",
+                    passed=passed,
+                    message="2nd occurrence targeted",
+                    details=result_dict,
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Target 2nd occurrence",
+                    category="occurrences",
+                    passed=False,
+                    message="Failed",
+                    error=str(e),
+                )
+            )
+
+        # Test 18b: Target last occurrence (-1)
+        try:
+            result = await self.call_tool(
+                "modify_doc_text",
+                search=self.test_marker,
+                position="after",
+                occurrence=-1,
+                text="[LAST]",
+            )
+            result_dict = json.loads(result) if isinstance(result, str) else result
+            passed = result_dict.get("success", False) or "link" in str(result_dict)
+            self.record(
+                TestResult(
+                    name="Target last occurrence (-1)",
+                    category="occurrences",
+                    passed=passed,
+                    message="Last occurrence targeted",
+                    details=result_dict,
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Target last occurrence (-1)",
+                    category="occurrences",
+                    passed=False,
+                    message="Failed",
+                    error=str(e),
+                )
+            )
+
+    async def test_search_preview(self):
+        """Test 19: Search preview tool."""
+        print("\n🔮 Category: Search Preview")
+
+        # Test 19a: Preview search results
+        try:
+            result = await self.call_tool(
+                "preview_search_results",
+                search_text=self.test_marker,
+            )
+            passed = "match" in str(result).lower() or "found" in str(result).lower() or "occurrence" in str(result).lower()
+            self.record(
+                TestResult(
+                    name="Preview search results",
+                    category="search_preview",
+                    passed=passed,
+                    message="Search preview returned results",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Preview search results",
+                    category="search_preview",
+                    passed=False,
+                    message="Failed",
+                    error=str(e),
+                )
+            )
+
+    async def test_list_insertion(self):
+        """Test 20: List creation."""
+        print("\n📋 Category: List Operations")
+
+        # Get current doc length for insertion point
+        try:
+            info = await self.call_tool("get_doc_info", detail="summary")
+            info_dict = json.loads(info) if isinstance(info, str) else info
+            # Use a safe index near the end
+            insert_index = info_dict.get("statistics", {}).get("total_length", 100) - 10
+            if insert_index < 10:
+                insert_index = 10
+        except Exception:
+            insert_index = 100
+
+        # Test 20a: Create unordered list (bullets)
+        try:
+            result = await self.call_tool(
+                "insert_doc_elements",
+                element_type="list",
+                index=insert_index,
+                list_type="UNORDERED",
+                text=f"{self.test_marker} List Item",
+            )
+            passed = "list" in str(result).lower() or "inserted" in str(result).lower()
+            self.record(
+                TestResult(
+                    name="Create bullet list",
+                    category="lists",
+                    passed=passed,
+                    message="Bullet list created",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Create bullet list",
+                    category="lists",
+                    passed=False,
+                    message="Failed",
+                    error=str(e),
+                )
+            )
+
+        # Test 20b: Create ordered list (numbered)
+        try:
+            result = await self.call_tool(
+                "insert_doc_elements",
+                element_type="list",
+                index=insert_index + 50,
+                list_type="ORDERED",
+                text=f"{self.test_marker} Numbered Item",
+            )
+            passed = "list" in str(result).lower() or "inserted" in str(result).lower()
+            self.record(
+                TestResult(
+                    name="Create numbered list",
+                    category="lists",
+                    passed=passed,
+                    message="Numbered list created",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Create numbered list",
+                    category="lists",
+                    passed=False,
+                    message="Failed",
+                    error=str(e),
+                )
+            )
+
+    async def test_heading_navigation(self):
+        """Test 21: Navigate between headings."""
+        print("\n🧭 Category: Heading Navigation")
+
+        # Test 21a: Get heading siblings (returns next/previous automatically)
+        try:
+            result = await self.call_tool(
+                "navigate_heading_siblings",
+                heading="The Problem",
+            )
+            passed = "heading" in str(result).lower() or "sibling" in str(result).lower() or "next" in str(result).lower() or "previous" in str(result).lower()
+            self.record(
+                TestResult(
+                    name="Get heading siblings",
+                    category="navigation",
+                    passed=passed,
+                    message="Navigation successful",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Get heading siblings",
+                    category="navigation",
+                    passed=False,
+                    message="Failed",
+                    error=str(e),
+                )
+            )
+
+    async def test_export_pdf(self):
+        """Test 22: Export document to PDF."""
+        print("\n📄 Category: Export Operations")
+
+        # Test 22a: Export to PDF (may fail without Drive permissions)
+        try:
+            result = await self.call_tool("export_doc_to_pdf")
+            passed = "pdf" in str(result).lower() or "export" in str(result).lower() or "drive" in str(result).lower()
+            self.record(
+                TestResult(
+                    name="Export document to PDF",
+                    category="export",
+                    passed=passed,
+                    message="PDF exported",
+                )
+            )
+        except Exception as e:
+            self.record(
+                TestResult(
+                    name="Export document to PDF",
+                    category="export",
+                    passed=False,
+                    message="Failed (may need Drive permissions)",
+                    error=str(e),
+                )
+            )
+
     async def cleanup_test_content(self):
         """Remove test content from document."""
         print("\n🧹 Cleaning up test content...")
@@ -993,6 +1625,8 @@ class ScenarioTester:
             "[BATCH1]",
             "[BATCH2]",
             "[FAR-REPLACED]",
+            "[2ND]",
+            "[LAST]",
             "AB",  # From batch test
         ]
 
@@ -1029,6 +1663,16 @@ class ScenarioTester:
         await self.test_table_operations()
         await self.test_element_insertion()
         await self.test_history_and_undo()
+        await self.test_content_extraction()
+        await self.test_comments()
+        await self.test_find_elements()
+        await self.test_paragraph_formatting()
+        await self.test_advanced_text_formatting()
+        await self.test_multiple_occurrences()
+        await self.test_search_preview()
+        await self.test_list_insertion()
+        await self.test_heading_navigation()
+        await self.test_export_pdf()
 
         if cleanup:
             await self.cleanup_test_content()

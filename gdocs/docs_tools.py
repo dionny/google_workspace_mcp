@@ -572,11 +572,14 @@ async def modify_doc_text(
         return structured_error
 
     # Validate that we have something to do
-    if text is None and not any([bold is not None, italic is not None, underline is not None, font_size, font_family, link is not None]):
+    if text is None and not any([
+        bold is not None, italic is not None, underline is not None, strikethrough is not None,
+        font_size, font_family, link is not None, foreground_color is not None, background_color is not None
+    ]):
         error = DocsErrorBuilder.missing_required_param(
             param_name="text or formatting",
             context_description="for document modification",
-            valid_values=["text", "bold", "italic", "underline", "font_size", "font_family", "link"]
+            valid_values=["text", "bold", "italic", "underline", "strikethrough", "font_size", "font_family", "link", "foreground_color", "background_color"]
         )
         return format_error(error)
 
@@ -825,7 +828,10 @@ async def modify_doc_text(
         formatting_params_list.append("background_color")
 
     if has_formatting:
-        is_valid, error_msg = validator.validate_text_formatting_params(bold, italic, underline, font_size, font_family, link)
+        is_valid, error_msg = validator.validate_text_formatting_params(
+            bold, italic, underline, strikethrough, font_size, font_family, link,
+            foreground_color, background_color
+        )
         if not is_valid:
             return validator.create_invalid_param_error(
                 param_name="formatting",

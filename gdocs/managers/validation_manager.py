@@ -125,9 +125,12 @@ class ValidationManager:
         bold: Optional[bool] = None,
         italic: Optional[bool] = None,
         underline: Optional[bool] = None,
+        strikethrough: Optional[bool] = None,
         font_size: Optional[int] = None,
         font_family: Optional[str] = None,
-        link: Optional[str] = None
+        link: Optional[str] = None,
+        foreground_color: Optional[str] = None,
+        background_color: Optional[str] = None,
     ) -> Tuple[bool, str]:
         """
         Validate text formatting parameters.
@@ -136,20 +139,23 @@ class ValidationManager:
             bold: Bold setting
             italic: Italic setting
             underline: Underline setting
+            strikethrough: Strikethrough setting
             font_size: Font size in points
             font_family: Font family name
             link: URL for hyperlink (empty string "" removes link)
+            foreground_color: Text color (hex or named)
+            background_color: Background/highlight color (hex or named)
 
         Returns:
             Tuple of (is_valid, error_message)
         """
         # Check if at least one formatting option is provided
-        formatting_params = [bold, italic, underline, font_size, font_family, link]
+        formatting_params = [bold, italic, underline, strikethrough, font_size, font_family, link, foreground_color, background_color]
         if all(param is None for param in formatting_params):
-            return False, "At least one formatting parameter must be provided (bold, italic, underline, font_size, font_family, or link)"
+            return False, "At least one formatting parameter must be provided (bold, italic, underline, strikethrough, font_size, font_family, link, foreground_color, or background_color)"
 
         # Validate boolean parameters
-        for param, name in [(bold, 'bold'), (italic, 'italic'), (underline, 'underline')]:
+        for param, name in [(bold, 'bold'), (italic, 'italic'), (underline, 'underline'), (strikethrough, 'strikethrough')]:
             if param is not None and not isinstance(param, bool):
                 return False, f"{name} parameter must be boolean (True/False), got {type(param).__name__}"
 
@@ -177,6 +183,14 @@ class ValidationManager:
             # Empty string is allowed (removes link), but non-empty must look like a URL
             if link and not (link.startswith('http://') or link.startswith('https://') or link.startswith('#')):
                 return False, f"link must be a valid URL starting with http://, https://, or # (for internal bookmarks), got '{link}'"
+
+        # Validate colors (basic validation - the actual parsing is done in build_text_style)
+        for color, name in [(foreground_color, 'foreground_color'), (background_color, 'background_color')]:
+            if color is not None:
+                if not isinstance(color, str):
+                    return False, f"{name} must be a string, got {type(color).__name__}"
+                if not color.strip():
+                    return False, f"{name} cannot be empty"
 
         return True, ""
     
