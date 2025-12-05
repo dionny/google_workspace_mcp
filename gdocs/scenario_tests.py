@@ -1568,10 +1568,16 @@ class ScenarioTester:
                 text=f"\n{self.test_marker} Convert Item 1\n{self.test_marker} Convert Item 2\n",
             )
             # Get current document length to figure out the range
-            result = await self.call_tool("get_doc_structure")
-            import json
-            struct = json.loads(result)
-            end_index = struct.get("total_length", 200) - 1
+            result = await self.call_tool("get_doc_info", detail="summary")
+            # Extract JSON from response (may have text prefix and suffix)
+            result_str = str(result)
+            json_start = result_str.find('{')
+            json_end = result_str.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                info = json.loads(result_str[json_start:json_end])
+            else:
+                info = {}
+            end_index = info.get("total_length", info.get("statistics", {}).get("total_length", 200)) - 1
             # Convert the last few lines to a bullet list
             result = await self.call_tool(
                 "modify_doc_text",
