@@ -49,6 +49,68 @@ class OperationResult:
         return {k: v for k, v in result.items() if v is not None}
 
 
+def interpret_escape_sequences(text: str) -> str:
+    """
+    Interpret common escape sequences in text.
+
+    Converts literal escape sequences (backslash followed by character) to their
+    actual character equivalents. This handles cases where MCP clients or JSON
+    encoding results in literal backslash-n instead of actual newlines.
+
+    Supported sequences:
+        \\n  -> newline
+        \\t  -> tab
+        \\r  -> carriage return
+        \\\\ -> single backslash
+
+    Args:
+        text: Input text that may contain literal escape sequences
+
+    Returns:
+        Text with escape sequences converted to actual characters
+
+    Example:
+        >>> interpret_escape_sequences("Hello\\nWorld")
+        'Hello\\nWorld'  # Actual newline character
+        >>> interpret_escape_sequences("Tab\\there")
+        'Tab\\there'  # Actual tab character
+    """
+    if text is None:
+        return None
+
+    # Only process if there are potential escape sequences (contains backslash)
+    if '\\' not in text:
+        return text
+
+    # Use a simple state machine to properly handle escape sequences
+    result = []
+    i = 0
+    while i < len(text):
+        if text[i] == '\\' and i + 1 < len(text):
+            next_char = text[i + 1]
+            if next_char == 'n':
+                result.append('\n')
+                i += 2
+            elif next_char == 't':
+                result.append('\t')
+                i += 2
+            elif next_char == 'r':
+                result.append('\r')
+                i += 2
+            elif next_char == '\\':
+                result.append('\\')
+                i += 2
+            else:
+                # Unknown escape sequence - keep as-is
+                result.append(text[i])
+                i += 1
+        else:
+            result.append(text[i])
+            i += 1
+
+    return ''.join(result)
+
+
 def calculate_position_shift(
     operation_type: OperationType,
     start_index: int,
@@ -337,6 +399,27 @@ def extract_text_at_range(
             result["context_after"] = full_text[text_start_pos:context_end]
 
     return result
+
+
+def get_character_at_index(doc_data: Dict[str, Any], index: int) -> Optional[str]:
+    """
+    Get the character at a specific document index.
+
+    Args:
+        doc_data: Raw document data from Google Docs API
+        index: The document index to check
+
+    Returns:
+        The character at the index, or None if index is out of bounds
+    """
+    text_segments = extract_document_text_with_indices(doc_data)
+
+    for segment_text, start_idx, end_idx in text_segments:
+        if start_idx <= index < end_idx:
+            char_offset = index - start_idx
+            return segment_text[char_offset]
+
+    return None
 
 
 def find_text_in_document(
@@ -767,6 +850,72 @@ def create_format_text_request(
         }
     }
 
+
+def create_clear_formatting_request(
+    start_index: int,
+    end_index: int,
+    preserve_links: bool = False,
+) -> Dict[str, Any]:
+    """
+    Create an updateTextStyle request that clears all text formatting, resetting to defaults.
+
+    This sets all character formatting properties to their neutral/default values:
+    - bold, italic, underline, strikethrough, smallCaps: False
+    - baselineOffset: NONE (removes subscript/superscript)
+    - foregroundColor: None (inherits from paragraph style - typically black)
+    - backgroundColor: None (transparent)
+    - link: None (removes hyperlinks, unless preserve_links=True)
+
+    Note: This does NOT reset font_size or font_family as those typically inherit
+    from paragraph/document styles and there's no universal "default" value.
+
+    Args:
+        start_index: Start position of text to clear formatting from
+        end_index: End position of text to clear formatting from
+        preserve_links: If True, hyperlinks will not be removed (default: False)
+
+    Returns:
+        Dictionary representing the updateTextStyle request
+    """
+    text_style = {
+        'bold': False,
+        'italic': False,
+        'underline': False,
+        'strikethrough': False,
+        'smallCaps': False,
+        'baselineOffset': 'NONE',
+        # Setting colors to empty removes them (text will inherit from paragraph style)
+        'foregroundColor': {},
+        'backgroundColor': {},
+    }
+
+    fields = [
+        'bold',
+        'italic',
+        'underline',
+        'strikethrough',
+        'smallCaps',
+        'baselineOffset',
+        'foregroundColor',
+        'backgroundColor',
+    ]
+
+    if not preserve_links:
+        text_style['link'] = None
+        fields.append('link')
+
+    return {
+        'updateTextStyle': {
+            'range': {
+                'startIndex': start_index,
+                'endIndex': end_index
+            },
+            'textStyle': text_style,
+            'fields': ','.join(fields)
+        }
+    }
+
+
 def create_find_replace_request(
     find_text: str, 
     replace_text: str, 
@@ -816,10 +965,10 @@ def create_insert_table_request(index: int, rows: int, columns: int) -> Dict[str
 def create_insert_page_break_request(index: int) -> Dict[str, Any]:
     """
     Create an insertPageBreak request for Google Docs API.
-    
+
     Args:
         index: Position to insert page break
-    
+
     Returns:
         Dictionary representing the insertPageBreak request
     """
@@ -828,6 +977,65 @@ def create_insert_page_break_request(index: int) -> Dict[str, Any]:
             'location': {'index': index}
         }
     }
+
+
+def create_insert_horizontal_rule_requests(index: int) -> List[Dict[str, Any]]:
+    """
+    Create requests to insert a horizontal rule in Google Docs.
+
+    NOTE: The Google Docs API does not have a native insertHorizontalRule request.
+    This function uses a table-based workaround: insert a 1x1 table and style its
+    top border to appear as a horizontal line, hiding all other borders.
+
+    Args:
+        index: Position to insert horizontal rule
+
+    Returns:
+        List of request dictionaries (insertTable + updateTableCellStyle)
+    """
+    # Define invisible border style
+    invisible_border = {
+        'color': {'color': {'rgbColor': {'red': 1, 'green': 1, 'blue': 1}}},
+        'width': {'magnitude': 0, 'unit': 'PT'},
+        'dashStyle': 'SOLID'
+    }
+
+    # Define visible top border style (the horizontal line)
+    visible_border = {
+        'color': {'color': {'rgbColor': {'red': 0, 'green': 0, 'blue': 0}}},
+        'width': {'magnitude': 1, 'unit': 'PT'},
+        'dashStyle': 'SOLID'
+    }
+
+    return [
+        # First request: Insert a 1x1 table
+        {
+            'insertTable': {
+                'location': {'index': index},
+                'rows': 1,
+                'columns': 1
+            }
+        },
+        # Second request: Style the table cell to look like a horizontal rule
+        # Hide bottom, left, right borders and show only top border
+        {
+            'updateTableCellStyle': {
+                'tableCellStyle': {
+                    'borderTop': visible_border,
+                    'borderBottom': invisible_border,
+                    'borderLeft': invisible_border,
+                    'borderRight': invisible_border,
+                    'paddingTop': {'magnitude': 0, 'unit': 'PT'},
+                    'paddingBottom': {'magnitude': 0, 'unit': 'PT'},
+                    'paddingLeft': {'magnitude': 0, 'unit': 'PT'},
+                    'paddingRight': {'magnitude': 0, 'unit': 'PT'},
+                },
+                'tableStartLocation': {'index': index + 1},
+                'fields': 'borderTop,borderBottom,borderLeft,borderRight,paddingTop,paddingBottom,paddingLeft,paddingRight'
+            }
+        }
+    ]
+
 
 def create_insert_image_request(
     index: int, 
@@ -1819,4 +2027,155 @@ def validate_operation(operation: Dict[str, Any]) -> Tuple[bool, str]:
             return False, f"Missing required field: {field}"
     
     return True, ""
+
+
+# =============================================================================
+# Table Modification Requests
+# =============================================================================
+
+
+def create_insert_table_row_request(
+    table_start_index: int,
+    row_index: int,
+    insert_below: bool = True,
+    column_index: int = 0
+) -> Dict[str, Any]:
+    """
+    Create an insertTableRow request for Google Docs API.
+
+    Args:
+        table_start_index: Start index of the table in the document
+        row_index: Row index to insert relative to (0-based)
+        insert_below: If True, insert below the specified row; if False, insert above
+        column_index: Column index for the cell reference (default 0)
+
+    Returns:
+        Dictionary representing the insertTableRow request
+    """
+    return {
+        'insertTableRow': {
+            'tableCellLocation': {
+                'tableStartLocation': {
+                    'index': table_start_index
+                },
+                'rowIndex': row_index,
+                'columnIndex': column_index
+            },
+            'insertBelow': insert_below
+        }
+    }
+
+
+def create_delete_table_row_request(
+    table_start_index: int,
+    row_index: int,
+    column_index: int = 0
+) -> Dict[str, Any]:
+    """
+    Create a deleteTableRow request for Google Docs API.
+
+    Args:
+        table_start_index: Start index of the table in the document
+        row_index: Row index to delete (0-based)
+        column_index: Column index for the cell reference (default 0)
+
+    Returns:
+        Dictionary representing the deleteTableRow request
+    """
+    return {
+        'deleteTableRow': {
+            'tableCellLocation': {
+                'tableStartLocation': {
+                    'index': table_start_index
+                },
+                'rowIndex': row_index,
+                'columnIndex': column_index
+            }
+        }
+    }
+
+
+def create_insert_table_column_request(
+    table_start_index: int,
+    row_index: int,
+    column_index: int,
+    insert_right: bool = True
+) -> Dict[str, Any]:
+    """
+    Create an insertTableColumn request for Google Docs API.
+
+    Args:
+        table_start_index: Start index of the table in the document
+        row_index: Row index for the cell reference (default 0)
+        column_index: Column index to insert relative to (0-based)
+        insert_right: If True, insert to the right; if False, insert to the left
+
+    Returns:
+        Dictionary representing the insertTableColumn request
+    """
+    return {
+        'insertTableColumn': {
+            'tableCellLocation': {
+                'tableStartLocation': {
+                    'index': table_start_index
+                },
+                'rowIndex': row_index,
+                'columnIndex': column_index
+            },
+            'insertRight': insert_right
+        }
+    }
+
+
+def create_delete_table_column_request(
+    table_start_index: int,
+    row_index: int,
+    column_index: int
+) -> Dict[str, Any]:
+    """
+    Create a deleteTableColumn request for Google Docs API.
+
+    Args:
+        table_start_index: Start index of the table in the document
+        row_index: Row index for the cell reference (default 0)
+        column_index: Column index to delete (0-based)
+
+    Returns:
+        Dictionary representing the deleteTableColumn request
+    """
+    return {
+        'deleteTableColumn': {
+            'tableCellLocation': {
+                'tableStartLocation': {
+                    'index': table_start_index
+                },
+                'rowIndex': row_index,
+                'columnIndex': column_index
+            }
+        }
+    }
+
+
+def create_insert_section_break_request(
+    index: int,
+    section_type: str = "NEXT_PAGE"
+) -> Dict[str, Any]:
+    """
+    Create an insertSectionBreak request for Google Docs API.
+
+    Args:
+        index: Position to insert section break
+        section_type: Type of section break. Valid values:
+            - "NEXT_PAGE": Section starts on next page (default)
+            - "CONTINUOUS": Section starts immediately after previous section
+
+    Returns:
+        Dictionary representing the insertSectionBreak request
+    """
+    return {
+        'insertSectionBreak': {
+            'location': {'index': index},
+            'sectionType': section_type
+        }
+    }
 
