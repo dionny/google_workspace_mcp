@@ -6,13 +6,15 @@ These tests verify:
 - Position auto-adjustment for sequential operations
 - Per-operation result tracking
 - Request building from resolved operations
+- Recent insert preference for format operations
 """
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
 from gdocs.managers.batch_operation_manager import (
     BatchOperationManager,
     BatchOperationResult,
     BatchExecutionResult,
+    VirtualTextTracker,
 )
 
 
@@ -636,6 +638,72 @@ class TestBatchOperationManagerIntegration:
         assert result.success is False
         assert "Batch execution failed" in result.message
 
+    @pytest.mark.asyncio
+    async def test_execute_batch_invalid_operation_type_rejected(self, mock_service):
+        """Test that invalid operation types are rejected with clear error message."""
+        manager = BatchOperationManager(mock_service)
+
+        # Try an invalid operation type
+        operations = [
+            {"type": "fake_op", "text": "bad"},
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+        )
+
+        assert result.success is False
+        assert result.operations_completed == 0
+        assert len(result.results) == 1
+        assert result.results[0].success is False
+        assert "Unsupported operation type: 'fake_op'" in result.results[0].error
+        assert "Valid types:" in result.results[0].error
+
+    @pytest.mark.asyncio
+    async def test_execute_batch_missing_type_field_rejected(self, mock_service):
+        """Test that operations missing the type field are rejected."""
+        manager = BatchOperationManager(mock_service)
+
+        # Try an operation without a type field
+        operations = [
+            {"index": 100, "text": "no type field"},
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+        )
+
+        assert result.success is False
+        assert result.operations_completed == 0
+        assert len(result.results) == 1
+        assert result.results[0].success is False
+        assert "Missing 'type' field" in result.results[0].error
+
+    @pytest.mark.asyncio
+    async def test_execute_batch_mixed_valid_invalid_types(self, mock_service):
+        """Test that a batch with mix of valid and invalid types fails on invalid ones."""
+        manager = BatchOperationManager(mock_service)
+
+        # First operation is valid, second is invalid
+        operations = [
+            {"type": "insert_text", "index": 1, "text": "valid"},
+            {"type": "completely_fake_op", "text": "invalid"},
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+        )
+
+        # The batch should fail because of the invalid operation
+        assert result.success is False
+        assert len(result.results) == 2
+        # First operation resolved OK (marked success initially, but batch failed)
+        assert result.results[1].success is False
+        assert "Unsupported operation type: 'completely_fake_op'" in result.results[1].error
+
 
 class TestOperationAliasNormalization:
     """Tests for operation type alias normalization."""
@@ -759,3 +827,1566 @@ class TestOperationAliasNormalization:
 
         assert success is True
         assert metadata['operations_count'] == 2
+
+
+class TestBatchAllOccurrences:
+    """Tests for all_occurrences expansion in batch operations."""
+
+    @pytest.fixture
+    def mock_service_with_multiple_matches(self):
+        """Create a mock service with a document containing multiple matches."""
+        service = MagicMock()
+        # Document: "TODO: First task. TODO: Second task. TODO: Third task."
+        # Positions: TODO at indices 1, 19, 38 (1-indexed for Google Docs)
+        service.documents.return_value.get.return_value.execute = MagicMock(
+            return_value={
+                "body": {
+                    "content": [
+                        {
+                            "paragraph": {
+                                "elements": [
+                                    {
+                                        "textRun": {
+                                            "content": "TODO: First task. TODO: Second task. TODO: Third task.\n",
+                                        },
+                                        "startIndex": 1,
+                                        "endIndex": 56,
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        )
+        service.documents.return_value.batchUpdate.return_value.execute = MagicMock(
+            return_value={"replies": [{}]}
+        )
+        return service
+
+    def test_expand_all_occurrences_format(self, mock_service_with_multiple_matches):
+        """Test that format operations with all_occurrences expands to multiple operations."""
+        manager = BatchOperationManager(mock_service_with_multiple_matches)
+
+        doc_data = {
+            "body": {
+                "content": [
+                    {
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "textRun": {
+                                        "content": "TODO: First task. TODO: Second task. TODO: Third task.\n",
+                                    },
+                                    "startIndex": 1,
+                                    "endIndex": 56,
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+
+        operations = [
+            {
+                "type": "format",
+                "search": "TODO",
+                "all_occurrences": True,
+                "bold": True,
+            }
+        ]
+
+        expanded = manager._expand_all_occurrences_operations(operations, doc_data)
+
+        # Should expand to 3 operations (one for each TODO)
+        assert len(expanded) == 3
+
+        # Each should be format_text with start_index/end_index
+        for op in expanded:
+            assert op["type"] == "format_text"
+            assert "start_index" in op
+            assert "end_index" in op
+            assert op["bold"] is True
+            assert "search" not in op
+            assert "all_occurrences" not in op
+
+    def test_expand_all_occurrences_preserves_order_reversed(self, mock_service_with_multiple_matches):
+        """Test that expanded operations are in reverse document order (for correct index handling)."""
+        manager = BatchOperationManager(mock_service_with_multiple_matches)
+
+        doc_data = {
+            "body": {
+                "content": [
+                    {
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "textRun": {
+                                        "content": "TODO: First task. TODO: Second task. TODO: Third task.\n",
+                                    },
+                                    "startIndex": 1,
+                                    "endIndex": 56,
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+
+        operations = [
+            {
+                "type": "format",
+                "search": "TODO",
+                "all_occurrences": True,
+                "bold": True,
+            }
+        ]
+
+        expanded = manager._expand_all_occurrences_operations(operations, doc_data)
+
+        # Operations should be in reverse order (last occurrence first)
+        # so that editing from end to start doesn't invalidate indices
+        indices = [op["start_index"] for op in expanded]
+        assert indices == sorted(indices, reverse=True)
+
+    def test_expand_all_occurrences_replace(self, mock_service_with_multiple_matches):
+        """Test that replace operations with all_occurrences expands correctly."""
+        manager = BatchOperationManager(mock_service_with_multiple_matches)
+
+        doc_data = {
+            "body": {
+                "content": [
+                    {
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "textRun": {
+                                        "content": "TODO: First task. TODO: Second task. TODO: Third task.\n",
+                                    },
+                                    "startIndex": 1,
+                                    "endIndex": 56,
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+
+        operations = [
+            {
+                "type": "replace",
+                "search": "TODO",
+                "all_occurrences": True,
+                "text": "DONE",
+            }
+        ]
+
+        expanded = manager._expand_all_occurrences_operations(operations, doc_data)
+
+        assert len(expanded) == 3
+        for op in expanded:
+            assert op["type"] == "replace_text"
+            assert op["text"] == "DONE"
+
+    def test_expand_all_occurrences_no_matches(self, mock_service_with_multiple_matches):
+        """Test that all_occurrences with no matches keeps original operation (for error reporting)."""
+        manager = BatchOperationManager(mock_service_with_multiple_matches)
+
+        doc_data = {
+            "body": {
+                "content": [
+                    {
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "textRun": {
+                                        "content": "No matches here.\n",
+                                    },
+                                    "startIndex": 1,
+                                    "endIndex": 18,
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+
+        operations = [
+            {
+                "type": "format",
+                "search": "NONEXISTENT",
+                "all_occurrences": True,
+                "bold": True,
+            }
+        ]
+
+        expanded = manager._expand_all_occurrences_operations(operations, doc_data)
+
+        # Should keep original operation (which will fail with useful error later)
+        assert len(expanded) == 1
+        assert expanded[0]["search"] == "NONEXISTENT"
+
+    def test_expand_preserves_non_all_occurrences_operations(self, mock_service_with_multiple_matches):
+        """Test that operations without all_occurrences are not expanded."""
+        manager = BatchOperationManager(mock_service_with_multiple_matches)
+
+        doc_data = {
+            "body": {
+                "content": [
+                    {
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "textRun": {
+                                        "content": "TODO: First task. TODO: Second task.\n",
+                                    },
+                                    "startIndex": 1,
+                                    "endIndex": 38,
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+
+        operations = [
+            {"type": "insert_text", "index": 1, "text": "PREFIX "},
+            {
+                "type": "format",
+                "search": "TODO",
+                "position": "replace",  # Single occurrence
+                "bold": True,
+            },
+        ]
+
+        expanded = manager._expand_all_occurrences_operations(operations, doc_data)
+
+        # Neither should be expanded
+        assert len(expanded) == 2
+        assert expanded[0]["type"] == "insert_text"
+        assert expanded[1]["search"] == "TODO"
+
+    @pytest.mark.asyncio
+    async def test_execute_batch_with_all_occurrences(self, mock_service_with_multiple_matches):
+        """Test full batch execution with all_occurrences operations."""
+        manager = BatchOperationManager(mock_service_with_multiple_matches)
+
+        operations = [
+            {
+                "type": "format",
+                "search": "TODO",
+                "all_occurrences": True,
+                "bold": True,
+            }
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is True
+        # Original operation count is 1
+        assert result.total_operations == 1
+        # But 3 operations were executed (one per TODO)
+        assert result.operations_completed == 3
+        # Results should have 3 entries
+        assert len(result.results) == 3
+        # Message should mention expansion
+        assert "all_occurrences" in result.message
+
+    @pytest.mark.asyncio
+    async def test_execute_batch_mixed_all_occurrences_and_regular(self, mock_service_with_multiple_matches):
+        """Test batch with both all_occurrences and regular operations."""
+        manager = BatchOperationManager(mock_service_with_multiple_matches)
+
+        operations = [
+            {"type": "insert_text", "index": 1, "text": "PREFIX: "},
+            {
+                "type": "format",
+                "search": "TODO",
+                "all_occurrences": True,
+                "bold": True,
+            },
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is True
+        assert result.total_operations == 2  # Original count
+        assert result.operations_completed == 4  # 1 insert + 3 formats
+
+    def test_expand_all_occurrences_delete(self, mock_service_with_multiple_matches):
+        """Test that delete operations with all_occurrences expands correctly."""
+        manager = BatchOperationManager(mock_service_with_multiple_matches)
+
+        doc_data = {
+            "body": {
+                "content": [
+                    {
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "textRun": {
+                                        "content": "TODO: First task. TODO: Second task.\n",
+                                    },
+                                    "startIndex": 1,
+                                    "endIndex": 38,
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+
+        operations = [
+            {
+                "type": "delete",
+                "search": "TODO",
+                "all_occurrences": True,
+            }
+        ]
+
+        expanded = manager._expand_all_occurrences_operations(operations, doc_data)
+
+        assert len(expanded) == 2
+        for op in expanded:
+            assert op["type"] == "delete_text"
+            assert "start_index" in op
+            assert "end_index" in op
+
+
+class TestBatchPreviewMode:
+    """Tests for preview mode in batch operations."""
+
+    @pytest.mark.asyncio
+    async def test_preview_mode_returns_preview_fields(self):
+        """Test that preview mode returns preview-specific fields."""
+        mock_service = MagicMock()
+        mock_service.documents().get().execute = MagicMock(
+            return_value={
+                "body": {
+                    "content": [
+                        {
+                            "paragraph": {
+                                "elements": [
+                                    {
+                                        "textRun": {"content": "Hello World\n"},
+                                        "startIndex": 1,
+                                        "endIndex": 13,
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        )
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {"type": "insert_text", "index": 1, "text": "New text "},
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "doc123", operations, preview_only=True
+        )
+
+        assert result.success is True
+        assert result.preview is True
+        assert result.would_modify is True
+        assert result.operations_completed == 0  # Nothing actually executed
+        assert result.total_operations == 1
+        assert len(result.results) == 1
+        assert "Would execute" in result.message
+
+    @pytest.mark.asyncio
+    async def test_preview_mode_does_not_execute(self):
+        """Test that preview mode does not call the API to execute operations."""
+        mock_service = MagicMock()
+        mock_documents = MagicMock()
+        mock_service.documents.return_value = mock_documents
+        mock_documents.get.return_value.execute.return_value = {
+            "body": {
+                "content": [
+                    {
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "textRun": {"content": "Hello World\n"},
+                                    "startIndex": 1,
+                                    "endIndex": 13,
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+        mock_documents.batchUpdate.return_value.execute.return_value = {"replies": []}
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {"type": "insert_text", "index": 1, "text": "New text "},
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "doc123", operations, preview_only=True
+        )
+
+        # Verify batchUpdate was NOT called
+        mock_documents.batchUpdate.assert_not_called()
+        assert result.success is True
+        assert result.preview is True
+
+    @pytest.mark.asyncio
+    async def test_preview_mode_calculates_position_shifts(self):
+        """Test that preview mode correctly calculates cumulative position shifts."""
+        mock_service = MagicMock()
+        mock_service.documents().get().execute = MagicMock(
+            return_value={
+                "body": {
+                    "content": [
+                        {
+                            "paragraph": {
+                                "elements": [
+                                    {
+                                        "textRun": {"content": "Hello World\n"},
+                                        "startIndex": 1,
+                                        "endIndex": 13,
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        )
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {"type": "insert_text", "index": 1, "text": "AAAA"},  # +4
+            {"type": "insert_text", "index": 10, "text": "BBBBB"},  # +5
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "doc123", operations, preview_only=True
+        )
+
+        assert result.total_position_shift == 9  # 4 + 5
+        assert result.results[0].position_shift == 4
+        assert result.results[1].position_shift == 5
+
+    @pytest.mark.asyncio
+    async def test_preview_mode_with_search_based_operations(self):
+        """Test preview mode with search-based positioning."""
+        mock_service = MagicMock()
+        mock_service.documents().get().execute = MagicMock(
+            return_value={
+                "body": {
+                    "content": [
+                        {
+                            "paragraph": {
+                                "elements": [
+                                    {
+                                        "textRun": {"content": "Find this text\n"},
+                                        "startIndex": 1,
+                                        "endIndex": 16,
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        )
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {
+                "type": "insert",
+                "search": "this",
+                "position": "before",
+                "text": "NEW ",
+            }
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "doc123", operations, preview_only=True
+        )
+
+        assert result.success is True
+        assert result.preview is True
+        assert result.would_modify is True
+        assert result.results[0].resolved_index is not None
+
+    @pytest.mark.asyncio
+    async def test_preview_mode_search_not_found_returns_failure(self):
+        """Test that preview mode returns failure when search text not found."""
+        mock_service = MagicMock()
+        mock_service.documents().get().execute = MagicMock(
+            return_value={
+                "body": {
+                    "content": [
+                        {
+                            "paragraph": {
+                                "elements": [
+                                    {
+                                        "textRun": {"content": "Hello World\n"},
+                                        "startIndex": 1,
+                                        "endIndex": 13,
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        )
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {
+                "type": "insert",
+                "search": "NOT FOUND TEXT",
+                "position": "before",
+                "text": "NEW ",
+            }
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "doc123", operations, preview_only=True
+        )
+
+        assert result.success is False
+        assert result.preview is True
+        assert "Failed to resolve" in result.message
+
+    @pytest.mark.asyncio
+    async def test_preview_mode_with_all_occurrences(self):
+        """Test preview mode with all_occurrences operations."""
+        mock_service = MagicMock()
+        mock_service.documents().get().execute = MagicMock(
+            return_value={
+                "body": {
+                    "content": [
+                        {
+                            "paragraph": {
+                                "elements": [
+                                    {
+                                        "textRun": {
+                                            "content": "TODO: First. TODO: Second.\n"
+                                        },
+                                        "startIndex": 1,
+                                        "endIndex": 28,
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        )
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {
+                "type": "format",
+                "search": "TODO",
+                "all_occurrences": True,
+                "bold": True,
+            }
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "doc123", operations, preview_only=True
+        )
+
+        assert result.success is True
+        assert result.preview is True
+        # Should have 2 operations after expansion (one for each TODO)
+        assert len(result.results) == 2
+        assert "all_occurrences expansion" in result.message
+
+    def test_to_dict_includes_preview_fields_when_preview_true(self):
+        """Test that to_dict includes preview fields when in preview mode."""
+        result = BatchExecutionResult(
+            success=True,
+            operations_completed=0,
+            total_operations=1,
+            results=[],
+            total_position_shift=5,
+            message="Would execute",
+            document_link="https://docs.google.com/document/d/123/edit",
+            preview=True,
+            would_modify=True,
+        )
+        result_dict = result.to_dict()
+
+        assert result_dict["preview"] is True
+        assert result_dict["would_modify"] is True
+
+    def test_to_dict_excludes_preview_fields_when_not_preview(self):
+        """Test that to_dict excludes preview fields when not in preview mode."""
+        result = BatchExecutionResult(
+            success=True,
+            operations_completed=1,
+            total_operations=1,
+            results=[],
+            total_position_shift=5,
+            message="Success",
+            document_link="https://docs.google.com/document/d/123/edit",
+            preview=False,
+            would_modify=False,
+        )
+        result_dict = result.to_dict()
+
+        assert "preview" not in result_dict
+        assert "would_modify" not in result_dict
+
+
+class TestVirtualTextTracker:
+    """Tests for VirtualTextTracker class that supports chained search operations."""
+
+    def _make_doc_data(self, text: str, start_index: int = 1) -> dict:
+        """Create a mock document data structure with the given text."""
+        return {
+            "body": {
+                "content": [
+                    {
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "textRun": {
+                                        "content": text,
+                                    },
+                                    "startIndex": start_index,
+                                    "endIndex": start_index + len(text),
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+
+    def test_init_extracts_text(self):
+        """Test that tracker initializes correctly from document data."""
+        from gdocs.managers.batch_operation_manager import VirtualTextTracker
+
+        doc_data = self._make_doc_data("Hello World")
+        tracker = VirtualTextTracker(doc_data)
+
+        assert tracker.text == "Hello World"
+        assert len(tracker.index_map) == 11
+
+    def test_search_text_finds_existing(self):
+        """Test searching for text that exists in document."""
+        from gdocs.managers.batch_operation_manager import VirtualTextTracker
+
+        doc_data = self._make_doc_data("Hello World")
+        tracker = VirtualTextTracker(doc_data)
+
+        success, start, end, msg = tracker.search_text("World", "replace")
+        assert success is True
+        assert start == 7  # 1-based index: "World" starts at index 7
+        assert end == 12   # End is exclusive
+
+    def test_search_text_not_found(self):
+        """Test searching for text that doesn't exist."""
+        from gdocs.managers.batch_operation_manager import VirtualTextTracker
+
+        doc_data = self._make_doc_data("Hello World")
+        tracker = VirtualTextTracker(doc_data)
+
+        success, start, end, msg = tracker.search_text("Goodbye", "replace")
+        assert success is False
+        assert "not found" in msg
+
+    def test_search_text_before_position(self):
+        """Test search with 'before' position."""
+        from gdocs.managers.batch_operation_manager import VirtualTextTracker
+
+        doc_data = self._make_doc_data("Hello World")
+        tracker = VirtualTextTracker(doc_data)
+
+        success, start, end, msg = tracker.search_text("World", "before")
+        assert success is True
+        assert start == 7
+        assert end == 7  # Insert point is before "World"
+
+    def test_search_text_after_position(self):
+        """Test search with 'after' position."""
+        from gdocs.managers.batch_operation_manager import VirtualTextTracker
+
+        doc_data = self._make_doc_data("Hello World")
+        tracker = VirtualTextTracker(doc_data)
+
+        success, start, end, msg = tracker.search_text("Hello", "after")
+        assert success is True
+        assert start == 6  # Insert point is after "Hello" (index 6)
+        assert end == 6
+
+    def test_search_text_case_insensitive(self):
+        """Test case-insensitive search."""
+        from gdocs.managers.batch_operation_manager import VirtualTextTracker
+
+        doc_data = self._make_doc_data("Hello World")
+        tracker = VirtualTextTracker(doc_data)
+
+        success, start, end, msg = tracker.search_text("hello", "replace", match_case=False)
+        assert success is True
+        assert start == 1
+
+    def test_apply_insert_updates_virtual_text(self):
+        """Test that applying an insert updates the virtual text."""
+        from gdocs.managers.batch_operation_manager import VirtualTextTracker
+
+        doc_data = self._make_doc_data("Hello World")
+        tracker = VirtualTextTracker(doc_data)
+
+        # Insert "[NEW]" after "Hello"
+        tracker.apply_operation({
+            "type": "insert_text",
+            "index": 6,  # After "Hello"
+            "text": "[NEW]"
+        })
+
+        assert "[NEW]" in tracker.text
+        assert tracker.text == "Hello[NEW] World"
+
+    def test_apply_delete_updates_virtual_text(self):
+        """Test that applying a delete updates the virtual text."""
+        from gdocs.managers.batch_operation_manager import VirtualTextTracker
+
+        doc_data = self._make_doc_data("Hello World")
+        tracker = VirtualTextTracker(doc_data)
+
+        # Delete "Hello "
+        tracker.apply_operation({
+            "type": "delete_text",
+            "start_index": 1,
+            "end_index": 7
+        })
+
+        assert tracker.text == "World"
+
+    def test_apply_replace_updates_virtual_text(self):
+        """Test that applying a replace updates the virtual text."""
+        from gdocs.managers.batch_operation_manager import VirtualTextTracker
+
+        doc_data = self._make_doc_data("Hello World")
+        tracker = VirtualTextTracker(doc_data)
+
+        # Replace "World" with "Universe"
+        tracker.apply_operation({
+            "type": "replace_text",
+            "start_index": 7,
+            "end_index": 12,
+            "text": "Universe"
+        })
+
+        assert tracker.text == "Hello Universe"
+
+    def test_chained_inserts_are_searchable(self):
+        """Test the key feature: text inserted by one operation can be searched by the next."""
+        from gdocs.managers.batch_operation_manager import VirtualTextTracker
+
+        doc_data = self._make_doc_data("[MARKER]")
+        tracker = VirtualTextTracker(doc_data)
+
+        # First: insert [OP1] after [MARKER]
+        tracker.apply_operation({
+            "type": "insert_text",
+            "index": 9,  # After [MARKER]
+            "text": "[OP1]"
+        })
+
+        # Now search for [OP1] - should find it in the virtual text
+        success, start, end, msg = tracker.search_text("[OP1]", "after")
+        assert success is True, f"Failed to find [OP1]: {msg}"
+
+        # Apply second insert after [OP1]
+        tracker.apply_operation({
+            "type": "insert_text",
+            "index": end,
+            "text": "[OP2]"
+        })
+
+        # Should also be able to find [OP2]
+        success2, start2, end2, msg2 = tracker.search_text("[OP2]", "replace")
+        assert success2 is True, f"Failed to find [OP2]: {msg2}"
+
+    def test_multiple_occurrences(self):
+        """Test finding specific occurrences of repeated text."""
+        from gdocs.managers.batch_operation_manager import VirtualTextTracker
+
+        doc_data = self._make_doc_data("apple banana apple cherry apple")
+        tracker = VirtualTextTracker(doc_data)
+
+        # First occurrence
+        success, start, end, msg = tracker.search_text("apple", "replace", occurrence=1)
+        assert success is True
+        assert start == 1
+
+        # Second occurrence
+        success, start, end, msg = tracker.search_text("apple", "replace", occurrence=2)
+        assert success is True
+        assert start == 14  # After "apple banana " (1-based: 1 + len("apple banana "))
+
+        # Last occurrence (occurrence=-1)
+        success, start, end, msg = tracker.search_text("apple", "replace", occurrence=-1)
+        assert success is True
+        assert start == 27  # Last "apple" (1 + len("apple banana apple cherry "))
+
+    def test_occurrence_out_of_bounds(self):
+        """Test requesting an occurrence that doesn't exist."""
+        from gdocs.managers.batch_operation_manager import VirtualTextTracker
+
+        doc_data = self._make_doc_data("apple banana")
+        tracker = VirtualTextTracker(doc_data)
+
+        success, start, end, msg = tracker.search_text("apple", "replace", occurrence=2)
+        assert success is False
+        assert "1 occurrence" in msg
+
+
+class TestChainedBatchOperations:
+    """Integration tests for chained batch operations (the main bug fix)."""
+
+    @pytest.fixture
+    def mock_service(self):
+        """Create a mock Google Docs service."""
+        service = MagicMock()
+        service.documents.return_value.get.return_value.execute = MagicMock(
+            return_value={
+                "body": {
+                    "content": [
+                        {
+                            "paragraph": {
+                                "elements": [
+                                    {
+                                        "textRun": {
+                                            "content": "[MARKER] End of document.",
+                                        },
+                                        "startIndex": 1,
+                                        "endIndex": 26,
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        )
+        service.documents.return_value.batchUpdate.return_value.execute = MagicMock(
+            return_value={"replies": [{}]}
+        )
+        return service
+
+    @pytest.mark.asyncio
+    async def test_chained_search_operations(self, mock_service):
+        """
+        Test the main bug fix: chained operations where later ops search for
+        text inserted by earlier ops.
+
+        This was the original bug from google_workspace_mcp-9f5f:
+        Operation 2 searches for '[OP1]' which is inserted by operation 1.
+        Without the fix, it would fail with 'Text [OP1] not found in document'.
+        """
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {"type": "insert", "search": "[MARKER]", "position": "after", "text": "[OP1]"},
+            {"type": "insert", "search": "[OP1]", "position": "after", "text": "[OP2]"},
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is True, f"Expected success but got: {result.message}"
+        assert result.operations_completed == 2
+        assert len(result.results) == 2
+        assert all(r.success for r in result.results)
+
+    @pytest.mark.asyncio
+    async def test_three_level_chain(self, mock_service):
+        """Test three levels of chained insertions."""
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {"type": "insert", "search": "[MARKER]", "position": "after", "text": "[A]"},
+            {"type": "insert", "search": "[A]", "position": "after", "text": "[B]"},
+            {"type": "insert", "search": "[B]", "position": "after", "text": "[C]"},
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is True
+        assert result.operations_completed == 3
+
+    @pytest.mark.asyncio
+    async def test_chain_with_replace(self, mock_service):
+        """Test chained operations including a replace."""
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {"type": "insert", "search": "[MARKER]", "position": "after", "text": "[TEMP]"},
+            {"type": "replace", "search": "[TEMP]", "position": "replace", "text": "[FINAL]"},
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is True
+        assert result.operations_completed == 2
+
+    @pytest.mark.asyncio
+    async def test_chain_preview_mode(self, mock_service):
+        """Test that chained operations work in preview mode too."""
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {"type": "insert", "search": "[MARKER]", "position": "after", "text": "[OP1]"},
+            {"type": "insert", "search": "[OP1]", "position": "after", "text": "[OP2]"},
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+            preview_only=True,
+        )
+
+        assert result.success is True
+        assert result.preview is True
+        assert len(result.results) == 2
+        # Both operations should have resolved successfully
+        assert all(r.resolved_index is not None for r in result.results)
+
+
+class TestLocationBasedPositioning:
+    """Tests for location-based positioning in batch operations."""
+
+    @pytest.fixture
+    def mock_service(self):
+        """Create a mock Google Docs service."""
+        service = MagicMock()
+        mock_doc = {
+            "body": {
+                "content": [
+                    {"startIndex": 0, "endIndex": 1, "sectionBreak": {}},
+                    {
+                        "startIndex": 1,
+                        "endIndex": 50,
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "startIndex": 1,
+                                    "endIndex": 50,
+                                    "textRun": {"content": "Hello World. This is test content.\n"},
+                                }
+                            ]
+                        },
+                    },
+                ]
+            }
+        }
+        service.documents().get().execute.return_value = mock_doc
+        service.documents().batchUpdate().execute.return_value = {"replies": []}
+        return service
+
+    @pytest.mark.asyncio
+    async def test_location_end_resolves_to_last_index(self, mock_service):
+        """Test that location='end' resolves to the last valid document index."""
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {"type": "insert", "location": "end", "text": "[APPENDED]"}
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is True
+        assert result.operations_completed == 1
+        # location='end' should resolve to total_length - 1 = 50 - 1 = 49
+        assert result.results[0].resolved_index == 49
+
+    @pytest.mark.asyncio
+    async def test_location_start_resolves_to_index_1(self, mock_service):
+        """Test that location='start' resolves to index 1 (after section break)."""
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {"type": "insert", "location": "start", "text": "[PREPENDED]"}
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is True
+        assert result.operations_completed == 1
+        # location='start' should resolve to index 1
+        assert result.results[0].resolved_index == 1
+
+    @pytest.mark.asyncio
+    async def test_invalid_location_returns_error(self, mock_service):
+        """Test that invalid location values return an error."""
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {"type": "insert", "location": "middle", "text": "[INVALID]"}
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is False
+        assert "Invalid location" in result.results[0].error
+
+    @pytest.mark.asyncio
+    async def test_location_with_preview_mode(self, mock_service):
+        """Test that location-based operations work in preview mode."""
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {"type": "insert", "location": "end", "text": "[TEST]"}
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+            preview_only=True,
+        )
+
+        assert result.success is True
+        assert result.preview is True
+        assert result.results[0].resolved_index == 49
+
+    @pytest.mark.asyncio
+    async def test_location_with_auto_adjust(self, mock_service):
+        """Test that multiple location operations with auto-adjust work correctly."""
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {"type": "insert", "location": "end", "text": "[FIRST]"},  # 7 chars
+            {"type": "insert", "location": "end", "text": "[SECOND]"},  # Should adjust
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is True
+        assert result.operations_completed == 2
+        # First insert at 49
+        assert result.results[0].resolved_index == 49
+        # Second insert should be at 49 + 7 (length of "[FIRST]") = 56
+        assert result.results[1].resolved_index == 56
+
+    @pytest.mark.asyncio
+    async def test_location_insert_table(self, mock_service):
+        """Test that location works with insert_table operations."""
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {"type": "insert_table", "location": "end", "rows": 2, "columns": 2}
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is True
+        assert result.operations_completed == 1
+        assert result.results[0].resolved_index == 49
+
+    @pytest.mark.asyncio
+    async def test_location_insert_page_break(self, mock_service):
+        """Test that location works with insert_page_break operations."""
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {"type": "insert_page_break", "location": "end"}
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is True
+        assert result.operations_completed == 1
+        assert result.results[0].resolved_index == 49
+
+
+class TestRecentInsertPreference:
+    """Tests for the recent insert preference feature.
+
+    When inserting text and then searching for it in the same batch, the search
+    should prefer the recently inserted text over earlier occurrences in the document.
+    This fixes the bug where batch_edit_doc format operation formatted wrong location.
+    """
+
+    def _create_mock_doc_with_existing_text(self, text: str, start_index: int = 1):
+        """Create mock document data with the given text."""
+        return {
+            "body": {
+                "content": [
+                    {
+                        "sectionBreak": {"sectionStyle": {}},
+                        "startIndex": 0,
+                        "endIndex": 1,
+                    },
+                    {
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "textRun": {"content": text},
+                                    "startIndex": start_index,
+                                    "endIndex": start_index + len(text),
+                                }
+                            ]
+                        },
+                    },
+                ]
+            }
+        }
+
+    def test_virtual_tracker_tracks_recent_inserts(self):
+        """Test that VirtualTextTracker tracks recently inserted text."""
+        doc_data = self._create_mock_doc_with_existing_text("Hello World\n")
+        tracker = VirtualTextTracker(doc_data)
+
+        # Initially no recent inserts
+        assert tracker._recent_inserts == []
+
+        # Apply an insert operation
+        tracker.apply_operation({
+            "type": "insert_text",
+            "index": 12,  # After "Hello World"
+            "text": "[MARKER]"
+        })
+
+        # Should have tracked the insert
+        assert len(tracker._recent_inserts) == 1
+        assert tracker._recent_inserts[0] == ("[MARKER]", 12, 20)
+
+    def test_search_prefers_recent_insert_over_existing(self):
+        """Test that search prefers recently inserted text over existing occurrences."""
+        # Document already contains "TEST" at the beginning
+        doc_data = self._create_mock_doc_with_existing_text("TEST existing content\n")
+        tracker = VirtualTextTracker(doc_data)
+
+        # Insert "TEST" again at a later position
+        tracker.apply_operation({
+            "type": "insert_text",
+            "index": 22,
+            "text": "NEW TEST"
+        })
+
+        # Search should find "TEST" in the recently inserted text, not the original
+        success, start, end, msg = tracker.search_text("TEST", "replace")
+
+        assert success is True
+        # Should find the TEST in "NEW TEST" (at position 26, not at 1)
+        assert start == 26  # "NEW " is 4 chars, so TEST starts at 22+4=26
+        assert end == 30
+        assert "recently inserted" in msg
+
+    def test_search_falls_back_to_existing_when_not_in_recent(self):
+        """Test that search falls back to existing text when search text not in recent inserts."""
+        # Document contains "EXISTING" text
+        doc_data = self._create_mock_doc_with_existing_text("EXISTING content here\n")
+        tracker = VirtualTextTracker(doc_data)
+
+        # Insert different text
+        tracker.apply_operation({
+            "type": "insert_text",
+            "index": 22,
+            "text": "[MARKER]"
+        })
+
+        # Search for "EXISTING" - should find in original document
+        success, start, end, msg = tracker.search_text("EXISTING", "replace")
+
+        assert success is True
+        assert start == 1  # Found at original position
+        assert "recently inserted" not in msg
+
+    def test_search_respects_occurrence_parameter(self):
+        """Test that explicit occurrence parameter bypasses recent insert preference."""
+        doc_data = self._create_mock_doc_with_existing_text("TEST first TEST second\n")
+        tracker = VirtualTextTracker(doc_data)
+
+        # Insert another "TEST" at the end
+        tracker.apply_operation({
+            "type": "insert_text",
+            "index": 24,
+            "text": " TEST third"
+        })
+
+        # Search with occurrence=2 should find the second occurrence, not recent insert
+        success, start, end, msg = tracker.search_text("TEST", "replace", occurrence=2)
+
+        assert success is True
+        assert start == 12  # Second "TEST" in "TEST first TEST second"
+        assert "recently inserted" not in msg
+
+    def test_search_recent_insert_case_insensitive(self):
+        """Test that recent insert search respects case sensitivity."""
+        doc_data = self._create_mock_doc_with_existing_text("test existing\n")
+        tracker = VirtualTextTracker(doc_data)
+
+        tracker.apply_operation({
+            "type": "insert_text",
+            "index": 15,
+            "text": "NEW TEST"
+        })
+
+        # Case-insensitive search should find recent insert
+        success, start, end, msg = tracker.search_text("test", "replace", match_case=False)
+
+        assert success is True
+        # Should find "TEST" in recently inserted "NEW TEST"
+        assert start == 19  # "NEW " is 4 chars
+        assert "recently inserted" in msg
+
+    @pytest.fixture
+    def mock_service_with_existing_marker(self):
+        """Create mock service with document containing existing 'BATCH EDIT TEST' text."""
+        service = MagicMock()
+        mock_doc = {
+            "body": {
+                "content": [
+                    {
+                        "sectionBreak": {"sectionStyle": {}},
+                        "startIndex": 0,
+                        "endIndex": 1,
+                    },
+                    {
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "textRun": {
+                                        "content": "Some content with BATCH EDIT TEST already here.\n",
+                                    },
+                                    "startIndex": 1,
+                                    "endIndex": 49,
+                                }
+                            ]
+                        },
+                        "startIndex": 1,
+                        "endIndex": 49,
+                    },
+                ]
+            },
+            "title": "Test Doc"
+        }
+        service.documents().get().execute.return_value = mock_doc
+        service.documents().batchUpdate().execute.return_value = {"replies": []}
+        return service
+
+    @pytest.mark.asyncio
+    async def test_insert_then_format_targets_inserted_text(self, mock_service_with_existing_marker):
+        """Test the main bug fix: insert text then format should target inserted text.
+
+        This reproduces the bug from google_workspace_mcp-0aac:
+        When using batch_edit_doc with a format operation that searches for text,
+        the format should apply to the NEWLY inserted text, not an earlier occurrence.
+        """
+        manager = BatchOperationManager(mock_service_with_existing_marker)
+
+        operations = [
+            {"type": "insert", "location": "end", "text": "\n\n=== BATCH EDIT TEST ===\n"},
+            {"type": "format", "search": "BATCH EDIT TEST", "bold": True},
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is True
+        assert result.operations_completed == 2
+
+        # The format operation should target the recently inserted text
+        format_result = result.results[1]
+        # The inserted text starts at index 48 (end of doc), + 4 for "\n\n=== "
+        # So "BATCH EDIT TEST" starts at 52
+        assert format_result.resolved_index >= 48  # Should be in the inserted text, not at 18
+
+    @pytest.mark.asyncio
+    async def test_insert_then_format_preview_mode(self, mock_service_with_existing_marker):
+        """Test insert+format in preview mode shows correct targeting."""
+        manager = BatchOperationManager(mock_service_with_existing_marker)
+
+        operations = [
+            {"type": "insert", "location": "end", "text": "[NEW MARKER]"},
+            {"type": "format", "search": "MARKER", "bold": True},
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+            preview_only=True,
+        )
+
+        assert result.success is True
+        assert result.preview is True
+
+        # Format should target the "MARKER" in the newly inserted "[NEW MARKER]"
+        format_result = result.results[1]
+        # Inserted text starts at 48, "[NEW " is 5 chars, so "MARKER" at 53
+        assert format_result.resolved_index >= 48
+
+    @pytest.mark.asyncio
+    async def test_multiple_inserts_then_format(self, mock_service_with_existing_marker):
+        """Test that format finds text in the most recent insert."""
+        manager = BatchOperationManager(mock_service_with_existing_marker)
+
+        operations = [
+            {"type": "insert", "location": "end", "text": "First MARKER insert.\n"},
+            {"type": "insert", "location": "end", "text": "Second MARKER insert.\n"},
+            {"type": "format", "search": "MARKER", "bold": True},
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is True
+        assert result.operations_completed == 3
+
+        # Format should target "MARKER" in the most recent (second) insert
+        format_result = result.results[2]
+        # Second insert starts after first (48 + 21 = 69), "Second " is 7 chars, so MARKER at 76
+        assert format_result.resolved_index >= 69
+
+
+class TestBatchOperationInsertValidation:
+    """Tests for validation of insert operations in batch_edit_doc."""
+
+    @pytest.fixture
+    def mock_service(self):
+        """Create a mock Google Docs service."""
+        service = MagicMock()
+        service.documents.return_value.get.return_value.execute = MagicMock(
+            return_value={
+                "body": {
+                    "content": [
+                        {
+                            "paragraph": {
+                                "elements": [
+                                    {
+                                        "textRun": {
+                                            "content": "Test document content.",
+                                        },
+                                        "startIndex": 1,
+                                        "endIndex": 23,
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        )
+        service.documents.return_value.batchUpdate.return_value.execute = MagicMock(
+            return_value={"replies": [{}]}
+        )
+        return service
+
+    @pytest.mark.asyncio
+    async def test_insert_without_text_fails_validation(self, mock_service):
+        """Test that insert operation without 'text' field fails with clear error."""
+        manager = BatchOperationManager(mock_service)
+
+        # Insert with position but no text
+        operations = [{"type": "insert", "index": 1}]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is False
+        assert len(result.results) == 1
+        assert result.results[0].success is False
+        assert "text" in result.results[0].error.lower()
+
+    @pytest.mark.asyncio
+    async def test_insert_without_position_fails_validation(self, mock_service):
+        """Test that insert operation without any positioning fails with clear error."""
+        manager = BatchOperationManager(mock_service)
+
+        # Insert with text but no position (no index, search, location, or range_spec)
+        operations = [{"type": "insert", "text": "Hello World"}]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is False
+        assert len(result.results) == 1
+        assert result.results[0].success is False
+        assert "position" in result.results[0].error.lower() or "index" in result.results[0].error.lower()
+
+    @pytest.mark.asyncio
+    async def test_insert_without_text_or_position_fails_validation(self, mock_service):
+        """Test that insert operation without text AND without position fails."""
+        manager = BatchOperationManager(mock_service)
+
+        # Insert with only type - no text, no position
+        operations = [{"type": "insert"}]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is False
+        assert len(result.results) == 1
+        assert result.results[0].success is False
+        # Should fail on first validation (missing text)
+        assert "text" in result.results[0].error.lower()
+
+    @pytest.mark.asyncio
+    async def test_insert_with_index_and_text_succeeds(self, mock_service):
+        """Test that valid insert with index and text succeeds."""
+        manager = BatchOperationManager(mock_service)
+
+        operations = [{"type": "insert", "index": 1, "text": "Hello"}]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is True
+        assert result.operations_completed == 1
+
+    @pytest.mark.asyncio
+    async def test_insert_with_location_and_text_succeeds(self, mock_service):
+        """Test that valid insert with location and text succeeds."""
+        manager = BatchOperationManager(mock_service)
+
+        operations = [{"type": "insert", "location": "end", "text": "Appended text"}]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is True
+        assert result.operations_completed == 1
+
+    @pytest.mark.asyncio
+    async def test_insert_with_search_and_text_succeeds(self, mock_service):
+        """Test that valid insert with search positioning and text succeeds."""
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {
+                "type": "insert",
+                "search": "document",
+                "position": "after",
+                "text": " (modified)",
+            }
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is True
+        assert result.operations_completed == 1
+
+    @pytest.mark.asyncio
+    async def test_insert_text_alias_also_validates(self, mock_service):
+        """Test that 'insert_text' type also validates correctly."""
+        manager = BatchOperationManager(mock_service)
+
+        # Using canonical 'insert_text' instead of alias 'insert'
+        operations = [{"type": "insert_text"}]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        assert result.success is False
+        assert result.results[0].success is False
+        assert "text" in result.results[0].error.lower()
+
+    @pytest.mark.asyncio
+    async def test_batch_with_one_invalid_insert_fails_all(self, mock_service):
+        """Test that batch with one invalid insert operation fails before API call."""
+        manager = BatchOperationManager(mock_service)
+
+        # First valid, second invalid
+        operations = [
+            {"type": "insert", "index": 1, "text": "Valid"},
+            {"type": "insert"},  # Invalid - no text or position
+        ]
+
+        result = await manager.execute_batch_with_search(
+            "test-doc-id",
+            operations,
+            auto_adjust_positions=True,
+        )
+
+        # Should fail because resolution fails for operation 1
+        assert result.success is False
+        # API should NOT have been called (batchUpdate)
+        mock_service.documents.return_value.batchUpdate.return_value.execute.assert_not_called()
