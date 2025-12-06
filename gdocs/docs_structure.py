@@ -185,6 +185,74 @@ def _extract_cell_text(cell: dict[str, Any]) -> str:
     return ''.join(text_parts)
 
 
+def extract_text_in_range(doc_data: dict[str, Any], start_index: int, end_index: int) -> str:
+    """
+    Extract all text content from a document between given indices.
+
+    This extracts text directly from the raw document body, not just
+    from structural elements. This ensures we capture all text even
+    if it wasn't identified as a structural element.
+
+    Args:
+        doc_data: Raw document data from Google Docs API
+        start_index: Starting character position (inclusive)
+        end_index: Ending character position (exclusive)
+
+    Returns:
+        All text content in the specified range
+    """
+    text_parts = []
+    body = doc_data.get('body', {})
+    content = body.get('content', [])
+
+    for element in content:
+        elem_start = element.get('startIndex', 0)
+        elem_end = element.get('endIndex', 0)
+
+        # Skip elements completely outside our range
+        if elem_end <= start_index or elem_start >= end_index:
+            continue
+
+        if 'paragraph' in element:
+            paragraph = element['paragraph']
+            for para_elem in paragraph.get('elements', []):
+                pe_start = para_elem.get('startIndex', 0)
+                pe_end = para_elem.get('endIndex', 0)
+
+                # Skip elements completely outside our range
+                if pe_end <= start_index or pe_start >= end_index:
+                    continue
+
+                if 'textRun' in para_elem:
+                    content_text = para_elem['textRun'].get('content', '')
+
+                    # Handle partial overlap
+                    # Calculate which portion of this text is in our range
+                    text_start = max(0, start_index - pe_start)
+                    text_end = min(len(content_text), end_index - pe_start)
+
+                    if text_start < text_end:
+                        text_parts.append(content_text[text_start:text_end])
+
+        elif 'table' in element:
+            # For tables, extract cell content
+            table = element['table']
+            for row in table.get('tableRows', []):
+                for cell in row.get('tableCells', []):
+                    cell_start = cell.get('startIndex', 0)
+                    cell_end = cell.get('endIndex', 0)
+
+                    # Skip cells completely outside our range
+                    if cell_end <= start_index or cell_start >= end_index:
+                        continue
+
+                    cell_text = _extract_cell_text(cell)
+                    if cell_text:
+                        text_parts.append(cell_text)
+
+    return ''.join(text_parts)
+
+
 def _parse_segment(segment_data: dict[str, Any]) -> dict[str, Any]:
     """Parse a document segment (header/footer)."""
     return {
@@ -640,13 +708,48 @@ def find_section_by_heading(
 
     # Find where this section ends
     # It ends when we hit a heading of same or higher level (smaller number)
+    # NOTE: We skip "false" headings that appear to be content paragraphs incorrectly styled.
+    # This can happen when heading styles bleed into subsequent paragraphs.
+    # Heuristics for a "false" heading:
+    # 1. Empty text (just whitespace)
+    # 2. Immediately follows the target heading (within ~2 chars - just newlines)
+    # 3. Very long text (>100 chars) that looks like body content
     for i in range(target_idx + 1, len(elements)):
         elem = elements[i]
         if elem['type'].startswith('heading') or elem['type'] == 'title':
             elem_level = elem.get('level', 0)
             if elem_level <= target_level:
-                section_end = elem['start_index']
-                break
+                elem_text = elem.get('text', '').strip()
+                elem_start = elem.get('start_index', 0)
+
+                # Skip "false" headings that are likely style bleed artifacts
+                # This happens when heading styles bleed into subsequent paragraphs due to
+                # Google Docs API paragraph style inheritance.
+                is_false_heading = False
+
+                # Empty heading - definitely false (style bleed creates empty-text headings)
+                if not elem_text:
+                    is_false_heading = True
+                # Very long text (>60 chars) is unlikely to be a real heading
+                # Real headings are typically short (chapter titles, section names)
+                elif len(elem_text) > 60:
+                    is_false_heading = True
+                # Immediately follows another heading (likely style bleed)
+                # Check if there's no content between the previous element and this one
+                # A real heading typically has at least some content before it
+                elif i > 0:
+                    prev_elem = elements[i - 1]
+                    prev_end = prev_elem.get('end_index', 0)
+                    # If this heading starts right after the previous element ends
+                    # (allowing for just newlines/whitespace), it's likely style bleed
+                    if elem_start - prev_end <= 2:
+                        # Check if the previous element is also a heading
+                        if prev_elem['type'].startswith('heading') or prev_elem['type'] == 'title':
+                            is_false_heading = True
+
+                if not is_false_heading:
+                    section_end = elem['start_index']
+                    break
 
     # If no ending heading found, section goes to end of document
     if section_end is None:
@@ -678,21 +781,20 @@ def find_section_by_heading(
 
         section_elements.append(elem)
 
-    # Build content text
-    content_parts = []
-    for elem in section_elements:
-        if 'text' in elem:
-            content_parts.append(elem['text'])
-        elif elem['type'] == 'bullet_list' or elem['type'] == 'numbered_list':
-            for item in elem.get('items', []):
-                content_parts.append(f"  • {item['text']}")
+    # Extract content directly from the raw document
+    # Start after the heading text ends, up to section end
+    content_start = target_heading['end_index']
+    raw_content = extract_text_in_range(doc_data, content_start, section_end)
+
+    # Clean up the content (remove leading/trailing whitespace and newlines)
+    content = raw_content.strip()
 
     return {
         'heading': target_heading['text'],
         'level': target_level,
         'start_index': section_start,
         'end_index': section_end,
-        'content': '\n'.join(content_parts),
+        'content': content,
         'elements': section_elements,
         'subsections': subsections
     }
@@ -959,7 +1061,6 @@ def get_heading_siblings(
 
     # Find the target heading
     target_heading = None
-    target_idx = -1
     search_text = heading_text if match_case else heading_text.lower()
 
     headings_at_level = []
@@ -971,7 +1072,6 @@ def get_heading_siblings(
 
             if compare_text.strip() == search_text.strip():
                 target_heading = elem
-                target_idx = i
 
     if target_heading is None:
         return {'found': False}
@@ -1015,3 +1115,47 @@ def get_heading_siblings(
         'siblings_count': len(headings_at_level),
         'position_in_siblings': position + 1  # 1-based
     }
+
+
+def get_paragraph_style_at_index(doc_data: dict[str, Any], index: int) -> Optional[str]:
+    """
+    Get the paragraph style type at a specific index in the document.
+
+    This is useful for detecting if text is being inserted after a heading,
+    which would cause it to inherit the heading's style.
+
+    Args:
+        doc_data: Raw document data from Google Docs API
+        index: The document index position to check
+
+    Returns:
+        The paragraph style type (e.g., 'HEADING_1', 'NORMAL_TEXT') or None if not found
+    """
+    body = doc_data.get('body', {})
+    content = body.get('content', [])
+
+    for element in content:
+        start_idx = element.get('startIndex', 0)
+        end_idx = element.get('endIndex', 0)
+
+        # Check if the index falls within this element's range
+        if start_idx <= index < end_idx:
+            if 'paragraph' in element:
+                return _get_paragraph_style_type(element['paragraph'])
+
+    return None
+
+
+def is_heading_style(style_type: Optional[str]) -> bool:
+    """
+    Check if a paragraph style type is a heading style.
+
+    Args:
+        style_type: The paragraph style type (e.g., 'HEADING_1', 'NORMAL_TEXT')
+
+    Returns:
+        True if the style is a heading (HEADING_1-6 or TITLE), False otherwise
+    """
+    if style_type is None:
+        return False
+    return style_type in HEADING_TYPES
