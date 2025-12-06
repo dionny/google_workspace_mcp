@@ -14,7 +14,7 @@ import asyncio
 import logging
 import os
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -114,7 +114,7 @@ class ToolTester:
         print(f"\n🔧 Tool: {tool_name}")
         print("=" * 60)
         print(f"Description: {tool.description}")
-        print(f"\nParameters:")
+        print("\nParameters:")
         
         if hasattr(tool, 'fn'):
             import inspect
@@ -273,7 +273,7 @@ def main():
                 # Convert common types
                 if value.lower() in ('true', 'false'):
                     tool_kwargs[param_name] = value.lower() == 'true'
-                elif value.isdigit():
+                elif value.isdigit() or (value.startswith('-') and value[1:].isdigit()):
                     tool_kwargs[param_name] = int(value)
                 else:
                     tool_kwargs[param_name] = value

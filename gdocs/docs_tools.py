@@ -755,6 +755,9 @@ async def modify_doc_text(
         if search is not None or start_index is not None or end_index is not None:
             logger.warning("Multiple positioning parameters provided; heading mode takes precedence")
     elif use_search_mode:
+        # Validate search is not empty
+        if search == "":
+            return validator.create_empty_search_error()
         if not position:
             return validator.create_missing_param_error(
                 param_name="position",
@@ -777,6 +780,10 @@ async def modify_doc_text(
                 context="for document modification",
                 valid_values=["location", "range", "heading+section_position", "search+position", "start_index"]
             )
+        # Validate index values (non-negative)
+        is_valid, index_error = validator.validate_index_range_structured(start_index, end_index)
+        if not is_valid:
+            return index_error
 
     # Track search results for response
     search_info = {}
@@ -936,7 +943,7 @@ async def modify_doc_text(
     # Validate text formatting params if provided
     has_formatting = any([
         bold is not None, italic is not None, underline is not None, strikethrough is not None,
-        small_caps is not None, subscript is not None, superscript is not None, font_size, font_family, link is not None, foreground_color is not None,
+        small_caps is not None, subscript is not None, superscript is not None, font_size is not None, font_family is not None, link is not None, foreground_color is not None,
         background_color is not None
     ])
     formatting_params_list = []
@@ -954,9 +961,9 @@ async def modify_doc_text(
         formatting_params_list.append("subscript")
     if superscript is not None:
         formatting_params_list.append("superscript")
-    if font_size:
+    if font_size is not None:
         formatting_params_list.append("font_size")
-    if font_family:
+    if font_family is not None:
         formatting_params_list.append("font_family")
     if link is not None:
         formatting_params_list.append("link")
@@ -971,6 +978,13 @@ async def modify_doc_text(
             foreground_color, background_color
         )
         if not is_valid:
+            # Check if this is a color format error and return specific structured error
+            if "Invalid color format" in error_msg or "Invalid hex color" in error_msg:
+                # Extract color value and param name from error
+                if "foreground_color" in error_msg:
+                    return validator.create_invalid_color_error(foreground_color, "foreground_color")
+                elif "background_color" in error_msg:
+                    return validator.create_invalid_color_error(background_color, "background_color")
             return validator.create_invalid_param_error(
                 param_name="formatting",
                 received=str(formatting_params_list),
@@ -1087,9 +1101,9 @@ async def modify_doc_text(
             format_details.append("subscript")
         if superscript is not None:
             format_details.append("superscript")
-        if font_size:
+        if font_size is not None:
             format_details.append("font_size")
-        if font_family:
+        if font_family is not None:
             format_details.append("font_family")
         if link is not None:
             format_details.append("link")
@@ -1425,6 +1439,15 @@ async def find_and_replace_doc(
     replace_text: str,
     match_case: bool = False,
     preview: bool = False,
+    bold: bool = None,
+    italic: bool = None,
+    underline: bool = None,
+    strikethrough: bool = None,
+    font_size: int = None,
+    font_family: str = None,
+    link: str = None,
+    foreground_color: str = None,
+    background_color: str = None,
 ) -> str:
     """
     Replaces ALL occurrences of text throughout a Google Doc.
@@ -1446,6 +1469,14 @@ async def find_and_replace_doc(
         # Preview what would be replaced before committing:
         find_and_replace_doc(document_id="...", find_text="TODO", replace_text="DONE", preview=True)
 
+        # Replace and format - make all "TODO" become bold red "DONE":
+        find_and_replace_doc(document_id="...", find_text="TODO", replace_text="DONE",
+                            bold=True, foreground_color="red")
+
+        # Replace and make text a clickable link:
+        find_and_replace_doc(document_id="...", find_text="our website",
+                            replace_text="Example.com", link="https://example.com")
+
         # Replace only the FIRST "TODO": use modify_doc_text instead
         modify_doc_text(document_id="...", search="TODO", position="replace", text="DONE")
 
@@ -1456,6 +1487,15 @@ async def find_and_replace_doc(
         replace_text: Text to replace with
         match_case: Whether to match case exactly (default: False)
         preview: If True, returns what would be replaced without making changes (default: False)
+        bold: Whether to make replaced text bold (True/False/None to leave unchanged)
+        italic: Whether to make replaced text italic (True/False/None to leave unchanged)
+        underline: Whether to underline replaced text (True/False/None to leave unchanged)
+        strikethrough: Whether to strikethrough replaced text (True/False/None to leave unchanged)
+        font_size: Font size in points for replaced text
+        font_family: Font family name for replaced text (e.g., "Arial", "Times New Roman")
+        link: URL to create a hyperlink on replaced text
+        foreground_color: Text color as hex (#FF0000) or named color (red, blue, green, etc.)
+        background_color: Background/highlight color as hex or named color
 
     Returns:
         str: JSON string with operation details.
@@ -1475,6 +1515,7 @@ async def find_and_replace_doc(
                 {"index": 2, "original_range": {"start": 50, "end": 54}},
                 ...
             ],
+            "formatting_applied": ["bold", "foreground_color"],  // if formatting was requested
             "message": "Replaced 3 occurrence(s) of 'TODO' with 'DONE'",
             "link": "https://docs.google.com/document/d/.../edit"
         }
@@ -1502,6 +1543,60 @@ async def find_and_replace_doc(
     logger.info(f"[find_and_replace_doc] Doc={document_id}, find='{find_text}', replace='{replace_text}', preview={preview}")
 
     import json
+    from gdocs.managers.validation_manager import ValidationManager
+
+    # Check if any formatting was requested
+    has_formatting = any([
+        bold is not None,
+        italic is not None,
+        underline is not None,
+        strikethrough is not None,
+        font_size is not None,
+        font_family is not None,
+        link is not None,
+        foreground_color is not None,
+        background_color is not None,
+    ])
+
+    # Build list of formatting parameters for response
+    formatting_applied = []
+    if bold is not None:
+        formatting_applied.append("bold")
+    if italic is not None:
+        formatting_applied.append("italic")
+    if underline is not None:
+        formatting_applied.append("underline")
+    if strikethrough is not None:
+        formatting_applied.append("strikethrough")
+    if font_size is not None:
+        formatting_applied.append("font_size")
+    if font_family is not None:
+        formatting_applied.append("font_family")
+    if link is not None:
+        formatting_applied.append("link")
+    if foreground_color is not None:
+        formatting_applied.append("foreground_color")
+    if background_color is not None:
+        formatting_applied.append("background_color")
+
+    # Validate font_size if provided
+    validator = ValidationManager()
+    if font_size is not None and font_size <= 0:
+        return validator.create_invalid_param_error(
+            param_name="font_size",
+            received=font_size,
+            valid_values=["positive integer (e.g., 10, 12, 14)"]
+        )
+
+    # Validate find_text is not empty
+    if not find_text:
+        error = DocsErrorBuilder.invalid_param_value(
+            param_name="find_text",
+            received_value="(empty string)",
+            valid_values=["non-empty string"],
+            context_description="find_text cannot be empty"
+        )
+        return format_error(error)
 
     # Handle preview mode - find all occurrences without modifying
     if preview:
@@ -1549,6 +1644,12 @@ async def find_and_replace_doc(
             preview_result["message"] = f"No occurrences of '{find_text}' found in document"
         else:
             preview_result["message"] = f"Would replace {len(all_occurrences)} occurrence(s) of '{find_text}' with '{replace_text}'"
+            if has_formatting:
+                preview_result["message"] += f" and apply formatting ({', '.join(formatting_applied)})"
+
+        # Include formatting info in preview if formatting was requested
+        if has_formatting:
+            preview_result["formatting_requested"] = formatting_applied
 
         return json.dumps(preview_result, indent=2)
 
@@ -1585,11 +1686,46 @@ async def find_and_replace_doc(
         if 'replaceAllText' in reply:
             replacements = reply['replaceAllText'].get('occurrencesChanged', 0)
 
+    # Apply formatting if requested and replacements were made
+    occurrences_formatted = 0
+    if has_formatting and replacements > 0 and replace_text:
+        # Fetch the updated document to find positions of replaced text
+        updated_doc_data = await asyncio.to_thread(
+            service.documents().get(documentId=document_id).execute
+        )
+
+        # Find all occurrences of the replacement text
+        replaced_occurrences = find_all_occurrences_in_document(updated_doc_data, replace_text, match_case)
+
+        # Build formatting requests for each occurrence
+        format_requests = []
+        for start, end in replaced_occurrences:
+            format_request = create_format_text_request(
+                start, end, bold, italic, underline, strikethrough,
+                None, None, None,  # small_caps, subscript, superscript not supported
+                font_size, font_family, link, foreground_color, background_color
+            )
+            if format_request:
+                format_requests.append(format_request)
+
+        # Apply formatting in a batch update
+        if format_requests:
+            await asyncio.to_thread(
+                service.documents().batchUpdate(
+                    documentId=document_id,
+                    body={'requests': format_requests}
+                ).execute
+            )
+            occurrences_formatted = len(format_requests)
+
     link = f"https://docs.google.com/document/d/{document_id}/edit"
     message = f"Replaced {replacements} occurrence(s) of '{find_text}' with '{replace_text}'"
 
+    if occurrences_formatted > 0:
+        message += f" and applied formatting to {occurrences_formatted} occurrence(s)"
+
     # Add hint when only 1 replacement was made - user might have wanted targeted replacement
-    if replacements == 1:
+    if replacements == 1 and not has_formatting:
         message += ". Tip: For single replacements, you can also use modify_doc_text with search + position='replace' to target a specific occurrence."
 
     # Build structured response consistent with other tools
@@ -1606,6 +1742,608 @@ async def find_and_replace_doc(
         "message": message,
         "link": link,
     }
+
+    # Include formatting info if formatting was applied
+    if has_formatting:
+        operation_result["formatting_applied"] = formatting_applied
+        operation_result["occurrences_formatted"] = occurrences_formatted
+
+    return json.dumps(operation_result, indent=2)
+
+
+@server.tool()
+@handle_http_errors("format_all_occurrences", service_type="docs")
+@require_google_service("docs", "docs_write")
+async def format_all_occurrences(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    search: str,
+    match_case: bool = True,
+    preview: bool = False,
+    bold: bool = None,
+    italic: bool = None,
+    underline: bool = None,
+    strikethrough: bool = None,
+    small_caps: bool = None,
+    subscript: bool = None,
+    superscript: bool = None,
+    font_size: int = None,
+    font_family: str = None,
+    link: str = None,
+    foreground_color: str = None,
+    background_color: str = None,
+) -> str:
+    """
+    Formats ALL occurrences of text in a Google Doc without changing the text itself.
+
+    Use this tool when you want to apply formatting to every instance of a word or phrase
+    without replacing it. This is more efficient than calling modify_doc_text multiple times.
+
+    Comparison:
+    | Tool                    | Modifies Text | Formats | Targets          |
+    |-------------------------|---------------|---------|------------------|
+    | format_all_occurrences  | No            | Yes     | ALL occurrences  |
+    | find_and_replace_doc    | Yes           | Yes     | ALL occurrences  |
+    | modify_doc_text         | Optional      | Yes     | ONE occurrence   |
+
+    Examples:
+        # Make all "TODO" bold and red:
+        format_all_occurrences(document_id="...", search="TODO",
+                              bold=True, foreground_color="red")
+
+        # Preview what would be formatted:
+        format_all_occurrences(document_id="...", search="TODO",
+                              bold=True, preview=True)
+
+        # Highlight all mentions of a term with background color:
+        format_all_occurrences(document_id="...", search="important",
+                              background_color="yellow")
+
+        # Make all instances of a name a clickable link:
+        format_all_occurrences(document_id="...", search="Google",
+                              link="https://google.com")
+
+        # Apply multiple formatting styles at once:
+        format_all_occurrences(document_id="...", search="WARNING",
+                              bold=True, italic=True, foreground_color="orange",
+                              font_size=14)
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to update
+        search: Text to search for (will format ALL matches)
+        match_case: Whether to match case exactly (default: True)
+        preview: If True, returns what would be formatted without making changes (default: False)
+        bold: Whether to make text bold (True/False/None to leave unchanged)
+        italic: Whether to make text italic (True/False/None to leave unchanged)
+        underline: Whether to underline text (True/False/None to leave unchanged)
+        strikethrough: Whether to strikethrough text (True/False/None to leave unchanged)
+        small_caps: Whether to make text small caps (True/False/None to leave unchanged)
+        subscript: Whether to make text subscript (True/False/None to leave unchanged)
+        superscript: Whether to make text superscript (True/False/None to leave unchanged)
+        font_size: Font size in points
+        font_family: Font family name (e.g., "Arial", "Times New Roman")
+        link: URL to create a hyperlink. Use empty string "" to remove existing link.
+        foreground_color: Text color as hex (#FF0000) or named color (red, blue, green, etc.)
+        background_color: Background/highlight color as hex or named color
+
+    Returns:
+        str: JSON string with operation details.
+
+        When preview=False (default), returns structured operation result:
+        {
+            "success": true,
+            "operation": "format_all",
+            "occurrences_formatted": 3,
+            "search": "TODO",
+            "match_case": true,
+            "affected_ranges": [
+                {"index": 1, "range": {"start": 15, "end": 19}},
+                {"index": 2, "range": {"start": 50, "end": 54}},
+                ...
+            ],
+            "formatting_applied": ["bold", "foreground_color"],
+            "message": "Applied formatting to 3 occurrence(s) of 'TODO'",
+            "link": "https://docs.google.com/document/d/.../edit"
+        }
+
+        When preview=True, returns a preview response:
+        {
+            "preview": true,
+            "would_modify": true,
+            "occurrences_found": 3,
+            "search": "TODO",
+            "matches": [
+                {
+                    "index": 1,
+                    "range": {"start": 15, "end": 19},
+                    "text": "TODO",
+                    "context": {"before": "...", "after": "..."}
+                },
+                ...
+            ],
+            "formatting_to_apply": ["bold", "foreground_color"],
+            "message": "Would format 3 occurrences of 'TODO'"
+        }
+    """
+    import json
+
+    logger.info(f"[format_all_occurrences] Doc={document_id}, search='{search}', preview={preview}")
+
+    validator = ValidationManager()
+
+    # Validate document_id
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    # Validate search is not empty
+    if not search:
+        error = DocsErrorBuilder.invalid_param_value(
+            param_name="search",
+            received_value="(empty string)",
+            valid_values=["non-empty string"],
+            context_description="search text cannot be empty"
+        )
+        return format_error(error)
+
+    # Check if any formatting was requested
+    has_formatting = any([
+        bold is not None,
+        italic is not None,
+        underline is not None,
+        strikethrough is not None,
+        small_caps is not None,
+        subscript is not None,
+        superscript is not None,
+        font_size is not None,
+        font_family is not None,
+        link is not None,
+        foreground_color is not None,
+        background_color is not None,
+    ])
+
+    if not has_formatting:
+        error = DocsErrorBuilder.missing_required_param(
+            param_name="formatting option",
+            context_description="for formatting operation",
+            valid_values=["bold", "italic", "underline", "strikethrough", "small_caps",
+                         "subscript", "superscript", "font_size", "font_family", "link",
+                         "foreground_color", "background_color"]
+        )
+        return format_error(error)
+
+    # Validate font_size if provided
+    if font_size is not None and font_size <= 0:
+        return validator.create_invalid_param_error(
+            param_name="font_size",
+            received=font_size,
+            valid_values=["positive integer (e.g., 10, 12, 14)"]
+        )
+
+    # Validate subscript/superscript mutual exclusivity
+    if subscript and superscript:
+        return validator.create_invalid_param_error(
+            param_name="subscript/superscript",
+            received="both True",
+            valid_values=["subscript=True OR superscript=True, not both"]
+        )
+
+    # Build list of formatting parameters for response
+    formatting_applied = []
+    if bold is not None:
+        formatting_applied.append("bold")
+    if italic is not None:
+        formatting_applied.append("italic")
+    if underline is not None:
+        formatting_applied.append("underline")
+    if strikethrough is not None:
+        formatting_applied.append("strikethrough")
+    if small_caps is not None:
+        formatting_applied.append("small_caps")
+    if subscript is not None:
+        formatting_applied.append("subscript")
+    if superscript is not None:
+        formatting_applied.append("superscript")
+    if font_size is not None:
+        formatting_applied.append("font_size")
+    if font_family is not None:
+        formatting_applied.append("font_family")
+    if link is not None:
+        formatting_applied.append("link")
+    if foreground_color is not None:
+        formatting_applied.append("foreground_color")
+    if background_color is not None:
+        formatting_applied.append("background_color")
+
+    # Get document and find all occurrences
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+    all_occurrences = find_all_occurrences_in_document(doc_data, search, match_case)
+
+    doc_link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    # Handle preview mode
+    if preview:
+        matches = []
+        for idx, (start, end) in enumerate(all_occurrences, 1):
+            match_info = {
+                "index": idx,
+                "range": {"start": start, "end": end},
+            }
+            context = extract_text_at_range(doc_data, start, end)
+            if context.get("found"):
+                match_info["text"] = context.get("text", "")
+                match_info["context"] = {
+                    "before": context.get("context_before", ""),
+                    "after": context.get("context_after", "")
+                }
+            matches.append(match_info)
+
+        preview_result = {
+            "preview": True,
+            "would_modify": len(all_occurrences) > 0,
+            "occurrences_found": len(all_occurrences),
+            "search": search,
+            "match_case": match_case,
+            "matches": matches,
+            "formatting_to_apply": formatting_applied,
+            "link": doc_link,
+        }
+
+        if len(all_occurrences) == 0:
+            preview_result["message"] = f"No occurrences of '{search}' found in document"
+        else:
+            preview_result["message"] = f"Would format {len(all_occurrences)} occurrence(s) of '{search}' with {', '.join(formatting_applied)}"
+
+        return json.dumps(preview_result, indent=2)
+
+    # No occurrences found
+    if not all_occurrences:
+        return json.dumps({
+            "success": True,
+            "operation": "format_all",
+            "occurrences_formatted": 0,
+            "search": search,
+            "match_case": match_case,
+            "affected_ranges": [],
+            "formatting_applied": formatting_applied,
+            "message": f"No occurrences of '{search}' found in document",
+            "link": doc_link,
+        }, indent=2)
+
+    # Build formatting requests for each occurrence
+    format_requests = []
+    affected_ranges = []
+    for idx, (start, end) in enumerate(all_occurrences, 1):
+        format_request = create_format_text_request(
+            start, end, bold, italic, underline, strikethrough,
+            small_caps, subscript, superscript,
+            font_size, font_family, link, foreground_color, background_color
+        )
+        if format_request:
+            format_requests.append(format_request)
+            affected_ranges.append({
+                "index": idx,
+                "range": {"start": start, "end": end}
+            })
+
+    # Apply formatting in a single batch update
+    if format_requests:
+        await asyncio.to_thread(
+            service.documents().batchUpdate(
+                documentId=document_id,
+                body={'requests': format_requests}
+            ).execute
+        )
+
+    operation_result = {
+        "success": True,
+        "operation": "format_all",
+        "occurrences_formatted": len(format_requests),
+        "search": search,
+        "match_case": match_case,
+        "affected_ranges": affected_ranges,
+        "formatting_applied": formatting_applied,
+        "message": f"Applied formatting ({', '.join(formatting_applied)}) to {len(format_requests)} occurrence(s) of '{search}'",
+        "link": doc_link,
+    }
+
+    return json.dumps(operation_result, indent=2)
+
+
+@server.tool()
+@handle_http_errors("auto_linkify_doc", service_type="docs")
+@require_google_service("docs", "docs_write")
+async def auto_linkify_doc(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    auto_detect: bool = True,
+    url_pattern: str = None,
+    exclude_already_linked: bool = True,
+    preview: bool = False,
+) -> str:
+    """
+    Automatically converts plain text URLs into clickable hyperlinks throughout a Google Doc.
+
+    This tool scans the document for URLs that are not already hyperlinked and converts
+    them into clickable links. It's useful for cleaning up documents that contain
+    pasted URLs that weren't automatically linked.
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to update
+
+        Detection options:
+        auto_detect: If True (default), automatically detect URLs using standard patterns.
+            Detects http://, https://, and www. URLs.
+        url_pattern: Optional custom regex pattern to match URLs. If provided, this is used
+            instead of the default URL detection. Use for specialized URL formats.
+
+        Filtering options:
+        exclude_already_linked: If True (default), skip text that already has a hyperlink.
+            Set to False to re-apply links (useful for fixing broken links).
+
+        Preview mode:
+        preview: If True, returns what URLs would be linked without making changes.
+            Useful for reviewing before applying. Default: False
+
+    Examples:
+        # Auto-detect and linkify all plain URLs in document:
+        auto_linkify_doc(document_id="...")
+
+        # Preview what would be linked:
+        auto_linkify_doc(document_id="...", preview=True)
+
+        # Re-apply links even to already linked text (useful for fixing):
+        auto_linkify_doc(document_id="...", exclude_already_linked=False)
+
+        # Use custom pattern for specific URL format:
+        auto_linkify_doc(document_id="...",
+                        url_pattern=r"https://github\\.com/[\\w-]+/[\\w-]+")
+
+    Returns:
+        str: JSON string with operation details.
+
+        When preview=False (default), returns structured operation result:
+        {
+            "success": true,
+            "operation": "auto_linkify",
+            "urls_linked": 5,
+            "urls_found": 5,
+            "urls_skipped": 0,
+            "affected_ranges": [
+                {"url": "https://example.com", "range": {"start": 15, "end": 35}},
+                ...
+            ],
+            "message": "Linked 5 URL(s) in document",
+            "link": "https://docs.google.com/document/d/.../edit"
+        }
+
+        When preview=True, returns a preview response:
+        {
+            "preview": true,
+            "would_modify": true,
+            "urls_found": 5,
+            "urls_to_link": [
+                {"url": "https://example.com", "range": {"start": 15, "end": 35}},
+                ...
+            ],
+            "urls_already_linked": 2,
+            "message": "Would link 5 URL(s)"
+        }
+    """
+    import json
+    import re
+    from gdocs.docs_helpers import (
+        extract_document_text_with_indices,
+        create_format_text_request,
+    )
+
+    logger.info(f"[auto_linkify_doc] Doc={document_id}, auto_detect={auto_detect}, preview={preview}")
+
+    # Define URL regex patterns
+    # This pattern matches:
+    # - http:// and https:// URLs
+    # - www. URLs (will be prefixed with https://)
+    # The pattern avoids capturing trailing punctuation that's not part of the URL
+    DEFAULT_URL_PATTERN = (
+        r'(?:https?://|www\.)'  # Protocol or www.
+        r'[a-zA-Z0-9]'  # Must start with alphanumeric
+        r'(?:[a-zA-Z0-9\-._~:/?#\[\]@!$&\'()*+,;=%]*[a-zA-Z0-9/])?'  # URL chars, must end with alphanumeric or /
+    )
+
+    # Compile the pattern
+    if url_pattern:
+        try:
+            pattern = re.compile(url_pattern)
+        except re.error as e:
+            error = DocsErrorBuilder.invalid_param_value(
+                param_name="url_pattern",
+                received_value=url_pattern,
+                valid_values=["valid regular expression"],
+                context_description=f"Regex compilation failed: {e}"
+            )
+            return format_error(error)
+    else:
+        pattern = re.compile(DEFAULT_URL_PATTERN, re.IGNORECASE)
+
+    # Get document data
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Extract text with indices
+    text_segments = extract_document_text_with_indices(doc_data)
+
+    # Build full text and index mapping for regex matching
+    full_text = ""
+    index_map = []  # Maps position in full_text to document index
+
+    for segment_text, start_idx, _ in text_segments:
+        for i, char in enumerate(segment_text):
+            index_map.append(start_idx + i)
+            full_text += char
+
+    # Find all URLs in the document
+    found_urls = []
+    for match in pattern.finditer(full_text):
+        text_start = match.start()
+        text_end = match.end()
+        url_text = match.group()
+
+        # Map back to document indices
+        if text_start < len(index_map) and text_end <= len(index_map):
+            doc_start = index_map[text_start]
+            doc_end = index_map[text_end - 1] + 1
+
+            # Normalize URL (add https:// to www. URLs)
+            normalized_url = url_text
+            if url_text.lower().startswith('www.'):
+                normalized_url = 'https://' + url_text
+
+            found_urls.append({
+                "url": normalized_url,
+                "original_text": url_text,
+                "range": {"start": doc_start, "end": doc_end}
+            })
+
+    # If exclude_already_linked, check which URLs are already hyperlinked
+    urls_to_link = []
+    urls_already_linked = []
+
+    if exclude_already_linked and found_urls:
+        # Extract existing links from document
+        def extract_links_from_elements(elements, links_set):
+            """Recursively extract all link ranges from document elements."""
+            for element in elements:
+                if 'paragraph' in element:
+                    paragraph = element['paragraph']
+                    for para_element in paragraph.get('elements', []):
+                        if 'textRun' in para_element:
+                            text_run = para_element['textRun']
+                            text_style = text_run.get('textStyle', {})
+                            if 'link' in text_style:
+                                start_idx = para_element.get('startIndex', 0)
+                                end_idx = para_element.get('endIndex', 0)
+                                links_set.add((start_idx, end_idx))
+                elif 'table' in element:
+                    table = element['table']
+                    for row in table.get('tableRows', []):
+                        for cell in row.get('tableCells', []):
+                            cell_content = cell.get('content', [])
+                            extract_links_from_elements(cell_content, links_set)
+
+        existing_links = set()
+        body = doc_data.get('body', {})
+        content = body.get('content', [])
+        extract_links_from_elements(content, existing_links)
+
+        # Check each found URL against existing links
+        for url_info in found_urls:
+            url_start = url_info["range"]["start"]
+            url_end = url_info["range"]["end"]
+
+            # Check if this URL overlaps with any existing link
+            is_already_linked = False
+            for link_start, link_end in existing_links:
+                # Check for overlap
+                if url_start < link_end and url_end > link_start:
+                    is_already_linked = True
+                    break
+
+            if is_already_linked:
+                urls_already_linked.append(url_info)
+            else:
+                urls_to_link.append(url_info)
+    else:
+        urls_to_link = found_urls
+
+    doc_link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    # Handle preview mode
+    if preview:
+        preview_result = {
+            "preview": True,
+            "would_modify": len(urls_to_link) > 0,
+            "urls_found": len(found_urls),
+            "urls_to_link": urls_to_link,
+            "urls_already_linked": len(urls_already_linked),
+            "link": doc_link,
+        }
+
+        if len(urls_to_link) == 0:
+            if len(found_urls) == 0:
+                preview_result["message"] = "No URLs found in document"
+            else:
+                preview_result["message"] = f"All {len(found_urls)} URL(s) are already linked"
+        else:
+            preview_result["message"] = f"Would link {len(urls_to_link)} URL(s)"
+            if len(urls_already_linked) > 0:
+                preview_result["message"] += f" ({len(urls_already_linked)} already linked, will be skipped)"
+
+        return json.dumps(preview_result, indent=2)
+
+    # No URLs to link
+    if not urls_to_link:
+        return json.dumps({
+            "success": True,
+            "operation": "auto_linkify",
+            "urls_linked": 0,
+            "urls_found": len(found_urls),
+            "urls_skipped": len(urls_already_linked),
+            "affected_ranges": [],
+            "message": "No URLs found to link" if len(found_urls) == 0 else f"All {len(found_urls)} URL(s) are already linked",
+            "link": doc_link,
+        }, indent=2)
+
+    # Build formatting requests to apply links
+    format_requests = []
+    affected_ranges = []
+
+    for url_info in urls_to_link:
+        start = url_info["range"]["start"]
+        end = url_info["range"]["end"]
+        url = url_info["url"]
+
+        # Create format request with link
+        format_request = create_format_text_request(
+            start, end,
+            link=url  # Apply the URL as a hyperlink
+        )
+        if format_request:
+            format_requests.append(format_request)
+            affected_ranges.append({
+                "url": url,
+                "original_text": url_info["original_text"],
+                "range": {"start": start, "end": end}
+            })
+
+    # Apply links in a single batch update
+    if format_requests:
+        await asyncio.to_thread(
+            service.documents().batchUpdate(
+                documentId=document_id,
+                body={'requests': format_requests}
+            ).execute
+        )
+
+    operation_result = {
+        "success": True,
+        "operation": "auto_linkify",
+        "urls_linked": len(format_requests),
+        "urls_found": len(found_urls),
+        "urls_skipped": len(urls_already_linked),
+        "affected_ranges": affected_ranges,
+        "message": f"Linked {len(format_requests)} URL(s) in document",
+        "link": doc_link,
+    }
+
+    if len(urls_already_linked) > 0:
+        operation_result["message"] += f" ({len(urls_already_linked)} already linked, skipped)"
 
     return json.dumps(operation_result, indent=2)
 
@@ -1672,6 +2410,14 @@ async def insert_doc_elements(
                 valid_values=["UNORDERED", "ORDERED"]
             )
 
+        valid_list_types = ["ORDERED", "UNORDERED"]
+        if list_type.upper() not in valid_list_types:
+            return validator.create_invalid_param_error(
+                param_name="list_type",
+                received=list_type,
+                valid_values=valid_list_types
+            )
+
         if not text:
             text = "List item"
 
@@ -1717,8 +2463,8 @@ async def insert_doc_image(
     image_source: str,
     index: int = None,
     after_heading: str = None,
-    width: int = 0,
-    height: int = 0,
+    width: int = None,
+    height: int = None,
 ) -> str:
     """
     Inserts an image into a Google Doc from Drive or a URL.
@@ -2092,6 +2838,7 @@ async def batch_modify_doc(
         - search: Text to find in the document
         - position: "before" (insert before match), "after" (insert after), "replace" (replace match)
         - occurrence: Which occurrence to target (1=first, 2=second, -1=last)
+        - all_occurrences: If True, apply operation to ALL occurrences (not just first)
         - match_case: Whether to match case exactly (default: True)
 
     Example operations:
@@ -2102,6 +2849,14 @@ async def batch_modify_doc(
              "bold": True, "font_size": 14},
             {"type": "insert_text", "index": 1, "text": "Header text\\n"},
             {"type": "find_replace", "find_text": "old term", "replace_text": "new term"}
+        ]
+
+    Example with all_occurrences (format ALL matching text):
+        [
+            {"type": "format", "search": "TODO", "all_occurrences": True,
+             "bold": True, "foreground_color": "red"},
+            {"type": "replace", "search": "DRAFT", "all_occurrences": True,
+             "text": "FINAL"}
         ]
 
     Returns:
@@ -2226,6 +2981,7 @@ async def batch_edit_doc(
         - search: Text to find in the document
         - position: "before" (insert before match), "after" (insert after), "replace" (replace match)
         - occurrence: Which occurrence to target (1=first, 2=second, -1=last)
+        - all_occurrences: If True, apply operation to ALL occurrences (not just first)
         - match_case: Whether to match case exactly (default: True)
 
     Example operations:
@@ -2236,6 +2992,14 @@ async def batch_edit_doc(
              "bold": True, "font_size": 14},
             {"type": "insert_text", "index": 1, "text": "Header text\\n"},
             {"type": "find_replace", "find_text": "old term", "replace_text": "new term"}
+        ]
+
+    Example with all_occurrences (format ALL matching text):
+        [
+            {"type": "format", "search": "TODO", "all_occurrences": True,
+             "bold": True, "foreground_color": "red"},
+            {"type": "replace", "search": "DRAFT", "all_occurrences": True,
+             "text": "FINAL"}
         ]
 
     Returns:
@@ -3008,6 +3772,366 @@ async def debug_table_structure(
 
     link = f"https://docs.google.com/document/d/{document_id}/edit"
     return f"Table structure debug for table {table_index}:\n\n{json.dumps(debug_info, indent=2)}\n\nLink: {link}"
+
+
+@server.tool()
+@handle_http_errors("modify_table", service_type="docs")
+@require_google_service("docs", "docs_write")
+async def modify_table(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    table_index: int = 0,
+    operations: List[Dict[str, Any]] = None,
+) -> str:
+    """
+    Modify an existing table's structure by adding/removing rows/columns or updating cell content.
+
+    This tool supports multiple operations to modify table structure:
+    - insert_row: Add a new row to the table
+    - delete_row: Remove a row from the table
+    - insert_column: Add a new column to the table
+    - delete_column: Remove a column from the table
+    - update_cell: Update content of a specific cell
+
+    OPERATION FORMATS:
+
+    1. insert_row:
+       {"action": "insert_row", "row": 1, "insert_below": true}
+       - row: Reference row index (0-based)
+       - insert_below: If true, insert below the row; if false, insert above (default: true)
+
+    2. delete_row:
+       {"action": "delete_row", "row": 2}
+       - row: Row index to delete (0-based)
+
+    3. insert_column:
+       {"action": "insert_column", "column": 1, "insert_right": true}
+       - column: Reference column index (0-based)
+       - insert_right: If true, insert to the right; if false, insert to left (default: true)
+
+    4. delete_column:
+       {"action": "delete_column", "column": 2}
+       - column: Column index to delete (0-based)
+
+    5. update_cell:
+       {"action": "update_cell", "row": 0, "column": 1, "text": "New Value"}
+       - row, column: Cell coordinates (0-based)
+       - text: New text content for the cell (replaces existing content)
+
+    USAGE EXAMPLES:
+
+    # Add a row at the end of a 3-row table
+    operations=[{"action": "insert_row", "row": 2, "insert_below": true}]
+
+    # Delete the second row
+    operations=[{"action": "delete_row", "row": 1}]
+
+    # Add a column to the right of the first column
+    operations=[{"action": "insert_column", "column": 0, "insert_right": true}]
+
+    # Update a cell's content
+    operations=[{"action": "update_cell", "row": 1, "column": 2, "text": "Updated"}]
+
+    # Multiple operations (executed sequentially)
+    operations=[
+        {"action": "insert_row", "row": 0, "insert_below": true},
+        {"action": "update_cell", "row": 1, "column": 0, "text": "New Row Data"}
+    ]
+
+    IMPORTANT NOTES:
+    - Operations are executed sequentially in the order provided
+    - After structural changes (insert/delete row/column), the table structure is
+      refreshed before the next operation to ensure correct indices
+    - Row and column indices are 0-based (first row = 0, first column = 0)
+    - Use debug_table_structure before and after modifications to verify results
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document containing the table
+        table_index: Which table to modify (0 = first table, default)
+        operations: List of operation dictionaries describing modifications
+
+    Returns:
+        str: Summary of operations performed with success/failure status
+    """
+    import json as json_module
+    logger.debug(f"[modify_table] Doc={document_id}, table_index={table_index}, operations={operations}")
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, error_msg = validator.validate_document_id(document_id)
+    if not is_valid:
+        return f"ERROR: {error_msg}"
+
+    if not operations or not isinstance(operations, list):
+        return "ERROR: 'operations' must be a non-empty list of operation dictionaries"
+
+    # Valid operation actions
+    valid_actions = {'insert_row', 'delete_row', 'insert_column', 'delete_column', 'update_cell'}
+
+    # Validate all operations first
+    for i, op in enumerate(operations):
+        if not isinstance(op, dict):
+            return f"ERROR: Operation {i} must be a dictionary, got {type(op).__name__}"
+
+        action = op.get('action')
+        if not action:
+            return f"ERROR: Operation {i} missing required 'action' field"
+
+        if action not in valid_actions:
+            return (
+                f"ERROR: Operation {i} has invalid action '{action}'. "
+                f"Valid actions: {', '.join(sorted(valid_actions))}"
+            )
+
+        # Validate required fields per action
+        if action == 'insert_row':
+            if 'row' not in op:
+                return f"ERROR: Operation {i} (insert_row) missing required 'row' field"
+            if not isinstance(op['row'], int) or op['row'] < 0:
+                return f"ERROR: Operation {i} (insert_row) 'row' must be a non-negative integer"
+
+        elif action == 'delete_row':
+            if 'row' not in op:
+                return f"ERROR: Operation {i} (delete_row) missing required 'row' field"
+            if not isinstance(op['row'], int) or op['row'] < 0:
+                return f"ERROR: Operation {i} (delete_row) 'row' must be a non-negative integer"
+
+        elif action == 'insert_column':
+            if 'column' not in op:
+                return f"ERROR: Operation {i} (insert_column) missing required 'column' field"
+            if not isinstance(op['column'], int) or op['column'] < 0:
+                return f"ERROR: Operation {i} (insert_column) 'column' must be a non-negative integer"
+
+        elif action == 'delete_column':
+            if 'column' not in op:
+                return f"ERROR: Operation {i} (delete_column) missing required 'column' field"
+            if not isinstance(op['column'], int) or op['column'] < 0:
+                return f"ERROR: Operation {i} (delete_column) 'column' must be a non-negative integer"
+
+        elif action == 'update_cell':
+            if 'row' not in op or 'column' not in op:
+                return f"ERROR: Operation {i} (update_cell) missing required 'row' and/or 'column' fields"
+            if not isinstance(op['row'], int) or op['row'] < 0:
+                return f"ERROR: Operation {i} (update_cell) 'row' must be a non-negative integer"
+            if not isinstance(op['column'], int) or op['column'] < 0:
+                return f"ERROR: Operation {i} (update_cell) 'column' must be a non-negative integer"
+            if 'text' not in op:
+                return f"ERROR: Operation {i} (update_cell) missing required 'text' field"
+
+    # Import helper functions for table operations
+    from gdocs.docs_helpers import (
+        create_insert_table_row_request,
+        create_delete_table_row_request,
+        create_insert_table_column_request,
+        create_delete_table_column_request,
+        create_delete_range_request,
+        create_insert_text_request,
+    )
+
+    # Track results
+    results = []
+
+    # Execute operations sequentially
+    for i, op in enumerate(operations):
+        action = op['action']
+
+        try:
+            # Refresh table structure before each operation
+            doc = await asyncio.to_thread(
+                service.documents().get(documentId=document_id).execute
+            )
+            tables = find_tables(doc)
+
+            if table_index >= len(tables):
+                return validator.create_table_not_found_error(
+                    table_index=table_index,
+                    total_tables=len(tables)
+                )
+
+            table_info = tables[table_index]
+            table_start = table_info['start_index']
+            num_rows = table_info['rows']
+            num_cols = table_info['columns']
+
+            if action == 'insert_row':
+                row_idx = op['row']
+                insert_below = op.get('insert_below', True)
+
+                if row_idx >= num_rows:
+                    results.append(f"Op {i} (insert_row): FAILED - row {row_idx} out of bounds (table has {num_rows} rows)")
+                    continue
+
+                request = create_insert_table_row_request(
+                    table_start_index=table_start,
+                    row_index=row_idx,
+                    insert_below=insert_below
+                )
+
+                await asyncio.to_thread(
+                    service.documents().batchUpdate(
+                        documentId=document_id,
+                        body={'requests': [request]}
+                    ).execute
+                )
+
+                position = "below" if insert_below else "above"
+                results.append(f"Op {i} (insert_row): SUCCESS - inserted row {position} row {row_idx}")
+
+            elif action == 'delete_row':
+                row_idx = op['row']
+
+                if row_idx >= num_rows:
+                    results.append(f"Op {i} (delete_row): FAILED - row {row_idx} out of bounds (table has {num_rows} rows)")
+                    continue
+
+                if num_rows <= 1:
+                    results.append(f"Op {i} (delete_row): FAILED - cannot delete the only row in the table")
+                    continue
+
+                request = create_delete_table_row_request(
+                    table_start_index=table_start,
+                    row_index=row_idx
+                )
+
+                await asyncio.to_thread(
+                    service.documents().batchUpdate(
+                        documentId=document_id,
+                        body={'requests': [request]}
+                    ).execute
+                )
+
+                results.append(f"Op {i} (delete_row): SUCCESS - deleted row {row_idx}")
+
+            elif action == 'insert_column':
+                col_idx = op['column']
+                insert_right = op.get('insert_right', True)
+
+                if col_idx >= num_cols:
+                    results.append(f"Op {i} (insert_column): FAILED - column {col_idx} out of bounds (table has {num_cols} columns)")
+                    continue
+
+                request = create_insert_table_column_request(
+                    table_start_index=table_start,
+                    row_index=0,
+                    column_index=col_idx,
+                    insert_right=insert_right
+                )
+
+                await asyncio.to_thread(
+                    service.documents().batchUpdate(
+                        documentId=document_id,
+                        body={'requests': [request]}
+                    ).execute
+                )
+
+                position = "right of" if insert_right else "left of"
+                results.append(f"Op {i} (insert_column): SUCCESS - inserted column {position} column {col_idx}")
+
+            elif action == 'delete_column':
+                col_idx = op['column']
+
+                if col_idx >= num_cols:
+                    results.append(f"Op {i} (delete_column): FAILED - column {col_idx} out of bounds (table has {num_cols} columns)")
+                    continue
+
+                if num_cols <= 1:
+                    results.append(f"Op {i} (delete_column): FAILED - cannot delete the only column in the table")
+                    continue
+
+                request = create_delete_table_column_request(
+                    table_start_index=table_start,
+                    row_index=0,
+                    column_index=col_idx
+                )
+
+                await asyncio.to_thread(
+                    service.documents().batchUpdate(
+                        documentId=document_id,
+                        body={'requests': [request]}
+                    ).execute
+                )
+
+                results.append(f"Op {i} (delete_column): SUCCESS - deleted column {col_idx}")
+
+            elif action == 'update_cell':
+                row_idx = op['row']
+                col_idx = op['column']
+                new_text = op['text']
+
+                if row_idx >= num_rows:
+                    results.append(f"Op {i} (update_cell): FAILED - row {row_idx} out of bounds (table has {num_rows} rows)")
+                    continue
+
+                if col_idx >= num_cols:
+                    results.append(f"Op {i} (update_cell): FAILED - column {col_idx} out of bounds (table has {num_cols} columns)")
+                    continue
+
+                cells = table_info.get('cells', [])
+                if row_idx >= len(cells) or col_idx >= len(cells[row_idx]):
+                    results.append(f"Op {i} (update_cell): FAILED - cell ({row_idx}, {col_idx}) not accessible")
+                    continue
+
+                cell = cells[row_idx][col_idx]
+                cell_start = cell['start_index']
+                cell_end = cell['end_index']
+                current_content = cell.get('content', '')
+
+                # Build requests to replace cell content
+                requests = []
+
+                # Delete existing content if any (preserve cell structure markers)
+                # Cell content is between start_index and end_index-1 (the -1 is the cell end marker)
+                content_start = cell_start
+                content_end = cell_end - 1  # Leave the cell end marker
+
+                # Check if there's actual content to delete
+                if current_content and len(current_content.strip()) > 0:
+                    # Find actual text content boundaries (skip structural elements)
+                    insertion_index = cell.get('insertion_index')
+                    if insertion_index and current_content:
+                        # Delete the text content
+                        text_end = insertion_index + len(current_content.rstrip('\n'))
+                        if text_end > insertion_index:
+                            requests.append(create_delete_range_request(insertion_index, text_end))
+
+                # Insert new text at the cell insertion point
+                insertion_index = cell.get('insertion_index', cell_start + 1)
+
+                if new_text:
+                    requests.append(create_insert_text_request(insertion_index, new_text))
+
+                if requests:
+                    # Execute delete first (if any), then insert
+                    # Process in reverse order for correct index handling
+                    for req in reversed(requests):
+                        await asyncio.to_thread(
+                            service.documents().batchUpdate(
+                                documentId=document_id,
+                                body={'requests': [req]}
+                            ).execute
+                        )
+
+                results.append(f"Op {i} (update_cell): SUCCESS - updated cell ({row_idx}, {col_idx})")
+
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"[modify_table] Operation {i} ({action}) failed: {error_msg}")
+            results.append(f"Op {i} ({action}): FAILED - {error_msg}")
+
+    # Build summary
+    link = f"https://docs.google.com/document/d/{document_id}/edit"
+    success_count = sum(1 for r in results if 'SUCCESS' in r)
+    fail_count = len(results) - success_count
+
+    summary = f"Table modification complete. {success_count}/{len(operations)} operations succeeded.\n\n"
+    summary += "Results:\n" + "\n".join(f"  - {r}" for r in results)
+    summary += f"\n\nLink: {link}"
+
+    return summary
+
 
 @server.tool()
 @handle_http_errors("export_doc_to_pdf", service_type="drive")
