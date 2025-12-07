@@ -30,4 +30,4 @@ mcp_server_debug.log
 /.credentials
 /.claude
 PROMPT*
-.beads
+.beads/
