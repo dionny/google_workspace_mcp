@@ -1201,24 +1201,28 @@ class BatchOperationManager:
 
             # Validate operation type before processing
             if not op_type:
+                valid_types = sorted(set(OPERATION_ALIASES.values()))  # Canonical types only
+                example = {"type": "insert", "search": "target text", "position": "after", "text": "new text"}
                 results.append(BatchOperationResult(
                     index=i,
                     type='',
                     success=False,
                     description="Invalid operation",
-                    error="Missing 'type' field in operation",
+                    error=f"Missing 'type' field in operation at index {i}. "
+                          f"Valid types: {', '.join(valid_types)}. "
+                          f"Example: {example}",
                 ))
                 resolved_ops.append(None)
                 continue
 
             if op_type not in VALID_OPERATION_TYPES:
-                valid_types = sorted(VALID_OPERATION_TYPES)
+                valid_types = sorted(set(OPERATION_ALIASES.values()))  # Canonical types only
                 results.append(BatchOperationResult(
                     index=i,
                     type=op_type,
                     success=False,
                     description="Invalid operation type",
-                    error=f"Unsupported operation type: '{op_type}'. Valid types: {', '.join(valid_types)}",
+                    error=f"Unsupported operation type: '{op_type}' at index {i}. Valid types: {', '.join(valid_types)}",
                 ))
                 resolved_ops.append(None)
                 continue
@@ -1336,8 +1340,11 @@ class BatchOperationManager:
                 )
                 resolved_index = start_idx
             else:
-                # Index-based operation - apply cumulative shift
+                # Index-based operation - normalize type and apply cumulative shift
                 resolved_index = None
+                # Normalize the operation type (e.g., 'insert' -> 'insert_text')
+                if 'type' in op_copy:
+                    op_copy['type'] = normalize_operation_type(op_copy['type'])
                 if auto_adjust and cumulative_shift != 0:
                     op_copy = self._apply_position_shift(op_copy, cumulative_shift)
 
@@ -1614,7 +1621,9 @@ class BatchOperationManager:
 
         elif op_type == 'format_text':
             formats = []
-            for key in ['bold', 'italic', 'underline', 'font_size', 'font_family']:
+            for key in ['bold', 'italic', 'underline', 'strikethrough', 'small_caps',
+                        'subscript', 'superscript', 'font_size', 'font_family',
+                        'link', 'foreground_color', 'background_color']:
                 if op.get(key) is not None:
                     formats.append(f"{key}={op[key]}")
             return f"format {op.get('start_index', '?')}-{op.get('end_index', '?')} ({', '.join(formats) or 'none'})"
@@ -1645,6 +1654,16 @@ class BatchOperationManager:
 
             if op_type == 'insert_text':
                 requests.append(create_insert_text_request(op['index'], op['text']))
+                # Check if insert operation has formatting parameters - apply formatting after insert
+                format_req = create_format_text_request(
+                    op['index'], op['index'] + len(op['text']),
+                    op.get('bold'), op.get('italic'), op.get('underline'),
+                    op.get('strikethrough'), op.get('small_caps'), op.get('subscript'),
+                    op.get('superscript'), op.get('font_size'), op.get('font_family'),
+                    op.get('link'), op.get('foreground_color'), op.get('background_color')
+                )
+                if format_req:
+                    requests.append(format_req)
 
             elif op_type == 'delete_text':
                 requests.append(create_delete_range_request(
@@ -1659,6 +1678,16 @@ class BatchOperationManager:
                 requests.append(create_insert_text_request(
                     op['start_index'], op['text']
                 ))
+                # Check if replace operation has formatting parameters - apply formatting after insert
+                format_req = create_format_text_request(
+                    op['start_index'], op['start_index'] + len(op.get('text', '')),
+                    op.get('bold'), op.get('italic'), op.get('underline'),
+                    op.get('strikethrough'), op.get('small_caps'), op.get('subscript'),
+                    op.get('superscript'), op.get('font_size'), op.get('font_family'),
+                    op.get('link'), op.get('foreground_color'), op.get('background_color')
+                )
+                if format_req:
+                    requests.append(format_req)
 
             elif op_type == 'format_text':
                 req = create_format_text_request(
