@@ -810,6 +810,14 @@ async def modify_event(
             "location": location,
             "attendees": attendees
         })
+        
+        # Preserve start/end times if not provided (required by Google Calendar API)
+        if "start" not in event_body and "start" in existing_event:
+            event_body["start"] = existing_event["start"]
+            logger.info("[modify_event] Preserving existing start time")
+        if "end" not in event_body and "end" in existing_event:
+            event_body["end"] = existing_event["end"]
+            logger.info("[modify_event] Preserving existing end time")
 
         # Handle Google Meet conference data
         if add_google_meet is not None:
