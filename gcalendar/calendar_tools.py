@@ -490,6 +490,7 @@ async def create_event(
     reminders: Optional[Union[str, List[Dict[str, Any]]]] = None,
     use_default_reminders: bool = True,
     transparency: Optional[str] = None,
+    recurrence: Optional[List[str]] = None,
 ) -> str:
     """
     Creates a new event.
@@ -509,6 +510,17 @@ async def create_event(
         reminders (Optional[Union[str, List[Dict[str, Any]]]]): JSON string or list of reminder objects. Each should have 'method' ("popup" or "email") and 'minutes' (0-40320). Max 5 reminders. Example: '[{"method": "popup", "minutes": 15}]' or [{"method": "popup", "minutes": 15}]
         use_default_reminders (bool): Whether to use calendar's default reminders. If False, uses custom reminders. Defaults to True.
         transparency (Optional[str]): Event transparency for busy/free status. "opaque" shows as Busy (default), "transparent" shows as Available/Free. Defaults to None (uses Google Calendar default).
+        recurrence (Optional[List[str]]): List of RRULE strings for recurring events. Common examples:
+            - Weekly meeting: ["RRULE:FREQ=WEEKLY"]
+            - Weekly on specific days: ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"]
+            - Bi-weekly meeting: ["RRULE:FREQ=WEEKLY;INTERVAL=2"]
+            - Daily standup (weekdays): ["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"]
+            - Monthly on specific date: ["RRULE:FREQ=MONTHLY;BYMONTHDAY=15"]
+            - Monthly on last Friday: ["RRULE:FREQ=MONTHLY;BYDAY=-1FR"]
+            - Quarterly meeting: ["RRULE:FREQ=MONTHLY;INTERVAL=3"]
+            - Limited occurrences: ["RRULE:FREQ=WEEKLY;COUNT=10"]
+            - Until specific date: ["RRULE:FREQ=WEEKLY;UNTIL=20240630T235959Z"]
+            - Annual event: ["RRULE:FREQ=YEARLY"]
 
     Returns:
         str: Confirmation message of the successful event creation with event link.
@@ -543,6 +555,10 @@ async def create_event(
             event_body["end"]["timeZone"] = timezone
     if attendees:
         event_body["attendees"] = [{"email": email} for email in attendees]
+
+    if recurrence:
+        event_body["recurrence"] = recurrence
+        logger.info(f"[create_event] Adding recurrence rules: {recurrence}")
 
     # Handle reminders
     if reminders is not None or not use_default_reminders:
@@ -911,3 +927,136 @@ async def delete_event(service, user_google_email: str, event_id: str, calendar_
     confirmation_message = f"Successfully deleted event (ID: {event_id}) from calendar '{calendar_id}' for {user_google_email}."
     logger.info(f"Event deleted successfully for {user_google_email}. ID: {event_id}")
     return confirmation_message
+
+
+@server.tool()
+@handle_http_errors("get_events_times_only", is_read_only=True, service_type="calendar")
+@require_google_service("calendar", "calendar_read")
+async def get_events_times_only(
+    service,
+    user_google_email: str,
+    calendar_id: str = "primary",
+    time_min: Optional[str] = None,
+    time_max: Optional[str] = None,
+    max_results: int = 25,
+) -> str:
+    """
+    Retrieves only the start and end times of events from a specified Google Calendar within a given time range.
+    Events are grouped by weekday and de-duplicated by title and time (marking recurring events).
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        calendar_id (str): The ID of the calendar to query. Use 'primary' for the user's primary calendar. Defaults to 'primary'.
+        time_min (Optional[str]): The start of the time range (inclusive) in RFC3339 format (e.g., '2024-05-12T10:00:00Z' or '2024-05-12'). If omitted, defaults to the current time.
+        time_max (Optional[str]): The end of the time range (exclusive) in RFC3339 format. If omitted, events starting from `time_min` onwards are considered (up to `max_results`).
+        max_results (int): The maximum number of events to return. Defaults to 25.
+
+    Returns:
+        str: A formatted list of event times grouped by weekday with recurring events marked.
+    """
+    logger.info(
+        f"[get_events_times_only] Raw time parameters - time_min: '{time_min}', time_max: '{time_max}'"
+    )
+
+    # Ensure time_min and time_max are correctly formatted for the API
+    formatted_time_min = _correct_time_format_for_api(time_min, "time_min")
+    if formatted_time_min:
+        effective_time_min = formatted_time_min
+    else:
+        utc_now = datetime.datetime.now(datetime.timezone.utc)
+        effective_time_min = utc_now.isoformat().replace("+00:00", "Z")
+    if time_min is None:
+        logger.info(
+            f"time_min not provided, defaulting to current UTC time: {effective_time_min}"
+        )
+    else:
+        logger.info(
+            f"time_min processing: original='{time_min}', formatted='{formatted_time_min}', effective='{effective_time_min}'"
+        )
+
+    effective_time_max = _correct_time_format_for_api(time_max, "time_max")
+    if time_max:
+        logger.info(
+            f"time_max processing: original='{time_max}', formatted='{effective_time_max}'"
+        )
+
+    logger.info(
+        f"[get_events_times_only] Final API parameters - calendarId: '{calendar_id}', timeMin: '{effective_time_min}', timeMax: '{effective_time_max}', maxResults: {max_results}"
+    )
+
+    events_result = await asyncio.to_thread(
+        lambda: service.events()
+        .list(
+            calendarId=calendar_id,
+            timeMin=effective_time_min,
+            timeMax=effective_time_max,
+            maxResults=max_results,
+            singleEvents=True,
+            orderBy="startTime",
+        )
+        .execute()
+    )
+    items = events_result.get("items", [])
+    if not items:
+        return f"No events found in calendar '{calendar_id}' for {user_google_email} for the specified time range."
+
+    # Group events by weekday
+    weekday_events: Dict[str, Dict[str, int]] = {
+        "Monday": {},
+        "Tuesday": {},
+        "Wednesday": {},
+        "Thursday": {},
+        "Friday": {},
+        "Saturday": {},
+        "Sunday": {}
+    }
+
+    for item in items:
+        summary = item.get("summary", "No Title")
+        start_str = item["start"].get("dateTime", item["start"].get("date"))
+        end_str = item["end"].get("dateTime", item["end"].get("date"))
+
+        # Parse datetime to get weekday and time components
+        try:
+            # Handle both datetime and date-only formats
+            if "T" in start_str:
+                start_dt = datetime.datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+                end_dt = datetime.datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+                start_time = start_dt.strftime("%H:%M")
+                end_time = end_dt.strftime("%H:%M")
+            else:
+                # All-day events
+                start_dt = datetime.datetime.strptime(start_str, "%Y-%m-%d")
+                start_time = "All day"
+                end_time = ""
+
+            weekday_name = start_dt.strftime("%A")
+            event_key = f"{summary} ({start_time}-{end_time})" if end_time else f"{summary} ({start_time})"
+
+            # Track occurrences for de-duplication
+            if event_key in weekday_events[weekday_name]:
+                weekday_events[weekday_name][event_key] += 1
+            else:
+                weekday_events[weekday_name][event_key] = 1
+
+        except (ValueError, KeyError) as e:
+            logger.warning(f"[get_events_times_only] Could not parse event time: {e}")
+            continue
+
+    # Format output
+    output_lines = [f"Events for {user_google_email} (calendar: {calendar_id}):"]
+    for weekday in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]:
+        events = weekday_events[weekday]
+        if events:
+            output_lines.append(f"\n{weekday}:")
+            for event_key, count in events.items():
+                if count > 1:
+                    output_lines.append(f"  - {event_key} (recurring, {count} occurrences)")
+                else:
+                    output_lines.append(f"  - {event_key}")
+
+    if len(output_lines) == 1:
+        return f"No events found in calendar '{calendar_id}' for {user_google_email} for the specified time range."
+
+    logger.info(f"[get_events_times_only] Successfully retrieved events for {user_google_email}")
+    return "\n".join(output_lines)
