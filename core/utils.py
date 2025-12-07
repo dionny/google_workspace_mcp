@@ -235,6 +235,110 @@ def extract_office_xml_text(file_bytes: bytes, mime_type: str) -> Optional[str]:
         return None
 
 
+def _parse_docs_index_error(error_details: str) -> Optional[str]:
+    """
+    Parse Google Docs API error details to detect index out-of-bounds errors.
+
+    Returns a structured error JSON string if an index error is detected, None otherwise.
+
+    Common patterns:
+    - "Index X must be less than the end index of the referenced segment, Y"
+    - "The insertion index must be inside the bounds of an existing paragraph"
+    """
+    import re
+    import json
+
+    # Pattern 1: "Index X must be less than the end index of the referenced segment, Y"
+    match = re.search(
+        r"Index\s+(\d+)\s+must be less than the end index of the referenced segment,?\s*(\d+)?",
+        error_details,
+        re.IGNORECASE
+    )
+    if match:
+        index_value = int(match.group(1))
+        doc_length = int(match.group(2)) if match.group(2) else None
+
+        error_response = {
+            "error": True,
+            "code": "INDEX_OUT_OF_BOUNDS",
+            "message": f"Index {index_value} exceeds document length" + (f" ({doc_length})" if doc_length else ""),
+            "reason": f"The requested index {index_value} is beyond the end of the document." + (
+                f" Document length is {doc_length} characters (valid indices: 1 to {doc_length - 1})."
+                if doc_length else ""
+            ),
+            "suggestion": "Use inspect_doc_structure to check document length before editing. "
+                         "Valid indices are from 1 to document_length - 1.",
+            "example": {
+                "check_length": "inspect_doc_structure(document_id='...')",
+                "valid_usage": f"Use an index less than {doc_length}" if doc_length else "Use a valid index within document bounds"
+            },
+            "context": {
+                "received": {"index": index_value},
+            }
+        }
+        if doc_length:
+            error_response["context"]["document_length"] = doc_length
+
+        return json.dumps(error_response, indent=2)
+
+    # Pattern 2: "The insertion index must be inside the bounds of an existing paragraph"
+    if "insertion index must be inside the bounds" in error_details.lower():
+        # Try to extract the index value from the error
+        idx_match = re.search(r"index[:\s]+(\d+)", error_details, re.IGNORECASE)
+        index_value = int(idx_match.group(1)) if idx_match else None
+
+        error_response = {
+            "error": True,
+            "code": "INDEX_OUT_OF_BOUNDS",
+            "message": "Insertion index is outside document bounds" + (f" (index: {index_value})" if index_value else ""),
+            "reason": "The insertion point is not within a valid text location in the document. "
+                     "This often happens when trying to insert at an index that doesn't exist yet.",
+            "suggestion": "Use inspect_doc_structure to find valid insertion points. "
+                         "For a new or empty document, use index 1.",
+            "example": {
+                "check_structure": "inspect_doc_structure(document_id='...')",
+                "empty_doc": "For an empty document, use start_index=1"
+            },
+        }
+        if index_value is not None:
+            error_response["context"] = {"received": {"index": index_value}}
+
+        return json.dumps(error_response, indent=2)
+
+    return None
+
+
+def _create_docs_not_found_error(document_id: str) -> str:
+    """
+    Create a structured error response for document not found (404) errors.
+
+    Args:
+        document_id: The document ID that was not found
+
+    Returns:
+        A JSON string with structured error details
+    """
+    import json
+
+    error_response = {
+        "error": True,
+        "code": "DOCUMENT_NOT_FOUND",
+        "message": f"Document '{document_id}' was not found",
+        "reason": "The document ID may be incorrect or you may not have access to this document.",
+        "suggestion": "Verify the document ID is correct. You can find the ID in the document's URL: docs.google.com/document/d/{document_id}/edit",
+        "context": {
+            "received": {"document_id": document_id},
+            "possible_causes": [
+                "Document ID is incorrect",
+                "Document was deleted",
+                "You don't have permission to access this document",
+                "Document ID includes extra characters (quotes, spaces)"
+            ]
+        }
+    }
+    return json.dumps(error_response, indent=2)
+
+
 def handle_http_errors(tool_name: str, is_read_only: bool = False, service_type: Optional[str] = None):
     """
     A decorator to handle Google API HttpErrors and transient SSL errors in a standardized way.
@@ -279,11 +383,11 @@ def handle_http_errors(tool_name: str, is_read_only: bool = False, service_type:
                 except HttpError as error:
                     user_google_email = kwargs.get("user_google_email", "N/A")
                     error_details = str(error)
-                    
+
                     # Check if this is an API not enabled error
                     if error.resp.status == 403 and "accessNotConfigured" in error_details:
                         enablement_msg = get_api_enablement_message(error_details, service_type)
-                        
+
                         if enablement_msg:
                             message = (
                                 f"API error in {tool_name}: {enablement_msg}\n\n"
@@ -302,10 +406,24 @@ def handle_http_errors(tool_name: str, is_read_only: bool = False, service_type:
                             f"You might need to re-authenticate for user '{user_google_email}'. "
                             f"LLM: Try 'start_google_auth' with the user's email and the appropriate service_name."
                         )
+                    elif error.resp.status == 400 and service_type == "docs":
+                        # Check for index out-of-bounds errors in Google Docs API
+                        structured_error = _parse_docs_index_error(error_details)
+                        if structured_error:
+                            logger.error(f"Index error in {tool_name}: {error}", exc_info=True)
+                            return structured_error
+                        # Fall through to generic error handling if not an index error
+                        message = f"API error in {tool_name}: {error}"
+                    elif error.resp.status == 404 and service_type == "docs":
+                        # Document not found error - return structured error response
+                        document_id = kwargs.get("document_id", "unknown")
+                        structured_error = _create_docs_not_found_error(document_id)
+                        logger.error(f"Document not found in {tool_name}: {error}", exc_info=True)
+                        return structured_error
                     else:
                         # Other HTTP errors (400 Bad Request, etc.) - don't suggest re-auth
                         message = f"API error in {tool_name}: {error}"
-                    
+
                     logger.error(f"API error in {tool_name}: {error}", exc_info=True)
                     raise Exception(message) from error
                 except TransientNetworkError:

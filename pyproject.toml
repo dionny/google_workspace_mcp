@@ -72,3 +72,9 @@ py-modules = [ "main"]
 
 [tool.setuptools.package-data]
 core = ["tool_tiers.yaml"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.1",
+    "pytest-asyncio>=1.3.0",
+]
