@@ -5560,6 +5560,14 @@ async def modify_table(
        - padding_top, padding_bottom, padding_left, padding_right: Padding in points
        - content_alignment: Vertical content alignment (TOP, MIDDLE, BOTTOM)
 
+    10. resize_column:
+        {"action": "resize_column", "column": 0, "width": 100}
+        - column: Column index (0-based) or list of column indices to resize
+        - width: Width in points (minimum 5 points per Google API requirement)
+        - width_type: "FIXED_WIDTH" (default) or "EVENLY_DISTRIBUTED"
+        - Single column: {"action": "resize_column", "column": 0, "width": 150}
+        - Multiple columns: {"action": "resize_column", "column": [0, 2], "width": 100}
+
     USAGE EXAMPLES:
 
     # Add a row at the end of a 3-row table
@@ -5593,6 +5601,12 @@ async def modify_table(
     # Format cell with custom top border only
     operations=[{"action": "format_cell", "row": 0, "column": 0,
                  "border_top": {"color": "blue", "width": 3, "dash_style": "SOLID"}}]
+
+    # Resize a single column to 150 points
+    operations=[{"action": "resize_column", "column": 0, "width": 150}]
+
+    # Resize multiple columns at once
+    operations=[{"action": "resize_column", "column": [0, 2], "width": 100}]
 
     # Multiple operations (executed sequentially)
     operations=[
@@ -5649,6 +5663,7 @@ async def modify_table(
         "merge_cells",
         "unmerge_cells",
         "format_cell",
+        "resize_column",
     }
 
     # Validate all operations first
@@ -5763,6 +5778,32 @@ async def modify_table(
             if not any(opt in op for opt in format_options):
                 return f"ERROR: Operation {i} (format_cell) must specify at least one formatting option"
 
+        elif action == "resize_column":
+            if "column" not in op:
+                return f"ERROR: Operation {i} (resize_column) missing required 'column' field"
+            # Column can be int or list of ints
+            col_val = op["column"]
+            if isinstance(col_val, int):
+                if col_val < 0:
+                    return f"ERROR: Operation {i} (resize_column) 'column' must be a non-negative integer"
+            elif isinstance(col_val, list):
+                if not col_val:
+                    return f"ERROR: Operation {i} (resize_column) 'column' list must not be empty"
+                for idx, c in enumerate(col_val):
+                    if not isinstance(c, int) or c < 0:
+                        return f"ERROR: Operation {i} (resize_column) 'column[{idx}]' must be a non-negative integer"
+            else:
+                return f"ERROR: Operation {i} (resize_column) 'column' must be an integer or list of integers"
+            if "width" not in op:
+                return f"ERROR: Operation {i} (resize_column) missing required 'width' field"
+            if not isinstance(op["width"], (int, float)) or op["width"] < 5:
+                return f"ERROR: Operation {i} (resize_column) 'width' must be at least 5 points"
+            # Validate width_type if provided
+            if "width_type" in op:
+                valid_width_types = {"FIXED_WIDTH", "EVENLY_DISTRIBUTED"}
+                if op["width_type"] not in valid_width_types:
+                    return f"ERROR: Operation {i} (resize_column) 'width_type' must be one of: {', '.join(valid_width_types)}"
+
     # Import helper functions for table operations
     from gdocs.docs_helpers import (
         create_insert_table_row_request,
@@ -5774,6 +5815,7 @@ async def modify_table(
         create_merge_table_cells_request,
         create_unmerge_table_cells_request,
         create_update_table_cell_style_request,
+        create_update_table_column_properties_request,
     )
 
     # Track results
@@ -6184,6 +6226,43 @@ async def modify_table(
 
                 results.append(
                     f"Op {i} (format_cell): SUCCESS - formatted cell(s) {cell_range} with {format_desc}"
+                )
+
+            elif action == "resize_column":
+                col_val = op["column"]
+                width = op["width"]
+                width_type = op.get("width_type", "FIXED_WIDTH")
+
+                # Convert single column to list
+                if isinstance(col_val, int):
+                    column_indices = [col_val]
+                else:
+                    column_indices = col_val
+
+                # Validate all columns are within bounds
+                out_of_bounds = [c for c in column_indices if c >= num_cols]
+                if out_of_bounds:
+                    results.append(
+                        f"Op {i} (resize_column): FAILED - column(s) {out_of_bounds} out of bounds (table has {num_cols} columns)"
+                    )
+                    continue
+
+                request = create_update_table_column_properties_request(
+                    table_start_index=table_start,
+                    column_indices=column_indices,
+                    width=width,
+                    width_type=width_type,
+                )
+
+                await asyncio.to_thread(
+                    service.documents()
+                    .batchUpdate(documentId=document_id, body={"requests": [request]})
+                    .execute
+                )
+
+                col_desc = f"column {column_indices[0]}" if len(column_indices) == 1 else f"columns {column_indices}"
+                results.append(
+                    f"Op {i} (resize_column): SUCCESS - resized {col_desc} to {width}pt ({width_type})"
                 )
 
         except Exception as e:
@@ -9605,3 +9684,246 @@ async def delete_doc_named_range(
         response["message"] = f"Deleted all named ranges with name '{name}'"
 
     return json.dumps(response, indent=2)
+
+
+@server.tool()
+@handle_http_errors("convert_list_type", service_type="docs")
+@require_google_service("docs", "docs_write")
+async def convert_list_type(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    list_type: str,
+    list_index: int = 0,
+    search: str = None,
+    start_index: int = None,
+    end_index: int = None,
+    preview: bool = False,
+) -> str:
+    """
+    Convert an existing list between bullet (unordered) and numbered (ordered) types.
+
+    Use this tool to change a bullet list to a numbered list or vice versa without
+    having to delete and recreate the list.
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document containing the list
+        list_type: Target list type to convert to. Values:
+            - "ORDERED" or "numbered": Convert to numbered list (1, 2, 3...)
+            - "UNORDERED" or "bullet": Convert to bullet list
+        list_index: Which list to convert (0-based, default 0 for first list).
+            Used when not specifying search or index range.
+        search: Text to search for within a list item. If provided, converts the
+            list containing that text.
+        start_index: Explicit start position of the range to convert (optional).
+        end_index: Explicit end position of the range to convert (optional).
+        preview: If True, show what would be converted without making changes.
+
+    Returns:
+        JSON string with conversion result or preview information.
+
+    Examples:
+        # Convert the first list to numbered
+        convert_list_type(document_id="abc123", list_type="numbered")
+
+        # Convert the second list to bullets
+        convert_list_type(document_id="abc123", list_type="bullet", list_index=1)
+
+        # Convert list containing specific text to numbered
+        convert_list_type(document_id="abc123", list_type="ORDERED",
+                         search="step one")
+
+        # Preview what would be converted
+        convert_list_type(document_id="abc123", list_type="bullet", preview=True)
+
+    Notes:
+        - This tool finds existing lists and re-applies bullet formatting with
+          the new type
+        - All items in the affected list will be converted
+        - Use find_doc_elements with element_type='list' to see all lists first
+    """
+    import json
+
+    logger.debug(
+        f"[convert_list_type] Doc={document_id}, list_type={list_type}, "
+        f"list_index={list_index}, search={search}"
+    )
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    # Normalize list_type parameter
+    list_type_aliases = {
+        "bullet": "UNORDERED",
+        "bullets": "UNORDERED",
+        "unordered": "UNORDERED",
+        "numbered": "ORDERED",
+        "numbers": "ORDERED",
+        "ordered": "ORDERED",
+    }
+    normalized_type = list_type_aliases.get(list_type.lower(), list_type.upper())
+
+    if normalized_type not in ["ORDERED", "UNORDERED"]:
+        error = DocsErrorBuilder.invalid_param_value(
+            param_name="list_type",
+            received=list_type,
+            valid_values=["ORDERED", "UNORDERED", "numbered", "bullet"],
+        )
+        return format_error(error)
+
+    doc_link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    # Get document content
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Find all lists in the document
+    all_lists = find_elements_by_type(doc_data, "list")
+
+    if not all_lists:
+        return json.dumps({
+            "error": True,
+            "code": "NO_LISTS_FOUND",
+            "message": "No lists found in the document",
+            "suggestion": "Use insert_doc_elements or modify_doc_text with convert_to_list to create a list first",
+            "link": doc_link,
+        }, indent=2)
+
+    # Find the target list
+    target_list = None
+
+    if search:
+        # Find list containing the search text
+        search_lower = search.lower()
+        for lst in all_lists:
+            for item in lst.get("items", []):
+                if search_lower in item.get("text", "").lower():
+                    target_list = lst
+                    break
+            if target_list:
+                break
+
+        if not target_list:
+            return json.dumps({
+                "error": True,
+                "code": "LIST_NOT_FOUND",
+                "message": f"No list containing text '{search}' found",
+                "suggestion": "Check the search text or use find_doc_elements with element_type='list' to see all lists",
+                "available_lists": len(all_lists),
+                "link": doc_link,
+            }, indent=2)
+
+    elif start_index is not None and end_index is not None:
+        # Find list overlapping with the given range
+        for lst in all_lists:
+            if lst["start_index"] < end_index and lst["end_index"] > start_index:
+                target_list = lst
+                break
+
+        if not target_list:
+            return json.dumps({
+                "error": True,
+                "code": "LIST_NOT_FOUND",
+                "message": f"No list found in range {start_index}-{end_index}",
+                "suggestion": "Use find_doc_elements with element_type='list' to see list positions",
+                "available_lists": len(all_lists),
+                "link": doc_link,
+            }, indent=2)
+
+    else:
+        # Use list_index
+        if list_index < 0 or list_index >= len(all_lists):
+            return json.dumps({
+                "error": True,
+                "code": "INVALID_LIST_INDEX",
+                "message": f"List index {list_index} is out of range. Document has {len(all_lists)} list(s).",
+                "suggestion": f"Use list_index between 0 and {len(all_lists) - 1}",
+                "available_lists": len(all_lists),
+                "link": doc_link,
+            }, indent=2)
+        target_list = all_lists[list_index]
+
+    # Determine current list type for display
+    current_type = target_list.get("list_type", target_list.get("type", "unknown"))
+    if "bullet" in current_type or "unordered" in current_type.lower():
+        current_type_display = "bullet"
+        current_type_normalized = "UNORDERED"
+    else:
+        current_type_display = "numbered"
+        current_type_normalized = "ORDERED"
+
+    target_type_display = "numbered" if normalized_type == "ORDERED" else "bullet"
+
+    # Check if already the target type
+    if current_type_normalized == normalized_type:
+        return json.dumps({
+            "success": True,
+            "message": f"List is already a {target_type_display} list",
+            "no_change_needed": True,
+            "list_range": {
+                "start_index": target_list["start_index"],
+                "end_index": target_list["end_index"],
+            },
+            "items_count": len(target_list.get("items", [])),
+            "link": doc_link,
+        }, indent=2)
+
+    # Build preview info
+    preview_info = {
+        "current_type": current_type_display,
+        "target_type": target_type_display,
+        "list_range": {
+            "start_index": target_list["start_index"],
+            "end_index": target_list["end_index"],
+        },
+        "items_count": len(target_list.get("items", [])),
+        "items": [
+            {
+                "text": item.get("text", "")[:50] + ("..." if len(item.get("text", "")) > 50 else ""),
+                "start_index": item["start_index"],
+                "end_index": item["end_index"],
+            }
+            for item in target_list.get("items", [])[:5]  # Show up to 5 items in preview
+        ],
+    }
+
+    if preview:
+        return json.dumps({
+            "preview": True,
+            "message": f"Would convert {current_type_display} list to {target_type_display} list",
+            **preview_info,
+            "link": doc_link,
+        }, indent=2)
+
+    # Create the conversion request using createParagraphBullets
+    request = create_bullet_list_request(
+        target_list["start_index"],
+        target_list["end_index"],
+        normalized_type
+    )
+
+    # Execute the request
+    await asyncio.to_thread(
+        service.documents()
+        .batchUpdate(documentId=document_id, body={"requests": [request]})
+        .execute
+    )
+
+    return json.dumps({
+        "success": True,
+        "message": f"Converted {current_type_display} list to {target_type_display} list",
+        "converted_from": current_type_display,
+        "converted_to": target_type_display,
+        "list_range": {
+            "start_index": target_list["start_index"],
+            "end_index": target_list["end_index"],
+        },
+        "items_count": len(target_list.get("items", [])),
+        "link": doc_link,
+    }, indent=2)

@@ -1112,6 +1112,11 @@ def create_paragraph_style_request(
     line_spacing: float = None,
     heading_style: str = None,
     alignment: str = None,
+    indent_first_line: float = None,
+    indent_start: float = None,
+    indent_end: float = None,
+    space_above: float = None,
+    space_below: float = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Create an updateParagraphStyle request for Google Docs API.
@@ -1127,6 +1132,17 @@ def create_paragraph_style_request(
             NORMAL_TEXT, TITLE, SUBTITLE
         alignment: Paragraph alignment. Valid values:
             START (left-aligned for LTR), CENTER, END (right-aligned for LTR), JUSTIFIED
+        indent_first_line: First line indentation in points (72 points = 1 inch).
+            Use positive values for standard first line indent.
+            Use negative values (with indent_start) for hanging indent.
+        indent_start: Left margin indentation in points for LTR text (72 points = 1 inch).
+            This is the paragraph's left edge offset from the page margin.
+        indent_end: Right margin indentation in points for LTR text (72 points = 1 inch).
+            This is the paragraph's right edge offset from the page margin.
+        space_above: Extra space above the paragraph in points (72 points = 1 inch).
+            Common values: 0 (none), 6 (small), 12 (medium), 18 (large)
+        space_below: Extra space below the paragraph in points (72 points = 1 inch).
+            Common values: 0 (none), 6 (small), 12 (medium), 18 (large)
 
     Returns:
         Dictionary representing the updateParagraphStyle request, or None if no styles provided
@@ -1145,6 +1161,41 @@ def create_paragraph_style_request(
     if alignment is not None:
         paragraph_style['alignment'] = alignment
         fields.append('alignment')
+
+    if indent_first_line is not None:
+        paragraph_style['indentFirstLine'] = {
+            'magnitude': indent_first_line,
+            'unit': 'PT'
+        }
+        fields.append('indentFirstLine')
+
+    if indent_start is not None:
+        paragraph_style['indentStart'] = {
+            'magnitude': indent_start,
+            'unit': 'PT'
+        }
+        fields.append('indentStart')
+
+    if indent_end is not None:
+        paragraph_style['indentEnd'] = {
+            'magnitude': indent_end,
+            'unit': 'PT'
+        }
+        fields.append('indentEnd')
+
+    if space_above is not None:
+        paragraph_style['spaceAbove'] = {
+            'magnitude': space_above,
+            'unit': 'PT'
+        }
+        fields.append('spaceAbove')
+
+    if space_below is not None:
+        paragraph_style['spaceBelow'] = {
+            'magnitude': space_below,
+            'unit': 'PT'
+        }
+        fields.append('spaceBelow')
 
     if not paragraph_style:
         return None
@@ -2156,6 +2207,271 @@ def create_delete_table_column_request(
     }
 
 
+def create_merge_table_cells_request(
+    table_start_index: int,
+    row_index: int,
+    column_index: int,
+    row_span: int,
+    column_span: int
+) -> Dict[str, Any]:
+    """
+    Create a mergeTableCells request for Google Docs API.
+
+    Merges cells in a table within the specified rectangular range.
+    The text content of all cells will be concatenated and stored in
+    the upper-left cell of the merged range.
+
+    Args:
+        table_start_index: Start index of the table in the document
+        row_index: Row index of the upper-left cell (0-based)
+        column_index: Column index of the upper-left cell (0-based)
+        row_span: Number of rows to merge (minimum 1)
+        column_span: Number of columns to merge (minimum 1)
+
+    Returns:
+        Dictionary representing the mergeTableCells request
+    """
+    return {
+        'mergeTableCells': {
+            'tableRange': {
+                'tableCellLocation': {
+                    'tableStartLocation': {
+                        'index': table_start_index
+                    },
+                    'rowIndex': row_index,
+                    'columnIndex': column_index
+                },
+                'rowSpan': row_span,
+                'columnSpan': column_span
+            }
+        }
+    }
+
+
+def create_unmerge_table_cells_request(
+    table_start_index: int,
+    row_index: int,
+    column_index: int,
+    row_span: int,
+    column_span: int
+) -> Dict[str, Any]:
+    """
+    Create an unmergeTableCells request for Google Docs API.
+
+    Unmerges cells in a table within the specified range. If the
+    cells are not merged, this has no effect.
+
+    Args:
+        table_start_index: Start index of the table in the document
+        row_index: Row index of the upper-left cell (0-based)
+        column_index: Column index of the upper-left cell (0-based)
+        row_span: Number of rows in the range (minimum 1)
+        column_span: Number of columns in the range (minimum 1)
+
+    Returns:
+        Dictionary representing the unmergeTableCells request
+    """
+    return {
+        'unmergeTableCells': {
+            'tableRange': {
+                'tableCellLocation': {
+                    'tableStartLocation': {
+                        'index': table_start_index
+                    },
+                    'rowIndex': row_index,
+                    'columnIndex': column_index
+                },
+                'rowSpan': row_span,
+                'columnSpan': column_span
+            }
+        }
+    }
+
+
+def create_update_table_column_properties_request(
+    table_start_index: int,
+    column_indices: List[int],
+    width: float,
+    width_type: str = "FIXED_WIDTH"
+) -> Dict[str, Any]:
+    """
+    Create an updateTableColumnProperties request for Google Docs API.
+
+    Updates the width properties of one or more columns in a table.
+
+    Args:
+        table_start_index: Start index of the table in the document
+        column_indices: List of zero-based column indices to update.
+            If empty list, all columns will be updated.
+        width: Width in points (must be at least 5 points per Google API requirement)
+        width_type: Type of width specification. Valid values:
+            - "FIXED_WIDTH": Column has a fixed width (default)
+            - "EVENLY_DISTRIBUTED": Column width is distributed evenly
+
+    Returns:
+        Dictionary representing the updateTableColumnProperties request
+
+    Note:
+        If width is less than 5 points (5/72 inch), the Google API will
+        return a 400 bad request error.
+    """
+    return {
+        'updateTableColumnProperties': {
+            'tableStartLocation': {
+                'index': table_start_index
+            },
+            'columnIndices': column_indices,
+            'tableColumnProperties': {
+                'widthType': width_type,
+                'width': {
+                    'magnitude': width,
+                    'unit': 'PT'
+                }
+            },
+            'fields': '*'
+        }
+    }
+
+
+def create_update_table_cell_style_request(
+    table_start_index: int,
+    row_index: int,
+    column_index: int,
+    row_span: int = 1,
+    column_span: int = 1,
+    background_color: str = None,
+    border_color: str = None,
+    border_width: float = None,
+    border_dash_style: str = None,
+    border_top: Dict[str, Any] = None,
+    border_bottom: Dict[str, Any] = None,
+    border_left: Dict[str, Any] = None,
+    border_right: Dict[str, Any] = None,
+    padding_top: float = None,
+    padding_bottom: float = None,
+    padding_left: float = None,
+    padding_right: float = None,
+    content_alignment: str = None,
+) -> Dict[str, Any]:
+    """
+    Create an updateTableCellStyle request for Google Docs API.
+
+    This allows formatting table cells with colors, borders, padding, and alignment.
+
+    Args:
+        table_start_index: Start index of the table in the document
+        row_index: Row index of the cell (0-based)
+        column_index: Column index of the cell (0-based)
+        row_span: Number of rows to apply style to (default 1)
+        column_span: Number of columns to apply style to (default 1)
+        background_color: Cell background color (hex like #FF0000 or named like "red")
+        border_color: Default color for all borders (hex or named color)
+        border_width: Default width for all borders in points
+        border_dash_style: Default dash style for all borders (SOLID, DOT, DASH, DASH_DOT, LONG_DASH, LONG_DASH_DOT)
+        border_top: Override for top border as dict with color/width/dash_style
+        border_bottom: Override for bottom border as dict with color/width/dash_style
+        border_left: Override for left border as dict with color/width/dash_style
+        border_right: Override for right border as dict with color/width/dash_style
+        padding_top: Top padding in points
+        padding_bottom: Bottom padding in points
+        padding_left: Left padding in points
+        padding_right: Right padding in points
+        content_alignment: Content alignment (TOP, MIDDLE, BOTTOM)
+
+    Returns:
+        Dictionary representing the updateTableCellStyle request
+    """
+    table_cell_style = {}
+    fields = []
+
+    # Handle background color
+    if background_color:
+        color_dict = _parse_color(background_color)
+        table_cell_style['backgroundColor'] = color_dict
+        fields.append('backgroundColor')
+
+    # Build default border style from common parameters
+    default_border = {}
+    if border_color:
+        default_border['color'] = _parse_color(border_color)
+    if border_width is not None:
+        default_border['width'] = {'magnitude': border_width, 'unit': 'PT'}
+    if border_dash_style:
+        default_border['dashStyle'] = border_dash_style
+
+    # Helper function to build individual border style
+    def _build_border_style(override: Dict[str, Any] = None) -> Dict[str, Any]:
+        border = dict(default_border)  # Copy defaults
+        if override:
+            if 'color' in override:
+                border['color'] = _parse_color(override['color'])
+            if 'width' in override:
+                border['width'] = {'magnitude': override['width'], 'unit': 'PT'}
+            if 'dash_style' in override:
+                border['dashStyle'] = override['dash_style']
+        return border if border else None
+
+    # Apply borders (either from defaults or specific overrides)
+    for border_name, border_override in [
+        ('borderTop', border_top),
+        ('borderBottom', border_bottom),
+        ('borderLeft', border_left),
+        ('borderRight', border_right),
+    ]:
+        border_style = _build_border_style(border_override)
+        if border_style or border_override is not None:
+            # If override is explicitly provided (even empty dict), or we have default styles
+            if border_style:
+                table_cell_style[border_name] = border_style
+                fields.append(border_name)
+
+    # If we have default border styles but no specific overrides, apply to all borders
+    if default_border and not any([border_top, border_bottom, border_left, border_right]):
+        for border_name in ['borderTop', 'borderBottom', 'borderLeft', 'borderRight']:
+            table_cell_style[border_name] = default_border
+            fields.append(border_name)
+
+    # Handle padding
+    if padding_top is not None:
+        table_cell_style['paddingTop'] = {'magnitude': padding_top, 'unit': 'PT'}
+        fields.append('paddingTop')
+    if padding_bottom is not None:
+        table_cell_style['paddingBottom'] = {'magnitude': padding_bottom, 'unit': 'PT'}
+        fields.append('paddingBottom')
+    if padding_left is not None:
+        table_cell_style['paddingLeft'] = {'magnitude': padding_left, 'unit': 'PT'}
+        fields.append('paddingLeft')
+    if padding_right is not None:
+        table_cell_style['paddingRight'] = {'magnitude': padding_right, 'unit': 'PT'}
+        fields.append('paddingRight')
+
+    # Handle content alignment
+    if content_alignment:
+        table_cell_style['contentAlignment'] = content_alignment
+        fields.append('contentAlignment')
+
+    # Remove duplicates while preserving order
+    fields = list(dict.fromkeys(fields))
+
+    return {
+        'updateTableCellStyle': {
+            'tableCellStyle': table_cell_style,
+            'tableRange': {
+                'tableCellLocation': {
+                    'tableStartLocation': {
+                        'index': table_start_index
+                    },
+                    'rowIndex': row_index,
+                    'columnIndex': column_index
+                },
+                'rowSpan': row_span,
+                'columnSpan': column_span
+            },
+            'fields': ','.join(fields)
+        }
+    }
+
+
 def create_insert_section_break_request(
     index: int,
     section_type: str = "NEXT_PAGE"
@@ -2179,3 +2495,139 @@ def create_insert_section_break_request(
         }
     }
 
+
+def create_insert_footnote_request(index: int) -> Dict[str, Any]:
+    """
+    Create a createFootnote request for Google Docs API.
+
+    This request creates a footnote and inserts a footnote reference at the
+    specified location in the document body. The footnote content starts with
+    a space followed by a newline character.
+
+    Note: Footnotes can only be inserted in the document body, not in headers,
+    footers, or other footnotes.
+
+    Args:
+        index: Position in the document body to insert the footnote reference
+
+    Returns:
+        Dictionary representing the createFootnote request
+    """
+    return {
+        'createFootnote': {
+            'location': {'index': index}
+        }
+    }
+
+
+def create_insert_text_in_footnote_request(
+    footnote_id: str,
+    index: int,
+    text: str
+) -> Dict[str, Any]:
+    """
+    Create an insertText request to add text to a footnote.
+
+    Args:
+        footnote_id: The ID of the footnote segment to insert text into
+        index: Position within the footnote to insert text (typically 0 or 1)
+        text: Text to insert in the footnote
+
+    Returns:
+        Dictionary representing the insertText request with footnote segmentId
+    """
+    return {
+        'insertText': {
+            'location': {
+                'segmentId': footnote_id,
+                'index': index
+            },
+            'text': text
+        }
+    }
+
+
+# =============================================================================
+# Named Range Requests
+# =============================================================================
+
+
+def create_named_range_request(
+    name: str,
+    start_index: int,
+    end_index: int,
+    segment_id: str = None,
+    tab_id: str = None
+) -> Dict[str, Any]:
+    """
+    Create a createNamedRange request for Google Docs API.
+
+    Named ranges mark a section of the document that can be referenced later.
+    The range automatically updates as the document content changes.
+
+    Args:
+        name: Name for the range (1-256 characters). Names don't need to be unique.
+        start_index: Start index of the range (inclusive)
+        end_index: End index of the range (exclusive)
+        segment_id: Optional segment ID (for ranges in headers/footers)
+        tab_id: Optional tab ID (for multi-tab documents)
+
+    Returns:
+        Dictionary representing the createNamedRange request
+    """
+    range_obj = {
+        'startIndex': start_index,
+        'endIndex': end_index
+    }
+
+    if segment_id:
+        range_obj['segmentId'] = segment_id
+
+    if tab_id:
+        range_obj['tabId'] = tab_id
+
+    return {
+        'createNamedRange': {
+            'name': name,
+            'range': range_obj
+        }
+    }
+
+
+def create_delete_named_range_request(
+    named_range_id: str = None,
+    name: str = None,
+    tabs_criteria: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """
+    Create a deleteNamedRange request for Google Docs API.
+
+    Can delete by either namedRangeId (specific range) or name (all ranges with that name).
+
+    Args:
+        named_range_id: ID of the specific named range to delete
+        name: Name of ranges to delete (deletes all ranges with this name)
+        tabs_criteria: Optional criteria to specify which tabs to delete from
+
+    Returns:
+        Dictionary representing the deleteNamedRange request
+
+    Raises:
+        ValueError: If neither named_range_id nor name is provided
+    """
+    if not named_range_id and not name:
+        raise ValueError("Either named_range_id or name must be provided")
+
+    request = {}
+
+    if named_range_id:
+        request['namedRangeId'] = named_range_id
+    else:
+        request['name'] = name
+
+    if tabs_criteria:
+        request['tabsCriteria'] = tabs_criteria
+
+    return {
+        'deleteNamedRange': request
+    }
