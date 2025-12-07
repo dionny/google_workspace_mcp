@@ -1594,6 +1594,16 @@ async def modify_doc_text(
         if format_end is not None and format_end <= format_start:
             format_end = format_start + 1
 
+        # When code_block=True, clear existing formatting first to ensure code block
+        # only has the specified styling (monospace font + gray background) without
+        # inheriting italic, subscript, foreground_color, etc. from surrounding text
+        if code_block is True:
+            requests.append(
+                create_clear_formatting_request(
+                    format_start, format_end, preserve_links=(link is not None)
+                )
+            )
+
         requests.append(
             create_format_text_request(
                 format_start,
