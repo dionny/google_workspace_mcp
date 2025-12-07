@@ -30,10 +30,15 @@ from gdocs.docs_helpers import (
     create_insert_horizontal_rule_requests,
     create_insert_section_break_request,
     create_insert_image_request,
+    create_insert_footnote_request,
+    create_insert_text_in_footnote_request,
     create_bullet_list_request,
     create_paragraph_style_request,
+    create_named_range_request,
+    create_delete_named_range_request,
     calculate_search_based_indices,
     find_all_occurrences_in_document,
+    find_text_in_document,
     SearchPosition,
     OperationType,
     build_operation_result,
@@ -417,6 +422,11 @@ async def modify_doc_text(
     line_spacing: float = None,
     heading_style: str = None,
     alignment: str = None,
+    indent_first_line: float = None,
+    indent_start: float = None,
+    indent_end: float = None,
+    space_above: float = None,
+    space_below: float = None,
     search: str = None,
     position: str = None,
     occurrence: int = 1,
@@ -506,9 +516,11 @@ async def modify_doc_text(
         background_color: Background/highlight color as hex or named color
 
         Paragraph formatting:
-        line_spacing: Line spacing as percentage of normal (100=single, 150=1.5x, 200=double)
-            Common values: 100 (single), 115 (1.15x - Google Docs default), 150 (1.5x), 200 (double)
-            Custom values from 50-1000 are supported.
+        line_spacing: Line spacing. Accepts multiple intuitive formats:
+            - Named strings: 'single', 'double', '1.5x', '1.15x'
+            - Decimal multipliers: 1.0 (single), 1.5 (150%), 2.0 (double) - auto-converted
+            - Percentage values: 100 (single), 115 (1.15x default), 150 (1.5x), 200 (double)
+            Custom percentage values from 50-1000 are supported.
         heading_style: Change paragraph to a named style. Valid values:
             - "HEADING_1" through "HEADING_6": Heading levels
             - "NORMAL_TEXT": Regular paragraph text
@@ -521,6 +533,22 @@ async def modify_doc_text(
             - "END": Right-aligned for left-to-right text
             - "JUSTIFIED": Justified text (even margins on both sides)
             Note: This changes the entire paragraph(s) containing the affected range.
+        indent_first_line: First line indentation in points (72 points = 1 inch).
+            Use positive values for standard first line indent.
+            Use with negative value and indent_start for hanging indent.
+            Example: indent_first_line=36 indents first line by 0.5 inch.
+        indent_start: Left margin indentation in points for LTR text (72 points = 1 inch).
+            This is the paragraph's left edge offset from the page margin.
+            Example: indent_start=72 indents the entire paragraph 1 inch from the left.
+        indent_end: Right margin indentation in points for LTR text (72 points = 1 inch).
+            This is the paragraph's right edge offset from the page margin.
+            Example: indent_end=72 indents the paragraph 1 inch from the right margin.
+        space_above: Extra space above the paragraph in points (72 points = 1 inch).
+            Common values: 0 (none), 6 (small), 12 (medium), 18 (large)
+            Example: space_above=12 adds about 1/6 inch space above the paragraph.
+        space_below: Extra space below the paragraph in points (72 points = 1 inch).
+            Common values: 0 (none), 6 (small), 12 (medium), 18 (large)
+            Example: space_below=12 adds about 1/6 inch space below the paragraph.
 
         List conversion:
         convert_to_list: Convert the affected text range to a bullet list.
@@ -538,6 +566,14 @@ async def modify_doc_text(
         Preview mode:
         preview: If True, returns what would change without actually modifying the document.
             Useful for validating operations before applying them. Default: False
+
+            Range inspection preview: When preview=True is used with positioning parameters
+            (range, search, heading, location, or start_index) but WITHOUT text or formatting,
+            the function returns information about what range would be selected without
+            requiring an operation. This is useful for:
+            - Verifying range/search queries before deciding what to do
+            - Debugging range-based selections
+            - Previewing section content without modification
 
         Delete paragraph:
         delete_paragraph: When True and deleting text (text=""), also removes the trailing
@@ -625,6 +661,16 @@ async def modify_doc_text(
                        text="new text", preview=True)
         # Returns preview info with current_content, new_content, context, etc.
 
+        # Range inspection preview - preview what range would be selected:
+        modify_doc_text(document_id="...",
+                       range={"section": "The Problem", "include_heading": False},
+                       preview=True)
+        # Returns the content of the section without requiring text/formatting
+
+        # Search inspection - preview what a search finds:
+        modify_doc_text(document_id="...", search="important keyword", preview=True)
+        # Returns the found text and surrounding context
+
         # Convert existing paragraphs to bullet list:
         modify_doc_text(document_id="...",
                        range={"search": "- Item one", "extend": "paragraph"},
@@ -639,19 +685,19 @@ async def modify_doc_text(
                        text="Item 1\\nItem 2\\nItem 3\\n",
                        convert_to_list="UNORDERED")
 
-        # Set line spacing to double (200%) for a range:
+        # Set line spacing to double using decimal multiplier:
         modify_doc_text(document_id="...", start_index=100, end_index=200,
-                       line_spacing=200)
+                       line_spacing=2.0)  # Also accepts: 'double', 200
 
-        # Set line spacing to 1.5x (150%) for entire section:
+        # Set line spacing to 1.5x using named string:
         modify_doc_text(document_id="...",
                        range={"section": "Introduction", "include_heading": True},
-                       line_spacing=150)
+                       line_spacing='1.5x')  # Also accepts: 1.5, 150
 
         # Insert new paragraph with single spacing:
         modify_doc_text(document_id="...", location="end",
                        text="\\nNew paragraph with single spacing.\\n",
-                       line_spacing=100)
+                       line_spacing='single')  # Also accepts: 1.0, 100
 
         # Change a paragraph to Heading 2:
         modify_doc_text(document_id="...", search="Section Title",
@@ -685,6 +731,24 @@ async def modify_doc_text(
         modify_doc_text(document_id="...", search="Chapter 1",
                        position="replace", text="Chapter 1",
                        heading_style="HEADING_1", alignment="CENTER")
+
+        # Apply first line indent (0.5 inch):
+        modify_doc_text(document_id="...", start_index=100, end_index=200,
+                       indent_first_line=36)
+
+        # Create a block quote with left/right margins (1 inch each side):
+        modify_doc_text(document_id="...",
+                       range={"search": "Quote text", "extend": "paragraph"},
+                       indent_start=72, indent_end=72)
+
+        # Add paragraph spacing (12pt above and below):
+        modify_doc_text(document_id="...", start_index=100, end_index=200,
+                       space_above=12, space_below=12)
+
+        # Create hanging indent (for bibliographies/references):
+        modify_doc_text(document_id="...",
+                       range={"search": "Reference text", "extend": "paragraph"},
+                       indent_start=36, indent_first_line=-36)
 
         # Insert a code block (monospace font with gray background):
         modify_doc_text(document_id="...", location="end",
@@ -752,6 +816,24 @@ async def modify_doc_text(
             "message": "Would replace 8 characters with 8 characters at index 100",
             "link": "https://docs.google.com/document/d/.../edit"
         }
+
+        When preview=True with positioning but no text/formatting (range inspection):
+        {
+            "preview": true,
+            "would_modify": false,
+            "operation": "range_inspection",
+            "affected_range": {"start": 100, "end": 250},
+            "position_shift": 0,
+            "current_content": "The text content at the resolved range...",
+            "content_length": 150,
+            "context": {
+                "before": "...text before the range...",
+                "after": "...text after the range..."
+            },
+            "positioning_info": {"range": {...}, "resolved_start": 100, ...},
+            "message": "Range inspection: resolved to indices 100-250",
+            "link": "https://docs.google.com/document/d/.../edit"
+        }
     """
     logger.info(
         f"[modify_doc_text] Doc={document_id}, location={location}, search={search}, position={position}, "
@@ -766,8 +848,20 @@ async def modify_doc_text(
     if not is_valid:
         return structured_error
 
-    # Validate that we have something to do
-    if text is None and not any(
+    # Check if this is a preview-only range inspection request
+    # When preview=True and positioning is specified but no text/formatting,
+    # we return information about what range would be selected
+    has_positioning = any([
+        range is not None,
+        search is not None,
+        heading is not None,
+        location is not None,
+        start_index is not None,
+    ])
+    is_range_inspection_preview = preview and has_positioning
+
+    # Validate that we have something to do (unless this is a range inspection preview)
+    if not is_range_inspection_preview and text is None and not any(
         [
             bold is not None,
             italic is not None,
@@ -784,6 +878,11 @@ async def modify_doc_text(
             line_spacing is not None,
             heading_style is not None,
             alignment is not None,
+            indent_first_line is not None,
+            indent_start is not None,
+            indent_end is not None,
+            space_above is not None,
+            space_below is not None,
             convert_to_list is not None,
             code_block is not None,
         ]
@@ -808,6 +907,11 @@ async def modify_doc_text(
                 "line_spacing",
                 "heading_style",
                 "alignment",
+                "indent_first_line",
+                "indent_start",
+                "indent_end",
+                "space_above",
+                "space_below",
                 "convert_to_list",
                 "code_block",
             ],
@@ -845,17 +949,59 @@ async def modify_doc_text(
             )
         convert_to_list = normalized
 
-    # Validate line_spacing parameter
+    # Validate and normalize line_spacing parameter
     if line_spacing is not None:
-        if (
-            not isinstance(line_spacing, (int, float))
-            or line_spacing < 50
-            or line_spacing > 1000
-        ):
+        # Accept named string values for common spacings
+        if isinstance(line_spacing, str):
+            line_spacing_map = {
+                'single': 100,
+                '1': 100,
+                '1.0': 100,
+                '1.15': 115,
+                '1.15x': 115,
+                '1.5': 150,
+                '1.5x': 150,
+                'double': 200,
+                '2': 200,
+                '2.0': 200,
+            }
+            normalized = line_spacing_map.get(line_spacing.lower().strip())
+            if normalized is None:
+                return validator.create_invalid_param_error(
+                    param_name="line_spacing",
+                    received=str(line_spacing),
+                    valid_values=[
+                        "Named: 'single', 'double', '1.5x'",
+                        "Decimal: 1.0, 1.5, 2.0 (auto-converted to percentage)",
+                        "Percentage: 100, 150, 200 (100=single, 150=1.5x, 200=double)",
+                    ],
+                )
+            line_spacing = normalized
+        elif isinstance(line_spacing, (int, float)):
+            # Auto-convert decimal multipliers to percentage
+            # Values < 10 are treated as multipliers (1.0 -> 100, 1.5 -> 150, 2.0 -> 200)
+            if line_spacing < 10:
+                line_spacing = line_spacing * 100
+            # Now validate the percentage range
+            if line_spacing < 50 or line_spacing > 1000:
+                return validator.create_invalid_param_error(
+                    param_name="line_spacing",
+                    received=str(line_spacing),
+                    valid_values=[
+                        "Named: 'single', 'double', '1.5x'",
+                        "Decimal: 1.0, 1.5, 2.0 (auto-converted to percentage)",
+                        "Percentage: 100, 150, 200 (100=single, 150=1.5x, 200=double)",
+                    ],
+                )
+        else:
             return validator.create_invalid_param_error(
                 param_name="line_spacing",
                 received=str(line_spacing),
-                valid_values=["50-1000 (100=single, 150=1.5x, 200=double)"],
+                valid_values=[
+                    "Named: 'single', 'double', '1.5x'",
+                    "Decimal: 1.0, 1.5, 2.0 (auto-converted to percentage)",
+                    "Percentage: 100, 150, 200 (100=single, 150=1.5x, 200=double)",
+                ],
             )
 
     # Validate heading_style parameter
@@ -883,6 +1029,51 @@ async def modify_doc_text(
         return validator.create_invalid_param_error(
             param_name="alignment", received=alignment, valid_values=valid_alignments
         )
+
+    # Validate indent_first_line parameter (can be negative for hanging indent)
+    if indent_first_line is not None:
+        if not isinstance(indent_first_line, (int, float)):
+            return validator.create_invalid_param_error(
+                param_name="indent_first_line",
+                received=str(indent_first_line),
+                valid_values=["number in points (72 points = 1 inch)"],
+            )
+
+    # Validate indent_start parameter (left margin)
+    if indent_start is not None:
+        if not isinstance(indent_start, (int, float)) or indent_start < 0:
+            return validator.create_invalid_param_error(
+                param_name="indent_start",
+                received=str(indent_start),
+                valid_values=["non-negative number in points (72 points = 1 inch)"],
+            )
+
+    # Validate indent_end parameter (right margin)
+    if indent_end is not None:
+        if not isinstance(indent_end, (int, float)) or indent_end < 0:
+            return validator.create_invalid_param_error(
+                param_name="indent_end",
+                received=str(indent_end),
+                valid_values=["non-negative number in points (72 points = 1 inch)"],
+            )
+
+    # Validate space_above parameter
+    if space_above is not None:
+        if not isinstance(space_above, (int, float)) or space_above < 0:
+            return validator.create_invalid_param_error(
+                param_name="space_above",
+                received=str(space_above),
+                valid_values=["non-negative number in points (72 points = 1 inch)"],
+            )
+
+    # Validate space_below parameter
+    if space_below is not None:
+        if not isinstance(space_below, (int, float)) or space_below < 0:
+            return validator.create_invalid_param_error(
+                param_name="space_below",
+                received=str(space_below),
+                valid_values=["non-negative number in points (72 points = 1 inch)"],
+            )
 
     # Apply code_block formatting defaults (monospace font + light gray background)
     # Only set defaults if user hasn't explicitly specified font_family or background_color
@@ -1465,8 +1656,18 @@ async def modify_doc_text(
             actual_start_index = format_start
             actual_end_index = format_end
 
-    # Handle paragraph formatting (line spacing, heading style, and/or alignment)
-    if line_spacing is not None or heading_style is not None or alignment is not None:
+    # Handle paragraph formatting (line spacing, heading style, alignment, indentation, and spacing)
+    has_paragraph_formatting = any([
+        line_spacing is not None,
+        heading_style is not None,
+        alignment is not None,
+        indent_first_line is not None,
+        indent_start is not None,
+        indent_end is not None,
+        space_above is not None,
+        space_below is not None,
+    ])
+    if has_paragraph_formatting:
         # Determine the range for paragraph formatting
         para_start = (
             actual_start_index if actual_start_index is not None else start_index
@@ -1482,7 +1683,11 @@ async def modify_doc_text(
             para_end = actual_start_index + len(text)
 
         # When applying heading_style to newly inserted multi-paragraph text,
-        # only apply the heading style to the FIRST paragraph.
+        # behavior depends on whether this is auto-applied NORMAL_TEXT to prevent
+        # heading inheritance, or user-specified heading style:
+        # - auto_normal_text_applied=True: Apply NORMAL_TEXT to ALL paragraphs
+        #   to prevent the heading style from bleeding into subsequent paragraphs
+        # - User-specified heading: Only apply to FIRST paragraph
         # line_spacing and alignment should still apply to all paragraphs.
         heading_style_start = para_start
         heading_style_end = para_end
@@ -1494,16 +1699,22 @@ async def modify_doc_text(
             if leading_newlines > 0:
                 heading_style_start = para_start + leading_newlines
 
-            # Find the end of the first paragraph (first newline after content starts)
-            first_newline_pos = text_stripped.find("\n")
-            if first_newline_pos != -1:
-                # Multi-paragraph text: only apply heading to first paragraph
-                heading_style_end = heading_style_start + first_newline_pos
-            else:
-                # Single paragraph text: strip trailing newlines to prevent style bleed
-                trailing_newlines = len(text_stripped) - len(text_stripped.rstrip("\n"))
-                if trailing_newlines > 0:
-                    heading_style_end = para_start + len(text) - trailing_newlines
+            # When auto_normal_text_applied is True, we need to apply NORMAL_TEXT
+            # to ALL paragraphs, not just the first one, to prevent heading
+            # style inheritance from bleeding through to subsequent paragraphs.
+            if not auto_normal_text_applied:
+                # User-specified heading: only apply to first paragraph
+                first_newline_pos = text_stripped.find("\n")
+                if first_newline_pos != -1:
+                    # Multi-paragraph text: only apply heading to first paragraph
+                    heading_style_end = heading_style_start + first_newline_pos
+                else:
+                    # Single paragraph text: strip trailing newlines to prevent style bleed
+                    trailing_newlines = len(text_stripped) - len(text_stripped.rstrip("\n"))
+                    if trailing_newlines > 0:
+                        heading_style_end = para_start + len(text) - trailing_newlines
+            # else: auto_normal_text_applied - keep heading_style_end = para_end
+            # to apply NORMAL_TEXT to all paragraphs
 
         # Handle special case for paragraph formatting at index 0
         if para_start == 0:
@@ -1515,10 +1726,21 @@ async def modify_doc_text(
         if para_start is not None and para_end is not None and para_end > para_start:
             para_format_details = []
 
-            # Apply line_spacing and alignment to full range
-            if line_spacing is not None or alignment is not None:
+            # Apply line_spacing, alignment, indentation, and spacing to full range
+            has_general_para_formatting = any([
+                line_spacing is not None,
+                alignment is not None,
+                indent_first_line is not None,
+                indent_start is not None,
+                indent_end is not None,
+                space_above is not None,
+                space_below is not None,
+            ])
+            if has_general_para_formatting:
                 general_para_request = create_paragraph_style_request(
-                    para_start, para_end, line_spacing, None, alignment
+                    para_start, para_end, line_spacing, None, alignment,
+                    indent_first_line, indent_start, indent_end,
+                    space_above, space_below
                 )
                 if general_para_request:
                     requests.append(general_para_request)
@@ -1528,11 +1750,27 @@ async def modify_doc_text(
                     if alignment is not None:
                         para_format_details.append(f"alignment={alignment}")
                         format_styles.append(f"alignment_{alignment}")
+                    if indent_first_line is not None:
+                        para_format_details.append(f"indent_first_line={indent_first_line}pt")
+                        format_styles.append(f"indent_first_line_{indent_first_line}")
+                    if indent_start is not None:
+                        para_format_details.append(f"indent_start={indent_start}pt")
+                        format_styles.append(f"indent_start_{indent_start}")
+                    if indent_end is not None:
+                        para_format_details.append(f"indent_end={indent_end}pt")
+                        format_styles.append(f"indent_end_{indent_end}")
+                    if space_above is not None:
+                        para_format_details.append(f"space_above={space_above}pt")
+                        format_styles.append(f"space_above_{space_above}")
+                    if space_below is not None:
+                        para_format_details.append(f"space_below={space_below}pt")
+                        format_styles.append(f"space_below_{space_below}")
                     operations.append(
                         f"Applied paragraph formatting ({', '.join(para_format_details)}) to range {para_start}-{para_end}"
                     )
 
-            # Apply heading_style to first paragraph only (may be different range)
+            # Apply heading_style - either to first paragraph only (user-specified)
+            # or to all paragraphs (auto-applied NORMAL_TEXT to prevent inheritance)
             if heading_style is not None and heading_style_end > heading_style_start:
                 heading_request = create_paragraph_style_request(
                     heading_style_start, heading_style_end, None, heading_style, None
@@ -1540,9 +1778,14 @@ async def modify_doc_text(
                 if heading_request:
                     requests.append(heading_request)
                     format_styles.append(f"heading_style_{heading_style}")
-                    operations.append(
-                        f"Applied heading_style={heading_style} to first paragraph (range {heading_style_start}-{heading_style_end})"
-                    )
+                    if auto_normal_text_applied:
+                        operations.append(
+                            f"Applied heading_style={heading_style} to all paragraphs to prevent heading inheritance (range {heading_style_start}-{heading_style_end})"
+                        )
+                    else:
+                        operations.append(
+                            f"Applied heading_style={heading_style} to first paragraph (range {heading_style_start}-{heading_style_end})"
+                        )
 
             # If only paragraph formatting (no text or text style operation), set operation type
             if operation_type is None:
@@ -1552,11 +1795,24 @@ async def modify_doc_text(
         elif para_start is None or para_end is None or para_end <= para_start:
             # Need a valid range for paragraph formatting when not inserting text
             if text is None:
-                para_type = (
-                    "line_spacing"
-                    if line_spacing is not None
-                    else ("heading_style" if heading_style is not None else "alignment")
-                )
+                # Determine which paragraph formatting parameter was used for error message
+                para_type = "paragraph formatting"
+                if line_spacing is not None:
+                    para_type = "line_spacing"
+                elif heading_style is not None:
+                    para_type = "heading_style"
+                elif alignment is not None:
+                    para_type = "alignment"
+                elif indent_first_line is not None:
+                    para_type = "indent_first_line"
+                elif indent_start is not None:
+                    para_type = "indent_start"
+                elif indent_end is not None:
+                    para_type = "indent_end"
+                elif space_above is not None:
+                    para_type = "space_above"
+                elif space_below is not None:
+                    para_type = "space_below"
                 error = DocsErrorBuilder.missing_required_param(
                     param_name="end_index or range",
                     context_description=f"for {para_type} (need a range of text to format)",
@@ -1739,6 +1995,59 @@ async def modify_doc_text(
             preview_result["message"] = (
                 f"Would apply formatting ({', '.join(format_styles)}) to range {actual_start_index}-{actual_end_index}"
             )
+        elif is_range_inspection_preview:
+            # Range inspection preview - no operation, just showing what range would be selected
+            preview_result["would_modify"] = False
+            preview_result["operation"] = "range_inspection"
+            preview_result["position_shift"] = 0
+
+            # Extract content at the resolved range
+            if doc_data:
+                range_end_idx = actual_end_index if actual_end_index else actual_start_index
+                if range_end_idx > actual_start_index:
+                    current = extract_text_at_range(
+                        doc_data, actual_start_index, range_end_idx
+                    )
+                    preview_result["current_content"] = current.get("text", "")
+                    preview_result["content_length"] = len(current.get("text", ""))
+                    preview_result["context"] = {
+                        "before": current.get("context_before", ""),
+                        "after": current.get("context_after", ""),
+                    }
+                else:
+                    # Insertion point, no range selected
+                    current = extract_text_at_range(
+                        doc_data, max(1, actual_start_index - 25), min(actual_start_index + 25, actual_start_index + 50)
+                    )
+                    preview_result["current_content"] = ""
+                    preview_result["content_length"] = 0
+                    preview_result["context"] = {
+                        "before": current.get("context_before", ""),
+                        "after": current.get("context_after", ""),
+                    }
+                    preview_result["note"] = "This is an insertion point, not a range selection"
+
+            # Build informative message based on positioning mode
+            if use_range_mode:
+                preview_result["message"] = (
+                    f"Range inspection: resolved to indices {actual_start_index}-{actual_end_index}"
+                )
+            elif use_search_mode:
+                preview_result["message"] = (
+                    f"Search '{search}' found at indices {actual_start_index}-{actual_end_index}"
+                )
+            elif use_heading_mode:
+                preview_result["message"] = (
+                    f"Heading '{heading}' section {section_position}: insertion point at index {actual_start_index}"
+                )
+            elif use_location_mode:
+                preview_result["message"] = (
+                    f"Location '{location}': insertion point at index {actual_start_index}"
+                )
+            else:
+                preview_result["message"] = (
+                    f"Index range: {actual_start_index}-{actual_end_index if actual_end_index else actual_start_index}"
+                )
         else:
             preview_result["position_shift"] = 0
             preview_result["message"] = "Would perform operation"
@@ -2181,8 +2490,17 @@ async def find_and_replace_doc(
         )
 
         # Build formatting requests for each occurrence
+        # First clear existing formatting, then apply the requested formatting
+        # This ensures the replaced text only has the explicitly specified formatting
         format_requests = []
         for start, end in replaced_occurrences:
+            # Clear existing formatting first (preserve links if user is setting a link)
+            clear_request = create_clear_formatting_request(
+                start, end, preserve_links=(link is not None)
+            )
+            format_requests.append(clear_request)
+
+            # Then apply the requested formatting
             format_request = create_format_text_request(
                 start,
                 end,
@@ -2209,7 +2527,7 @@ async def find_and_replace_doc(
                 .batchUpdate(documentId=document_id, body={"requests": format_requests})
                 .execute
             )
-            occurrences_formatted = len(format_requests)
+            occurrences_formatted = len(replaced_occurrences)
 
     link = f"https://docs.google.com/document/d/{document_id}/edit"
     message = (
@@ -3376,6 +3694,212 @@ async def insert_doc_image(
 
 
 @server.tool()
+@handle_http_errors("insert_doc_footnote", service_type="docs")
+@require_google_service("docs", "docs_write")
+async def insert_doc_footnote(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    footnote_text: str,
+    index: int = None,
+    location: str = None,
+    search: str = None,
+    position: str = None,
+    occurrence: int = 1,
+    match_case: bool = False,
+) -> str:
+    """
+    Inserts a footnote into a Google Doc at the specified position.
+
+    A footnote reference (superscript number) is inserted at the specified location,
+    and the footnote content is added to the footnote section at the bottom of the page.
+
+    POSITIONING OPTIONS (use exactly one):
+    - location='end' to insert footnote at end of document (recommended for appending)
+    - location='start' to insert footnote at beginning of document
+    - index=N for explicit position (character index)
+    - search + position to insert relative to found text
+
+    Note: Footnotes can only be inserted in the document body, not in headers,
+    footers, or other footnotes.
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to update
+        footnote_text: Text content for the footnote
+        index: Position to insert footnote reference (optional, mutually exclusive with location/search)
+        location: Semantic location - "start" or "end" (mutually exclusive with index/search)
+        search: Text to search for to determine insertion point (use with position)
+        position: Where to insert relative to search text - "before" or "after" (required when using search)
+        occurrence: Which occurrence of search text (1=first, 2=second, -1=last). Default: 1
+        match_case: Whether search should be case-sensitive. Default: false
+
+    Returns:
+        str: Confirmation message with footnote details and document link
+    """
+    logger.info(
+        f"[insert_doc_footnote] Doc={document_id}, index={index}, location={location}, search={search}"
+    )
+
+    # Input validation
+    validator = ValidationManager()
+
+    # Validate footnote_text
+    if not footnote_text:
+        return validator.create_missing_param_error(
+            param_name="footnote_text",
+            context="for footnote insertion",
+            valid_values=["non-empty string with footnote content"],
+        )
+
+    # Validate location parameter if provided
+    if location is not None and location not in ["start", "end"]:
+        return validator.create_invalid_param_error(
+            param_name="location", received=location, valid_values=["start", "end"]
+        )
+
+    # Count positioning parameters provided
+    positioning_params = [
+        ("index", index is not None),
+        ("location", location is not None),
+        ("search", search is not None),
+    ]
+    provided_count = sum(1 for _, provided in positioning_params if provided)
+
+    if provided_count == 0:
+        return (
+            "ERROR: Must specify positioning. Use one of:\n"
+            "  - index=N for explicit position\n"
+            "  - location='start' or 'end' for semantic positioning\n"
+            "  - search='text' with position='before'/'after' for search-based positioning"
+        )
+    if provided_count > 1:
+        provided_names = [name for name, provided in positioning_params if provided]
+        return (
+            f"ERROR: Cannot specify multiple positioning parameters. "
+            f"You provided: {', '.join(provided_names)}. Use only one."
+        )
+
+    # Validate search-based positioning parameters
+    if search is not None:
+        if position is None:
+            return validator.create_missing_param_error(
+                param_name="position",
+                context="when using search-based positioning",
+                valid_values=["before", "after"],
+            )
+        if position not in ["before", "after"]:
+            return validator.create_invalid_param_error(
+                param_name="position",
+                received=position,
+                valid_values=["before", "after"],
+            )
+
+    # Fetch document to resolve positioning
+    try:
+        doc_data = await asyncio.to_thread(
+            service.documents().get(documentId=document_id).execute
+        )
+    except Exception as e:
+        return f"ERROR: Failed to fetch document: {str(e)}"
+
+    # Resolve insertion index based on positioning mode
+    resolved_index = None
+    location_description = None
+
+    if index is not None:
+        # Explicit index provided
+        resolved_index = max(1, index)  # Cannot insert before first section break
+        location_description = f"at index {resolved_index}"
+    elif location == "start":
+        resolved_index = 1  # After initial section break
+        location_description = "at start of document"
+    elif location == "end":
+        structure = parse_document_structure(doc_data)
+        total_length = structure["total_length"]
+        resolved_index = max(1, total_length - 1)
+        location_description = "at end of document"
+    elif search is not None:
+        # Search-based positioning
+        success, found_start, found_end, msg = calculate_search_based_indices(
+            doc_data, search, position, occurrence, match_case
+        )
+        if not success:
+            return f"ERROR: {msg}"
+        resolved_index = found_start if position == "before" else found_end
+        location_description = f"{position} '{search}'"
+        if occurrence != 1:
+            location_description += f" (occurrence {occurrence})"
+
+    # Interpret escape sequences in footnote text
+    processed_text = interpret_escape_sequences(footnote_text)
+
+    # Build and execute requests
+    # Step 1: Create the footnote (this inserts a footnote reference and creates the footnote segment)
+    create_footnote_request = create_insert_footnote_request(resolved_index)
+
+    try:
+        result = await asyncio.to_thread(
+            service.documents()
+            .batchUpdate(
+                documentId=document_id,
+                body={"requests": [create_footnote_request]}
+            )
+            .execute
+        )
+    except Exception as e:
+        error_msg = str(e)
+        if "Invalid requests" in error_msg or "footerHeaderOrFootnote" in error_msg.lower():
+            return (
+                "ERROR: Cannot insert footnote at this location. Footnotes can only be "
+                "inserted in the document body, not in headers, footers, or other footnotes."
+            )
+        return f"ERROR: Failed to create footnote: {error_msg}"
+
+    # Get the footnote ID from the response
+    footnote_id = None
+    if "replies" in result:
+        for reply in result["replies"]:
+            if "createFootnote" in reply:
+                footnote_id = reply["createFootnote"].get("footnoteId")
+                break
+
+    if not footnote_id:
+        return "ERROR: Footnote was created but footnote ID was not returned. The footnote reference was inserted but content could not be added."
+
+    # Step 2: Insert text into the footnote
+    # Footnotes start with a space followed by newline, so we insert at index 1
+    insert_text_request = create_insert_text_in_footnote_request(
+        footnote_id=footnote_id,
+        index=1,  # Insert after the initial space
+        text=processed_text
+    )
+
+    try:
+        await asyncio.to_thread(
+            service.documents()
+            .batchUpdate(
+                documentId=document_id,
+                body={"requests": [insert_text_request]}
+            )
+            .execute
+        )
+    except Exception as e:
+        return (
+            f"WARNING: Footnote reference was created {location_description}, "
+            f"but failed to add footnote text: {str(e)}. "
+            "You may need to manually add the footnote content."
+        )
+
+    link = f"https://docs.google.com/document/d/{document_id}/edit"
+    text_preview = processed_text[:50] + "..." if len(processed_text) > 50 else processed_text
+    return (
+        f"Inserted footnote {location_description} in document {document_id}. "
+        f"Footnote content: \"{text_preview}\". Link: {link}"
+    )
+
+
+@server.tool()
 @handle_http_errors("update_doc_headers_footers", service_type="docs")
 @require_google_service("docs", "docs_write")
 async def update_doc_headers_footers(
@@ -3459,6 +3983,147 @@ async def update_doc_headers_footers(
             error_message=message,
             document_id=document_id,
         )
+
+
+@server.tool()
+@handle_http_errors("get_doc_headers_footers", is_read_only=True, service_type="docs")
+@require_google_service("docs", "docs_read")
+async def get_doc_headers_footers(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    section_type: str = None,
+) -> str:
+    """
+    Get the content of headers and/or footers in a Google Doc.
+
+    Use this to read the current text content of document headers and footers
+    before updating them, or to check if headers/footers exist.
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to read
+        section_type: Optional filter - "header" to get only headers, "footer" to get
+            only footers, or None/omit to get both (default: both)
+
+    Returns:
+        str: JSON-formatted string containing header/footer content and metadata
+
+    Example response:
+        {
+            "has_headers": true,
+            "has_footers": true,
+            "headers": {
+                "kix.abc123": {
+                    "type": "DEFAULT",
+                    "content": "My Document Header",
+                    "is_empty": false
+                }
+            },
+            "footers": {
+                "kix.xyz789": {
+                    "type": "DEFAULT",
+                    "content": "Page 1",
+                    "is_empty": false
+                }
+            }
+        }
+    """
+    import json
+
+    logger.info(f"[get_doc_headers_footers] Doc={document_id}, section_type={section_type}")
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    if section_type is not None and section_type not in ["header", "footer"]:
+        return validator.create_invalid_param_error(
+            param_name="section_type",
+            received=section_type,
+            valid_values=["header", "footer", "None (for both)"],
+        )
+
+    # Use HeaderFooterManager to get the information
+    header_footer_manager = HeaderFooterManager(service)
+    info = await header_footer_manager.get_header_footer_info(document_id)
+
+    if "error" in info:
+        return validator.create_api_error(
+            operation="get_headers_footers",
+            error_message=info["error"],
+            document_id=document_id,
+        )
+
+    # Extract full text content for each header/footer
+    doc = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    result = {
+        "has_headers": info.get("has_headers", False),
+        "has_footers": info.get("has_footers", False),
+        "headers": {},
+        "footers": {},
+    }
+
+    # Process headers if requested (or if no filter specified)
+    if section_type is None or section_type == "header":
+        for header_id, header_data in doc.get("headers", {}).items():
+            content = _extract_section_text(header_data)
+            result["headers"][header_id] = {
+                "type": _infer_header_footer_type(header_id),
+                "content": content,
+                "is_empty": not content.strip(),
+            }
+
+    # Process footers if requested (or if no filter specified)
+    if section_type is None or section_type == "footer":
+        for footer_id, footer_data in doc.get("footers", {}).items():
+            content = _extract_section_text(footer_data)
+            result["footers"][footer_id] = {
+                "type": _infer_header_footer_type(footer_id),
+                "content": content,
+                "is_empty": not content.strip(),
+            }
+
+    # Filter result based on section_type
+    if section_type == "header":
+        del result["footers"]
+        del result["has_footers"]
+    elif section_type == "footer":
+        del result["headers"]
+        del result["has_headers"]
+
+    link = f"https://docs.google.com/document/d/{document_id}/edit"
+    return json.dumps(result, indent=2) + f"\n\nDocument link: {link}"
+
+
+def _extract_section_text(section_data: dict) -> str:
+    """Extract plain text content from a header/footer section."""
+    text_content = ""
+    for element in section_data.get("content", []):
+        if "paragraph" in element:
+            para = element["paragraph"]
+            for para_element in para.get("elements", []):
+                if "textRun" in para_element:
+                    text_content += para_element["textRun"].get("content", "")
+    # Remove trailing newline that Google Docs adds
+    return text_content.rstrip("\n")
+
+
+def _infer_header_footer_type(section_id: str) -> str:
+    """Infer the header/footer type from its section ID."""
+    section_id_lower = section_id.lower()
+    if "first" in section_id_lower:
+        return "FIRST_PAGE"
+    elif "even" in section_id_lower:
+        return "EVEN_PAGE"
+    else:
+        return "DEFAULT"
 
 
 @server.tool()
@@ -4440,6 +5105,21 @@ async def delete_doc_section(
 
     delete_end = section["end_index"]
 
+    # Check if the section extends to the end of the document body.
+    # Google Docs API doesn't allow deleting the final newline character that
+    # terminates the document body segment. If we're deleting to the end,
+    # we need to exclude that final newline (subtract 1 from end_index).
+    body = doc.get("body", {})
+    body_content = body.get("content", [])
+    if body_content:
+        doc_end_index = body_content[-1].get("endIndex", 0)
+        if delete_end == doc_end_index:
+            delete_end = delete_end - 1
+            logger.debug(
+                f"[delete_doc_section] Section at document end, "
+                f"adjusted delete_end from {doc_end_index} to {delete_end}"
+            )
+
     # Calculate characters to be deleted
     characters_to_delete = delete_end - delete_start
     subsections_count = len(section.get("subsections", []))
@@ -4712,7 +5392,9 @@ async def debug_table_structure(
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document to inspect
-        table_index: Which table to debug (0 = first table, 1 = second table, etc.)
+        table_index: Which table to debug. Supports:
+            - Positive indices: 0 = first table, 1 = second table, etc.
+            - Negative indices: -1 = last table, -2 = second-to-last, etc.
 
     Returns:
         str: Detailed JSON structure showing table layout, cell positions, and current content
@@ -4728,10 +5410,17 @@ async def debug_table_structure(
 
     # Find tables
     tables = find_tables(doc)
-    if table_index >= len(tables):
+
+    # Handle negative indices (Python-style: -1 = last, -2 = second-to-last)
+    original_index = table_index
+    if table_index < 0:
+        table_index = len(tables) + table_index
+
+    # Validate index is in bounds
+    if table_index < 0 or table_index >= len(tables):
         validator = ValidationManager()
         return validator.create_table_not_found_error(
-            table_index=table_index, total_tables=len(tables)
+            table_index=original_index, total_tables=len(tables)
         )
 
     table_info = tables[table_index]
@@ -4741,14 +5430,21 @@ async def debug_table_structure(
     # Extract detailed cell information
     debug_info = {
         "table_index": table_index,
+        "total_tables": len(tables),
         "dimensions": f"{table_info['rows']}x{table_info['columns']}",
         "table_range": f"[{table_info['start_index']}-{table_info['end_index']}]",
         "cells": [],
     }
+    # Include original index if it was negative (for clarity)
+    if original_index < 0:
+        debug_info["requested_index"] = original_index
 
     for row_idx, row in enumerate(table_info["cells"]):
         row_info = []
         for col_idx, cell in enumerate(row):
+            row_span = cell.get("row_span", 1)
+            column_span = cell.get("column_span", 1)
+
             cell_debug = {
                 "position": f"({row_idx},{col_idx})",
                 "range": f"[{cell['start_index']}-{cell['end_index']}]",
@@ -4756,6 +5452,15 @@ async def debug_table_structure(
                 "current_content": repr(cell.get("content", "")),
                 "content_elements_count": len(cell.get("content_elements", [])),
             }
+
+            # Add span info if cell is merged (spans > 1 cell)
+            if row_span > 1 or column_span > 1:
+                cell_debug["merged"] = True
+                cell_debug["spans"] = f"{row_span}x{column_span} (rows x cols)"
+            elif row_span == 0 or column_span == 0:
+                # This cell is covered by another merged cell
+                cell_debug["covered_by_merge"] = True
+
             row_info.append(cell_debug)
         debug_info["cells"].append(row_info)
 
@@ -4782,6 +5487,8 @@ async def modify_table(
     - insert_column: Add a new column to the table
     - delete_column: Remove a column from the table
     - update_cell: Update content of a specific cell
+    - merge_cells: Merge multiple cells into one
+    - unmerge_cells: Split merged cells back into individual cells
 
     OPERATION FORMATS:
 
@@ -4814,6 +5521,35 @@ async def modify_table(
        - No additional parameters required
        - WARNING: This operation cannot be undone via this API
 
+    7. merge_cells:
+       {"action": "merge_cells", "row": 0, "column": 0, "row_span": 1, "column_span": 2}
+       - row, column: Upper-left cell coordinates of the merge area (0-based)
+       - row_span: Number of rows to merge (minimum 1)
+       - column_span: Number of columns to merge (minimum 1)
+       - Text content from all merged cells is concatenated in the resulting cell
+       - NOTE: row_span=1 and column_span=1 means single cell (no merge)
+
+    8. unmerge_cells:
+       {"action": "unmerge_cells", "row": 0, "column": 0, "row_span": 1, "column_span": 2}
+       - row, column: Upper-left cell coordinates of the area to unmerge (0-based)
+       - row_span: Number of rows in the range
+       - column_span: Number of columns in the range
+       - If cells are not merged, this operation has no effect
+
+    9. format_cell:
+       {"action": "format_cell", "row": 0, "column": 0, "background_color": "#FF0000"}
+       - row, column: Cell coordinates (0-based)
+       - row_span: Number of rows to format (default: 1)
+       - column_span: Number of columns to format (default: 1)
+       - background_color: Cell background color (hex like "#FF0000" or named like "red")
+       - border_color: Border color for all sides (hex or named)
+       - border_width: Border width in points
+       - border_dash_style: SOLID, DOT, DASH, DASH_DOT, LONG_DASH, LONG_DASH_DOT
+       - border_top, border_bottom, border_left, border_right: Override specific borders
+         as dict with {color, width, dash_style}
+       - padding_top, padding_bottom, padding_left, padding_right: Padding in points
+       - content_alignment: Vertical content alignment (TOP, MIDDLE, BOTTOM)
+
     USAGE EXAMPLES:
 
     # Add a row at the end of a 3-row table
@@ -4827,6 +5563,26 @@ async def modify_table(
 
     # Update a cell's content
     operations=[{"action": "update_cell", "row": 1, "column": 2, "text": "Updated"}]
+
+    # Merge first row cells to create a header spanning 3 columns
+    operations=[{"action": "merge_cells", "row": 0, "column": 0, "row_span": 1, "column_span": 3}]
+
+    # Unmerge previously merged cells
+    operations=[{"action": "unmerge_cells", "row": 0, "column": 0, "row_span": 1, "column_span": 3}]
+
+    # Format a cell with background color
+    operations=[{"action": "format_cell", "row": 0, "column": 0, "background_color": "#FFFF00"}]
+
+    # Format a cell with red borders
+    operations=[{"action": "format_cell", "row": 1, "column": 1, "border_color": "red", "border_width": 2}]
+
+    # Format multiple cells (2x3 range) with centered content
+    operations=[{"action": "format_cell", "row": 0, "column": 0, "row_span": 2, "column_span": 3,
+                 "background_color": "#E0E0E0", "content_alignment": "MIDDLE"}]
+
+    # Format cell with custom top border only
+    operations=[{"action": "format_cell", "row": 0, "column": 0,
+                 "border_top": {"color": "blue", "width": 3, "dash_style": "SOLID"}}]
 
     # Multiple operations (executed sequentially)
     operations=[
@@ -4845,11 +5601,14 @@ async def modify_table(
     - Use debug_table_structure before and after modifications to verify results
     - delete_table removes the entire table; any subsequent operations in the same
       call will fail as the table no longer exists
+    - merge_cells requires a rectangular range; non-rectangular ranges will fail
 
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document containing the table
-        table_index: Which table to modify (0 = first table, default)
+        table_index: Which table to modify. Supports:
+            - Positive indices: 0 = first table (default), 1 = second table, etc.
+            - Negative indices: -1 = last table, -2 = second-to-last, etc.
         operations: List of operation dictionaries describing modifications
 
     Returns:
@@ -4877,6 +5636,9 @@ async def modify_table(
         "delete_column",
         "update_cell",
         "delete_table",
+        "merge_cells",
+        "unmerge_cells",
+        "format_cell",
     }
 
     # Validate all operations first
@@ -4931,6 +5693,66 @@ async def modify_table(
                     f"ERROR: Operation {i} (update_cell) missing required 'text' field"
                 )
 
+        elif action == "merge_cells":
+            if "row" not in op or "column" not in op:
+                return f"ERROR: Operation {i} (merge_cells) missing required 'row' and/or 'column' fields"
+            if not isinstance(op["row"], int) or op["row"] < 0:
+                return f"ERROR: Operation {i} (merge_cells) 'row' must be a non-negative integer"
+            if not isinstance(op["column"], int) or op["column"] < 0:
+                return f"ERROR: Operation {i} (merge_cells) 'column' must be a non-negative integer"
+            if "row_span" not in op or "column_span" not in op:
+                return f"ERROR: Operation {i} (merge_cells) missing required 'row_span' and/or 'column_span' fields"
+            if not isinstance(op["row_span"], int) or op["row_span"] < 1:
+                return f"ERROR: Operation {i} (merge_cells) 'row_span' must be a positive integer (minimum 1)"
+            if not isinstance(op["column_span"], int) or op["column_span"] < 1:
+                return f"ERROR: Operation {i} (merge_cells) 'column_span' must be a positive integer (minimum 1)"
+
+        elif action == "unmerge_cells":
+            if "row" not in op or "column" not in op:
+                return f"ERROR: Operation {i} (unmerge_cells) missing required 'row' and/or 'column' fields"
+            if not isinstance(op["row"], int) or op["row"] < 0:
+                return f"ERROR: Operation {i} (unmerge_cells) 'row' must be a non-negative integer"
+            if not isinstance(op["column"], int) or op["column"] < 0:
+                return f"ERROR: Operation {i} (unmerge_cells) 'column' must be a non-negative integer"
+            if "row_span" not in op or "column_span" not in op:
+                return f"ERROR: Operation {i} (unmerge_cells) missing required 'row_span' and/or 'column_span' fields"
+            if not isinstance(op["row_span"], int) or op["row_span"] < 1:
+                return f"ERROR: Operation {i} (unmerge_cells) 'row_span' must be a positive integer (minimum 1)"
+            if not isinstance(op["column_span"], int) or op["column_span"] < 1:
+                return f"ERROR: Operation {i} (unmerge_cells) 'column_span' must be a positive integer (minimum 1)"
+
+        elif action == "format_cell":
+            if "row" not in op or "column" not in op:
+                return f"ERROR: Operation {i} (format_cell) missing required 'row' and/or 'column' fields"
+            if not isinstance(op["row"], int) or op["row"] < 0:
+                return f"ERROR: Operation {i} (format_cell) 'row' must be a non-negative integer"
+            if not isinstance(op["column"], int) or op["column"] < 0:
+                return f"ERROR: Operation {i} (format_cell) 'column' must be a non-negative integer"
+            # Validate optional row_span and column_span
+            if "row_span" in op and (not isinstance(op["row_span"], int) or op["row_span"] < 1):
+                return f"ERROR: Operation {i} (format_cell) 'row_span' must be a positive integer (minimum 1)"
+            if "column_span" in op and (not isinstance(op["column_span"], int) or op["column_span"] < 1):
+                return f"ERROR: Operation {i} (format_cell) 'column_span' must be a positive integer (minimum 1)"
+            # Validate content_alignment if provided
+            if "content_alignment" in op:
+                valid_alignments = {"TOP", "MIDDLE", "BOTTOM"}
+                if op["content_alignment"] not in valid_alignments:
+                    return f"ERROR: Operation {i} (format_cell) 'content_alignment' must be one of: {', '.join(valid_alignments)}"
+            # Validate border_dash_style if provided
+            if "border_dash_style" in op:
+                valid_dash_styles = {"SOLID", "DOT", "DASH", "DASH_DOT", "LONG_DASH", "LONG_DASH_DOT"}
+                if op["border_dash_style"] not in valid_dash_styles:
+                    return f"ERROR: Operation {i} (format_cell) 'border_dash_style' must be one of: {', '.join(valid_dash_styles)}"
+            # Check that at least one formatting option is provided
+            format_options = [
+                "background_color", "border_color", "border_width", "border_dash_style",
+                "border_top", "border_bottom", "border_left", "border_right",
+                "padding_top", "padding_bottom", "padding_left", "padding_right",
+                "content_alignment"
+            ]
+            if not any(opt in op for opt in format_options):
+                return f"ERROR: Operation {i} (format_cell) must specify at least one formatting option"
+
     # Import helper functions for table operations
     from gdocs.docs_helpers import (
         create_insert_table_row_request,
@@ -4939,10 +5761,16 @@ async def modify_table(
         create_delete_table_column_request,
         create_delete_range_request,
         create_insert_text_request,
+        create_merge_table_cells_request,
+        create_unmerge_table_cells_request,
+        create_update_table_cell_style_request,
     )
 
     # Track results
     results = []
+
+    # Store original index for error messages
+    original_table_index = table_index
 
     # Execute operations sequentially
     for i, op in enumerate(operations):
@@ -4955,12 +5783,18 @@ async def modify_table(
             )
             tables = find_tables(doc)
 
-            if table_index >= len(tables):
+            # Handle negative indices (Python-style: -1 = last, -2 = second-to-last)
+            resolved_index = table_index
+            if table_index < 0:
+                resolved_index = len(tables) + table_index
+
+            # Validate index is in bounds
+            if resolved_index < 0 or resolved_index >= len(tables):
                 return validator.create_table_not_found_error(
-                    table_index=table_index, total_tables=len(tables)
+                    table_index=original_table_index, total_tables=len(tables)
                 )
 
-            table_info = tables[table_index]
+            table_info = tables[resolved_index]
             table_start = table_info["start_index"]
             num_rows = table_info["rows"]
             num_cols = table_info["columns"]
@@ -5159,6 +5993,188 @@ async def modify_table(
                     f"Op {i} (delete_table): SUCCESS - deleted table {table_index}"
                 )
                 # Note: Any subsequent operations on this table will fail since it no longer exists
+
+            elif action == "merge_cells":
+                row_idx = op["row"]
+                col_idx = op["column"]
+                row_span = op["row_span"]
+                column_span = op["column_span"]
+
+                # Validate bounds
+                if row_idx >= num_rows:
+                    results.append(
+                        f"Op {i} (merge_cells): FAILED - row {row_idx} out of bounds (table has {num_rows} rows)"
+                    )
+                    continue
+
+                if col_idx >= num_cols:
+                    results.append(
+                        f"Op {i} (merge_cells): FAILED - column {col_idx} out of bounds (table has {num_cols} columns)"
+                    )
+                    continue
+
+                # Validate that merge range doesn't exceed table bounds
+                if row_idx + row_span > num_rows:
+                    results.append(
+                        f"Op {i} (merge_cells): FAILED - row_span {row_span} starting at row {row_idx} exceeds table bounds (table has {num_rows} rows)"
+                    )
+                    continue
+
+                if col_idx + column_span > num_cols:
+                    results.append(
+                        f"Op {i} (merge_cells): FAILED - column_span {column_span} starting at column {col_idx} exceeds table bounds (table has {num_cols} columns)"
+                    )
+                    continue
+
+                request = create_merge_table_cells_request(
+                    table_start_index=table_start,
+                    row_index=row_idx,
+                    column_index=col_idx,
+                    row_span=row_span,
+                    column_span=column_span,
+                )
+
+                await asyncio.to_thread(
+                    service.documents()
+                    .batchUpdate(documentId=document_id, body={"requests": [request]})
+                    .execute
+                )
+
+                results.append(
+                    f"Op {i} (merge_cells): SUCCESS - merged cells from ({row_idx}, {col_idx}) spanning {row_span} rows and {column_span} columns"
+                )
+
+            elif action == "unmerge_cells":
+                row_idx = op["row"]
+                col_idx = op["column"]
+                row_span = op["row_span"]
+                column_span = op["column_span"]
+
+                # Validate bounds
+                if row_idx >= num_rows:
+                    results.append(
+                        f"Op {i} (unmerge_cells): FAILED - row {row_idx} out of bounds (table has {num_rows} rows)"
+                    )
+                    continue
+
+                if col_idx >= num_cols:
+                    results.append(
+                        f"Op {i} (unmerge_cells): FAILED - column {col_idx} out of bounds (table has {num_cols} columns)"
+                    )
+                    continue
+
+                # Validate that unmerge range doesn't exceed table bounds
+                if row_idx + row_span > num_rows:
+                    results.append(
+                        f"Op {i} (unmerge_cells): FAILED - row_span {row_span} starting at row {row_idx} exceeds table bounds (table has {num_rows} rows)"
+                    )
+                    continue
+
+                if col_idx + column_span > num_cols:
+                    results.append(
+                        f"Op {i} (unmerge_cells): FAILED - column_span {column_span} starting at column {col_idx} exceeds table bounds (table has {num_cols} columns)"
+                    )
+                    continue
+
+                request = create_unmerge_table_cells_request(
+                    table_start_index=table_start,
+                    row_index=row_idx,
+                    column_index=col_idx,
+                    row_span=row_span,
+                    column_span=column_span,
+                )
+
+                await asyncio.to_thread(
+                    service.documents()
+                    .batchUpdate(documentId=document_id, body={"requests": [request]})
+                    .execute
+                )
+
+                results.append(
+                    f"Op {i} (unmerge_cells): SUCCESS - unmerged cells from ({row_idx}, {col_idx}) spanning {row_span} rows and {column_span} columns"
+                )
+
+            elif action == "format_cell":
+                row_idx = op["row"]
+                col_idx = op["column"]
+                row_span = op.get("row_span", 1)
+                column_span = op.get("column_span", 1)
+
+                # Validate bounds
+                if row_idx >= num_rows:
+                    results.append(
+                        f"Op {i} (format_cell): FAILED - row {row_idx} out of bounds (table has {num_rows} rows)"
+                    )
+                    continue
+
+                if col_idx >= num_cols:
+                    results.append(
+                        f"Op {i} (format_cell): FAILED - column {col_idx} out of bounds (table has {num_cols} columns)"
+                    )
+                    continue
+
+                # Validate that format range doesn't exceed table bounds
+                if row_idx + row_span > num_rows:
+                    results.append(
+                        f"Op {i} (format_cell): FAILED - row_span {row_span} starting at row {row_idx} exceeds table bounds (table has {num_rows} rows)"
+                    )
+                    continue
+
+                if col_idx + column_span > num_cols:
+                    results.append(
+                        f"Op {i} (format_cell): FAILED - column_span {column_span} starting at column {col_idx} exceeds table bounds (table has {num_cols} columns)"
+                    )
+                    continue
+
+                # Build the request with all provided formatting options
+                request = create_update_table_cell_style_request(
+                    table_start_index=table_start,
+                    row_index=row_idx,
+                    column_index=col_idx,
+                    row_span=row_span,
+                    column_span=column_span,
+                    background_color=op.get("background_color"),
+                    border_color=op.get("border_color"),
+                    border_width=op.get("border_width"),
+                    border_dash_style=op.get("border_dash_style"),
+                    border_top=op.get("border_top"),
+                    border_bottom=op.get("border_bottom"),
+                    border_left=op.get("border_left"),
+                    border_right=op.get("border_right"),
+                    padding_top=op.get("padding_top"),
+                    padding_bottom=op.get("padding_bottom"),
+                    padding_left=op.get("padding_left"),
+                    padding_right=op.get("padding_right"),
+                    content_alignment=op.get("content_alignment"),
+                )
+
+                await asyncio.to_thread(
+                    service.documents()
+                    .batchUpdate(documentId=document_id, body={"requests": [request]})
+                    .execute
+                )
+
+                # Build a description of what was formatted
+                format_desc_parts = []
+                if op.get("background_color"):
+                    format_desc_parts.append(f"background={op['background_color']}")
+                if op.get("border_color") or op.get("border_width"):
+                    format_desc_parts.append("borders")
+                if any(op.get(f"border_{side}") for side in ["top", "bottom", "left", "right"]):
+                    format_desc_parts.append("custom borders")
+                if any(op.get(f"padding_{side}") for side in ["top", "bottom", "left", "right"]):
+                    format_desc_parts.append("padding")
+                if op.get("content_alignment"):
+                    format_desc_parts.append(f"alignment={op['content_alignment']}")
+
+                format_desc = ", ".join(format_desc_parts) if format_desc_parts else "style"
+                cell_range = f"({row_idx}, {col_idx})"
+                if row_span > 1 or column_span > 1:
+                    cell_range = f"({row_idx}, {col_idx}) to ({row_idx + row_span - 1}, {col_idx + column_span - 1})"
+
+                results.append(
+                    f"Op {i} (format_cell): SUCCESS - formatted cell(s) {cell_range} with {format_desc}"
+                )
 
         except Exception as e:
             error_msg = str(e)
@@ -6011,6 +7027,11 @@ def _build_formatting_info(
     Returns:
         Dictionary with normalized formatting information
     """
+    # Normalize baseline_offset: BASELINE_OFFSET_UNSPECIFIED means inherited/normal
+    raw_baseline_offset = text_style.get("baselineOffset", "NONE")
+    if raw_baseline_offset == "BASELINE_OFFSET_UNSPECIFIED":
+        raw_baseline_offset = "NONE"
+
     info = {
         "start_index": start_index,
         "end_index": end_index,
@@ -6020,7 +7041,7 @@ def _build_formatting_info(
         "underline": text_style.get("underline", False),
         "strikethrough": text_style.get("strikethrough", False),
         "small_caps": text_style.get("smallCaps", False),
-        "baseline_offset": text_style.get("baselineOffset", "NONE"),
+        "baseline_offset": raw_baseline_offset,
     }
 
     # Font size
@@ -6937,6 +7958,236 @@ async def extract_document_summary(
     return json.dumps(result, indent=2)
 
 
+@server.tool()
+@handle_http_errors("get_doc_statistics", is_read_only=True, service_type="docs")
+@require_google_service("docs", "docs_read")
+async def get_doc_statistics(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    include_breakdown: bool = False,
+) -> str:
+    """
+    Get document statistics including word count, character count, and structural metrics.
+
+    This tool provides comprehensive statistics about a Google Doc including:
+    - Word count (total and by section if breakdown requested)
+    - Character count (with and without spaces)
+    - Paragraph count
+    - Sentence count (approximate)
+    - Structural element counts (headings, tables, lists, images)
+    - Reading time estimate
+
+    Useful for:
+    - Checking if document meets length requirements
+    - Tracking writing progress
+    - Understanding document complexity
+    - Comparing document sizes
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to analyze
+        include_breakdown: If True, include word counts per section (default: False)
+
+    Returns:
+        str: JSON containing:
+            - title: Document title
+            - word_count: Total number of words
+            - character_count: Total characters (including spaces)
+            - character_count_no_spaces: Characters excluding spaces
+            - paragraph_count: Number of paragraphs
+            - sentence_count: Approximate number of sentences
+            - page_count_estimate: Estimated page count (based on ~500 words/page)
+            - reading_time_minutes: Estimated reading time (based on 200 words/min)
+            - structure: Object containing counts of structural elements
+                - headings: Number of headings
+                - tables: Number of tables
+                - lists: Number of lists
+                - images: Number of inline images
+            - section_breakdown: (if include_breakdown=True) Word counts per heading section
+            - document_link: Link to open the document
+
+    Example Response:
+        {
+            "title": "Project Proposal",
+            "word_count": 2500,
+            "character_count": 15420,
+            "character_count_no_spaces": 12920,
+            "paragraph_count": 42,
+            "sentence_count": 125,
+            "page_count_estimate": 5,
+            "reading_time_minutes": 13,
+            "structure": {
+                "headings": 8,
+                "tables": 2,
+                "lists": 5,
+                "images": 3
+            },
+            "document_link": "https://docs.google.com/document/d/..."
+        }
+    """
+    import json
+    import re
+
+    logger.debug(f"[get_doc_statistics] Doc={document_id}")
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    # Get the document
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Extract all text from the document body
+    body = doc_data.get("body", {})
+    content = body.get("content", [])
+
+    def extract_all_text(elements: list) -> str:
+        """Extract all text from document elements."""
+        text_parts = []
+        for element in elements:
+            if "paragraph" in element:
+                para = element["paragraph"]
+                for elem in para.get("elements", []):
+                    if "textRun" in elem:
+                        text_parts.append(elem["textRun"].get("content", ""))
+            elif "table" in element:
+                table = element["table"]
+                for row in table.get("tableRows", []):
+                    for cell in row.get("tableCells", []):
+                        cell_content = cell.get("content", [])
+                        text_parts.append(extract_all_text(cell_content))
+        return "".join(text_parts)
+
+    full_text = extract_all_text(content)
+
+    # Calculate basic statistics
+    # Word count: split on whitespace and filter empty strings
+    words = [w for w in full_text.split() if w.strip()]
+    word_count = len(words)
+
+    # Character counts
+    char_count = len(full_text)
+    char_count_no_spaces = len(full_text.replace(" ", "").replace("\t", "").replace("\n", ""))
+
+    # Sentence count (approximate - count sentence-ending punctuation)
+    sentence_endings = re.findall(r"[.!?]+", full_text)
+    sentence_count = len(sentence_endings)
+
+    # Paragraph count - count structural paragraphs
+    paragraph_count = 0
+    for element in content:
+        if "paragraph" in element:
+            # Only count non-empty paragraphs
+            para = element["paragraph"]
+            para_text = ""
+            for elem in para.get("elements", []):
+                if "textRun" in elem:
+                    para_text += elem["textRun"].get("content", "")
+            if para_text.strip():
+                paragraph_count += 1
+
+    # Count structural elements
+    elements = extract_structural_elements(doc_data)
+    structure_counts = {"headings": 0, "tables": 0, "lists": 0, "images": 0}
+
+    for elem in elements:
+        elem_type = elem.get("type", "")
+        if elem_type.startswith("heading") or elem_type == "title":
+            structure_counts["headings"] += 1
+        elif elem_type == "table":
+            structure_counts["tables"] += 1
+        elif elem_type in ("bullet_list", "numbered_list"):
+            structure_counts["lists"] += 1
+
+    # Count inline images
+    for element in content:
+        if "paragraph" in element:
+            para = element["paragraph"]
+            for elem in para.get("elements", []):
+                if "inlineObjectElement" in elem:
+                    structure_counts["images"] += 1
+
+    # Calculate estimates
+    # Average page is ~500 words (double-spaced, 12pt font)
+    page_count_estimate = max(1, round(word_count / 500))
+
+    # Average reading speed is ~200-250 words per minute
+    reading_time_minutes = max(1, round(word_count / 200))
+
+    link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    result = {
+        "title": doc_data.get("title", ""),
+        "word_count": word_count,
+        "character_count": char_count,
+        "character_count_no_spaces": char_count_no_spaces,
+        "paragraph_count": paragraph_count,
+        "sentence_count": sentence_count,
+        "page_count_estimate": page_count_estimate,
+        "reading_time_minutes": reading_time_minutes,
+        "structure": structure_counts,
+        "document_link": link,
+    }
+
+    # Add section breakdown if requested
+    if include_breakdown:
+        headings = [e for e in elements if e.get("type", "").startswith("heading") or e.get("type") == "title"]
+
+        section_breakdown = []
+        for i, heading in enumerate(headings):
+            section_start = heading["start_index"]
+            # Section ends at next heading or end of document
+            if i + 1 < len(headings):
+                section_end = headings[i + 1]["start_index"]
+            else:
+                section_end = content[-1].get("endIndex", section_start) if content else section_start
+
+            # Extract text for this section
+            section_text = ""
+            for element in content:
+                elem_start = element.get("startIndex", 0)
+                elem_end = element.get("endIndex", 0)
+
+                # Skip elements outside this section
+                if elem_end <= section_start or elem_start >= section_end:
+                    continue
+
+                if "paragraph" in element:
+                    para = element["paragraph"]
+                    for elem in para.get("elements", []):
+                        if "textRun" in elem:
+                            text = elem["textRun"].get("content", "")
+                            text_start = elem.get("startIndex", 0)
+                            text_end = elem.get("endIndex", 0)
+
+                            # Calculate overlap with section
+                            overlap_start = max(section_start, text_start)
+                            overlap_end = min(section_end, text_end)
+
+                            if overlap_start < overlap_end:
+                                # Calculate character offsets within the text
+                                char_start = overlap_start - text_start
+                                char_end = overlap_end - text_start
+                                section_text += text[char_start:char_end]
+
+            section_words = [w for w in section_text.split() if w.strip()]
+            section_breakdown.append({
+                "heading": heading.get("text", "").strip(),
+                "level": heading.get("level", 1),
+                "word_count": len(section_words),
+            })
+
+        result["section_breakdown"] = section_breakdown
+
+    return json.dumps(result, indent=2)
+
+
 # Create comment management tools for documents
 _comment_tools = create_comment_tools("document", "document_id")
 
@@ -7810,3 +9061,537 @@ async def clear_doc_formatting(
         result["positioning_info"] = search_info
 
     return json.dumps(result, indent=2)
+
+
+# =============================================================================
+# Named Range Tools
+# =============================================================================
+
+
+@server.tool()
+@handle_http_errors("create_doc_named_range", service_type="docs")
+@require_google_service("docs", "docs_write")
+async def create_doc_named_range(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    name: str,
+    start_index: int = None,
+    end_index: int = None,
+    search: str = None,
+    occurrence: int = 1,
+    match_case: bool = True,
+    location: Literal["start", "end"] = None,
+) -> str:
+    """
+    Create a named range in a Google Doc to mark a section for later reference.
+
+    Named ranges allow you to mark sections of a document that can be referenced
+    programmatically. The range indices automatically update as document content
+    changes, eliminating the need for manual position tracking.
+
+    POSITIONING OPTIONS (mutually exclusive):
+    1. Index-based: Provide start_index and end_index directly
+    2. Search-based: Use search parameter to find text and create range around it
+    3. Location-based: Use location="start" or location="end" for document boundaries
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document
+        name: Name for the range (1-256 characters). Names don't need to be unique;
+              multiple ranges can share the same name.
+        start_index: Start index of the range (inclusive). Required for index-based positioning.
+        end_index: End index of the range (exclusive). Required for index-based positioning.
+        search: Text to search for. The named range will be created around the found text.
+        occurrence: Which occurrence of search text (1=first, 2=second, -1=last). Default: 1
+        match_case: Whether to match case when searching. Default: True
+        location: Create range at "start" or "end" of document (creates a zero-width marker)
+
+    Returns:
+        JSON string with created named range details including the named range ID.
+
+    Examples:
+        # Create named range by indices
+        create_doc_named_range(document_id="abc123", name="introduction",
+                               start_index=1, end_index=150)
+
+        # Create named range around search text
+        create_doc_named_range(document_id="abc123", name="section_header",
+                               search="Chapter 1: Introduction")
+
+        # Create named range around second occurrence of text
+        create_doc_named_range(document_id="abc123", name="second_todo",
+                               search="TODO", occurrence=2)
+
+        # Create marker at end of document
+        create_doc_named_range(document_id="abc123", name="document_end",
+                               location="end")
+
+    Notes:
+        - Named ranges are visible to anyone with API access to the document
+        - Named ranges do not duplicate when content is copied
+        - Use list_doc_named_ranges to see all named ranges
+        - Use delete_doc_named_range to remove a named range
+    """
+    import json
+
+    logger.debug(
+        f"[create_doc_named_range] Doc={document_id}, name={name}, "
+        f"start={start_index}, end={end_index}, search={search}, location={location}"
+    )
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    # Validate name
+    if not name:
+        return validator.create_missing_param_error(
+            param_name="name",
+            context="for creating named range",
+            valid_values=["non-empty string (1-256 characters)"],
+        )
+    if len(name) > 256:
+        return validator.create_invalid_param_error(
+            param_name="name",
+            received=f"string with {len(name)} characters",
+            valid_values=["string with 1-256 characters"],
+            context="Named range names must be 256 characters or fewer",
+        )
+
+    # Determine positioning mode
+    use_index_mode = start_index is not None or end_index is not None
+    use_search_mode = search is not None
+    use_location_mode = location is not None
+
+    # Check for conflicting modes
+    modes_used = sum([use_index_mode, use_search_mode, use_location_mode])
+    if modes_used == 0:
+        return validator.create_missing_param_error(
+            param_name="positioning",
+            context="for creating named range",
+            valid_values=[
+                "start_index + end_index",
+                "search",
+                "location='start' or location='end'",
+            ],
+        )
+    if modes_used > 1:
+        return validator.create_invalid_param_error(
+            param_name="positioning",
+            received="multiple positioning methods",
+            valid_values=[
+                "Use only one: index-based (start_index/end_index), "
+                "search-based (search), or location-based (location)"
+            ],
+            context="Positioning methods are mutually exclusive",
+        )
+
+    # Fetch document to resolve positions
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+    doc_link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    # Resolve indices based on positioning mode
+    resolved_start = None
+    resolved_end = None
+    positioning_info = {}
+
+    if use_location_mode:
+        structure = parse_document_structure(doc_data)
+        if location == "start":
+            resolved_start = 1
+            resolved_end = 1
+            positioning_info = {"location": "start", "message": "Range at document start"}
+        elif location == "end":
+            resolved_start = structure["total_length"] - 1
+            resolved_end = structure["total_length"] - 1
+            positioning_info = {"location": "end", "message": "Range at document end"}
+
+    elif use_search_mode:
+        if search == "":
+            return validator.create_empty_search_error()
+
+        result = find_text_in_document(doc_data, search, occurrence, match_case)
+        if result is None:
+            all_occurrences = find_all_occurrences_in_document(doc_data, search, match_case)
+            if all_occurrences:
+                if occurrence != 1:
+                    return validator.create_invalid_occurrence_error(
+                        occurrence=occurrence,
+                        total_found=len(all_occurrences),
+                        search_text=search,
+                    )
+                occurrences_data = [
+                    {"index": i + 1, "position": f"{s}-{e}"}
+                    for i, (s, e) in enumerate(all_occurrences[:5])
+                ]
+                return validator.create_ambiguous_search_error(
+                    search_text=search,
+                    occurrences=occurrences_data,
+                    total_count=len(all_occurrences),
+                )
+            return validator.create_search_not_found_error(
+                search_text=search, match_case=match_case
+            )
+
+        resolved_start, resolved_end = result
+        positioning_info = {
+            "search_text": search,
+            "occurrence": occurrence,
+            "found_at_range": f"{resolved_start}-{resolved_end}",
+        }
+
+    elif use_index_mode:
+        if start_index is None:
+            return validator.create_missing_param_error(
+                param_name="start_index",
+                context="for index-based positioning",
+                valid_values=["integer >= 1"],
+            )
+        if end_index is None:
+            return validator.create_missing_param_error(
+                param_name="end_index",
+                context="for index-based positioning",
+                valid_values=["integer > start_index"],
+            )
+
+        is_valid, index_error = validator.validate_index_range_structured(
+            start_index, end_index
+        )
+        if not is_valid:
+            return index_error
+
+        resolved_start = start_index
+        resolved_end = end_index
+        positioning_info = {"start_index": start_index, "end_index": end_index}
+
+    # Create the named range request
+    request = create_named_range_request(name, resolved_start, resolved_end)
+
+    # Execute the request
+    result = await asyncio.to_thread(
+        service.documents()
+        .batchUpdate(documentId=document_id, body={"requests": [request]})
+        .execute
+    )
+
+    # Extract the named range ID from the response
+    replies = result.get("replies", [])
+    named_range_id = None
+    if replies and "createNamedRange" in replies[0]:
+        named_range_id = replies[0]["createNamedRange"].get("namedRangeId")
+
+    response = {
+        "success": True,
+        "named_range_id": named_range_id,
+        "name": name,
+        "range": {"start_index": resolved_start, "end_index": resolved_end},
+        "message": f"Created named range '{name}' at indices {resolved_start}-{resolved_end}",
+        "link": doc_link,
+    }
+
+    if positioning_info:
+        response["positioning_info"] = positioning_info
+
+    return json.dumps(response, indent=2)
+
+
+@server.tool()
+@handle_http_errors("list_doc_named_ranges", is_read_only=True, service_type="docs")
+@require_google_service("docs", "docs_read")
+async def list_doc_named_ranges(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    name_filter: str = None,
+) -> str:
+    """
+    List all named ranges in a Google Doc.
+
+    Named ranges mark sections of a document that can be referenced programmatically.
+    This tool retrieves all named ranges with their IDs, names, and position information.
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document
+        name_filter: Optional filter to show only ranges with this name
+
+    Returns:
+        JSON string with list of named ranges including:
+        - named_range_id: Unique ID of the range
+        - name: Name of the range
+        - ranges: List of range positions (a name can have multiple ranges)
+
+    Examples:
+        # List all named ranges
+        list_doc_named_ranges(document_id="abc123")
+
+        # List only ranges with specific name
+        list_doc_named_ranges(document_id="abc123", name_filter="section_header")
+
+    Notes:
+        - Multiple ranges can share the same name
+        - Named ranges are visible to anyone with API access to the document
+        - Range positions automatically update as document content changes
+    """
+    import json
+
+    logger.debug(f"[list_doc_named_ranges] Doc={document_id}, filter={name_filter}")
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    # Fetch document with tabs content to get named ranges from all tabs
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id, includeTabsContent=True).execute
+    )
+    doc_link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    def extract_named_ranges_from_dict(named_ranges_dict, tab_id=None):
+        """Extract named ranges from a namedRanges dictionary."""
+        result = []
+        for range_name, range_data in named_ranges_dict.items():
+            # Apply filter if provided
+            if name_filter and range_name != name_filter:
+                continue
+
+            for nr in range_data.get("namedRanges", []):
+                nr_id = nr.get("namedRangeId")
+                nr_ranges = []
+                for r in nr.get("ranges", []):
+                    range_info = {
+                        "start_index": r.get("startIndex"),
+                        "end_index": r.get("endIndex"),
+                        "segment_id": r.get("segmentId"),
+                    }
+                    nr_ranges.append(range_info)
+
+                entry = {
+                    "named_range_id": nr_id,
+                    "name": range_name,
+                    "ranges": nr_ranges,
+                }
+                if tab_id:
+                    entry["tab_id"] = tab_id
+                result.append(entry)
+        return result
+
+    def process_tabs_recursively(tabs, results):
+        """Process tabs and child tabs to extract all named ranges."""
+        for tab in tabs:
+            tab_props = tab.get("tabProperties", {})
+            tab_id = tab_props.get("tabId")
+            doc_tab = tab.get("documentTab", {})
+            tab_named_ranges = doc_tab.get("namedRanges", {})
+            results.extend(extract_named_ranges_from_dict(tab_named_ranges, tab_id))
+            # Process child tabs
+            child_tabs = tab.get("childTabs", [])
+            if child_tabs:
+                process_tabs_recursively(child_tabs, results)
+
+    named_ranges_list = []
+
+    # With includeTabsContent=True, named ranges are in tabs, not at root level
+    tabs = doc_data.get("tabs", [])
+    if tabs:
+        process_tabs_recursively(tabs, named_ranges_list)
+    else:
+        # Fallback for documents without tabs structure (shouldn't happen with includeTabsContent=True)
+        root_named_ranges = doc_data.get("namedRanges", {})
+        named_ranges_list = extract_named_ranges_from_dict(root_named_ranges)
+
+    # Sort by name for consistent output
+    named_ranges_list.sort(key=lambda x: (x["name"], x["named_range_id"] or ""))
+
+    response = {
+        "success": True,
+        "document_id": document_id,
+        "named_ranges_count": len(named_ranges_list),
+        "named_ranges": named_ranges_list,
+        "link": doc_link,
+    }
+
+    if name_filter:
+        response["filter"] = name_filter
+
+    if not named_ranges_list:
+        if name_filter:
+            response["message"] = f"No named ranges found with name '{name_filter}'"
+        else:
+            response["message"] = "No named ranges found in document"
+    else:
+        response["message"] = f"Found {len(named_ranges_list)} named range(s)"
+
+    return json.dumps(response, indent=2)
+
+
+@server.tool()
+@handle_http_errors("delete_doc_named_range", service_type="docs")
+@require_google_service("docs", "docs_write")
+async def delete_doc_named_range(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    named_range_id: str = None,
+    name: str = None,
+) -> str:
+    """
+    Delete a named range from a Google Doc.
+
+    Can delete by either the specific named_range_id (deletes one range) or
+    by name (deletes all ranges with that name).
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document
+        named_range_id: ID of the specific named range to delete (use list_doc_named_ranges to find)
+        name: Name of ranges to delete (deletes ALL ranges with this name)
+
+    Returns:
+        JSON string confirming deletion.
+
+    Examples:
+        # Delete by ID (specific range)
+        delete_doc_named_range(document_id="abc123",
+                               named_range_id="kix.abc123def456")
+
+        # Delete by name (all ranges with this name)
+        delete_doc_named_range(document_id="abc123", name="old_marker")
+
+    Notes:
+        - Deleting by name removes ALL ranges with that name
+        - Use list_doc_named_ranges to find range IDs
+        - Deleting a named range does not affect document content
+    """
+    import json
+
+    logger.debug(
+        f"[delete_doc_named_range] Doc={document_id}, id={named_range_id}, name={name}"
+    )
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    if not named_range_id and not name:
+        return validator.create_missing_param_error(
+            param_name="named_range_id or name",
+            context="for deleting named range",
+            valid_values=["named_range_id (specific range) or name (all ranges with name)"],
+        )
+
+    if named_range_id and name:
+        return validator.create_invalid_param_error(
+            param_name="identifier",
+            received="both named_range_id and name",
+            valid_values=["Provide only one: named_range_id OR name"],
+            context="Cannot specify both named_range_id and name",
+        )
+
+    doc_link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    # Fetch document to verify named range exists (using tabs content for multi-tab support)
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id, includeTabsContent=True).execute
+    )
+
+    # Find all named ranges in the document (from all tabs)
+    def find_all_named_ranges(doc_data):
+        """Extract all named ranges from document, including from all tabs."""
+        all_ranges = {}  # name -> list of IDs
+        all_ids = set()  # all known IDs
+
+        def extract_from_dict(named_ranges_dict):
+            for range_name, range_data in named_ranges_dict.items():
+                for nr in range_data.get("namedRanges", []):
+                    nr_id = nr.get("namedRangeId")
+                    if nr_id:
+                        all_ids.add(nr_id)
+                        if range_name not in all_ranges:
+                            all_ranges[range_name] = []
+                        all_ranges[range_name].append(nr_id)
+
+        def process_tabs(tabs):
+            for tab in tabs:
+                doc_tab = tab.get("documentTab", {})
+                tab_named_ranges = doc_tab.get("namedRanges", {})
+                extract_from_dict(tab_named_ranges)
+                child_tabs = tab.get("childTabs", [])
+                if child_tabs:
+                    process_tabs(child_tabs)
+
+        tabs = doc_data.get("tabs", [])
+        if tabs:
+            process_tabs(tabs)
+        else:
+            # Fallback for non-tabs response
+            extract_from_dict(doc_data.get("namedRanges", {}))
+
+        return all_ranges, all_ids
+
+    all_ranges, all_ids = find_all_named_ranges(doc_data)
+
+    # Verify the named range exists
+    if named_range_id:
+        if named_range_id not in all_ids:
+            available_ids = list(all_ids)[:5]  # Show up to 5 example IDs
+            return json.dumps({
+                "error": True,
+                "code": "NAMED_RANGE_NOT_FOUND",
+                "message": f"No named range with ID '{named_range_id}' found in document",
+                "suggestion": "Use list_doc_named_ranges to see available named ranges and their IDs",
+                "available_named_range_ids": available_ids if available_ids else [],
+                "link": doc_link,
+            }, indent=2)
+    else:  # deleting by name
+        if name not in all_ranges:
+            available_names = list(all_ranges.keys())[:5]  # Show up to 5 example names
+            return json.dumps({
+                "error": True,
+                "code": "NAMED_RANGE_NOT_FOUND",
+                "message": f"No named range with name '{name}' found in document",
+                "suggestion": "Use list_doc_named_ranges to see available named ranges",
+                "available_named_range_names": available_names if available_names else [],
+                "link": doc_link,
+            }, indent=2)
+
+    # Create the delete request
+    try:
+        request = create_delete_named_range_request(
+            named_range_id=named_range_id, name=name
+        )
+    except ValueError as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+    # Execute the request
+    await asyncio.to_thread(
+        service.documents()
+        .batchUpdate(documentId=document_id, body={"requests": [request]})
+        .execute
+    )
+
+    response = {
+        "success": True,
+        "link": doc_link,
+    }
+
+    if named_range_id:
+        response["deleted_range_id"] = named_range_id
+        response["message"] = f"Deleted named range with ID '{named_range_id}'"
+    else:
+        response["deleted_by_name"] = name
+        response["message"] = f"Deleted all named ranges with name '{name}'"
+
+    return json.dumps(response, indent=2)
