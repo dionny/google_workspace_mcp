@@ -8,8 +8,8 @@ understand what went wrong and how to fix it.
 import json
 import logging
 from enum import Enum
-from dataclasses import dataclass, asdict, field
-from typing import Any, Dict, List, Optional, Union
+from dataclasses import dataclass, asdict
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +30,10 @@ class ErrorCode(str, Enum):
     # Formatting errors
     FORMATTING_REQUIRES_RANGE = "FORMATTING_REQUIRES_RANGE"
     INVALID_FORMATTING_PARAMS = "INVALID_FORMATTING_PARAMS"
+    INVALID_COLOR_FORMAT = "INVALID_COLOR_FORMAT"
 
     # Search errors
+    EMPTY_SEARCH_TEXT = "EMPTY_SEARCH_TEXT"
     SEARCH_TEXT_NOT_FOUND = "SEARCH_TEXT_NOT_FOUND"
     AMBIGUOUS_SEARCH = "AMBIGUOUS_SEARCH"
     INVALID_OCCURRENCE = "INVALID_OCCURRENCE"
@@ -201,9 +203,9 @@ class DocsErrorBuilder:
                 f"The document has {document_length} characters (indices 0-{document_length - 1}). "
                 f"The requested {index_name} of {index_value} is outside this range."
             ),
-            suggestion="Use inspect_doc_structure or get_doc_content to check document length before editing.",
+            suggestion="Use get_doc_info or get_doc_content to check document length before editing.",
             example={
-                "check_length": "inspect_doc_structure(document_id='...')",
+                "check_length": "get_doc_info(document_id='...')",
                 "valid_range": f"Use indices between 1 and {document_length - 1}"
             },
             context=ErrorContext(
@@ -227,6 +229,20 @@ class DocsErrorBuilder:
                 received={"start_index": start_index, "end_index": end_index},
                 expected={"start_index": min(start_index, end_index), "end_index": max(start_index, end_index)}
             )
+        )
+
+    @staticmethod
+    def empty_search_text() -> StructuredError:
+        """Error when search text is empty."""
+        return StructuredError(
+            code=ErrorCode.EMPTY_SEARCH_TEXT.value,
+            message="Search text cannot be empty",
+            reason="An empty string was provided for the search parameter, which would match nothing.",
+            suggestion="Provide a non-empty search string to locate text in the document.",
+            example={
+                "search_mode": "modify_doc_text(document_id='...', search='target text', position='after', text='new text')",
+                "find_and_replace": "find_and_replace_doc(document_id='...', find_text='old', replace_text='new')"
+            }
         )
 
     @staticmethod
@@ -326,7 +342,7 @@ class DocsErrorBuilder:
             reason="No heading with this exact text was found in the document structure.",
             suggestion=". ".join(suggestions) + ".",
             example={
-                "list_headings": "get_doc_structure(document_id='...', element_types=['heading1', 'heading2', 'heading3'])"
+                "list_headings": "get_doc_info(document_id='...', detail='headings')"
             },
             context=ErrorContext(
                 received={"heading": heading, "match_case": match_case},
@@ -412,9 +428,9 @@ class DocsErrorBuilder:
             code=ErrorCode.TABLE_NOT_FOUND.value,
             message=f"Table index {table_index} not found. Document has {total_tables} table(s)",
             reason=f"Table indices are 0-based. Valid indices are 0 to {total_tables - 1}." if total_tables > 0 else "The document contains no tables.",
-            suggestion="Use inspect_doc_structure to see all tables and their indices.",
+            suggestion="Use get_doc_info to see all tables and their indices.",
             example={
-                "inspect_tables": "inspect_doc_structure(document_id='...', detailed=True)"
+                "inspect_tables": "get_doc_info(document_id='...', detail='tables')"
             },
             context=ErrorContext(
                 received={"table_index": table_index},
@@ -459,6 +475,30 @@ class DocsErrorBuilder:
             context=ErrorContext(
                 received={param_name: received_value},
                 expected={param_name: valid_values}
+            )
+        )
+
+    @staticmethod
+    def invalid_color_format(
+        color_value: str,
+        param_name: str = "color"
+    ) -> StructuredError:
+        """Error when a color value has an invalid format."""
+        named_colors = ["red", "green", "blue", "yellow", "orange", "purple", "black", "white", "gray", "grey"]
+        return StructuredError(
+            code=ErrorCode.INVALID_COLOR_FORMAT.value,
+            message=f"Invalid color format for '{param_name}': '{color_value}'",
+            reason="Colors must be specified as hex codes (#FF0000, #F00) or named colors.",
+            suggestion=f"Use hex format (#RRGGBB or #RGB) or a named color: {', '.join(named_colors)}",
+            example={
+                "hex_color": "#FF0000",
+                "short_hex": "#F00",
+                "named_color": "red",
+                "usage": f"modify_doc_text(document_id='...', search='text', position='replace', {param_name}='#FF0000', text='colored text')"
+            },
+            context=ErrorContext(
+                received={param_name: color_value},
+                expected={"format": "hex (#RRGGBB or #RGB) or named color"}
             )
         )
 
@@ -620,6 +660,25 @@ class DocsErrorBuilder:
             context=ErrorContext(
                 received={"document_id": document_id, "mime_type": actual_mime_type},
                 expected={"mime_type": expected_mime_type}
+            )
+        )
+
+    @staticmethod
+    def empty_text_insertion() -> StructuredError:
+        """Error when trying to insert empty text without a range to delete."""
+        return StructuredError(
+            code=ErrorCode.INVALID_PARAM_VALUE.value,
+            message="Cannot insert empty text",
+            reason="An empty string was provided for text insertion, which would have no effect.",
+            suggestion="Provide non-empty text to insert, or use position='replace' with a range (start_index and end_index) and empty text to delete existing content.",
+            example={
+                "insert_text": "modify_doc_text(document_id='...', location='end', text='new content')",
+                "delete_text": "modify_doc_text(document_id='...', start_index=10, end_index=20, text='')",
+                "replace_via_search": "modify_doc_text(document_id='...', search='old', position='replace', text='new')"
+            },
+            context=ErrorContext(
+                received={"text": "''"},
+                expected={"text": "non-empty string for insertion, or provide end_index > start_index to delete a range"}
             )
         )
 

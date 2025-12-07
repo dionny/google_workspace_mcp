@@ -19,12 +19,10 @@ Limitations:
 - Format undo requires storing the original formatting (complex to implement fully)
 """
 import logging
-import asyncio
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 

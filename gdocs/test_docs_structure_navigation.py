@@ -11,7 +11,6 @@ Tests the new structural navigation functions:
 - get_element_ancestors
 - get_heading_siblings
 """
-import pytest
 from gdocs.docs_structure import (
     extract_structural_elements,
     build_headings_outline,
@@ -21,6 +20,7 @@ from gdocs.docs_structure import (
     find_elements_by_type,
     get_element_ancestors,
     get_heading_siblings,
+    extract_text_in_range,
     HEADING_TYPES
 )
 
@@ -68,14 +68,45 @@ def create_mock_table(start_index: int, rows: int = 2, columns: int = 2):
     }
 
 
-def create_mock_document(elements):
-    """Create a mock document with given elements."""
+def create_mock_list_item(text: str, start_index: int, list_id: str, nesting_level: int = 0):
+    """Create a mock list item paragraph element."""
+    end_index = start_index + len(text) + 1  # +1 for newline
+    return {
+        'startIndex': start_index,
+        'endIndex': end_index,
+        'paragraph': {
+            'paragraphStyle': {
+                'namedStyleType': 'NORMAL_TEXT'
+            },
+            'bullet': {
+                'listId': list_id,
+                'nestingLevel': nesting_level
+            },
+            'elements': [{
+                'startIndex': start_index,
+                'endIndex': end_index,
+                'textRun': {
+                    'content': text + '\n'
+                }
+            }]
+        }
+    }
+
+
+def create_mock_document(elements, lists=None):
+    """Create a mock document with given elements.
+
+    Args:
+        elements: List of content elements (paragraphs, tables, etc.)
+        lists: Optional dict of list metadata. Keys are list IDs, values are list properties.
+               Example: {'kix.abc123': {'listProperties': {'nestingLevels': [{'glyphType': 'DECIMAL'}]}}}
+    """
     return {
         'title': 'Test Document',
         'body': {
             'content': elements
         },
-        'lists': {}
+        'lists': lists or {}
     }
 
 
@@ -313,6 +344,124 @@ class TestFindSectionByHeading:
         # Should extend to end of document
         assert section['end_index'] >= 31
 
+    def test_section_returns_content_text(self):
+        """Test that section content is extracted correctly (fixes bug 8937)."""
+        doc = create_mock_document([
+            create_mock_paragraph('Introduction', 1, 'HEADING_1'),
+            create_mock_paragraph('This is the introduction content.', 14, 'NORMAL_TEXT'),
+            create_mock_paragraph('Next Section', 49, 'HEADING_1'),
+        ])
+
+        section = find_section_by_heading(doc, 'Introduction')
+
+        assert section is not None
+        assert section['content'] != ''
+        assert 'introduction content' in section['content'].lower()
+
+    def test_section_content_with_multiple_paragraphs(self):
+        """Test section content includes multiple paragraphs."""
+        doc = create_mock_document([
+            create_mock_paragraph('Chapter', 1, 'HEADING_1'),
+            create_mock_paragraph('First paragraph here.', 10, 'NORMAL_TEXT'),
+            create_mock_paragraph('Second paragraph here.', 33, 'NORMAL_TEXT'),
+            create_mock_paragraph('Next Chapter', 57, 'HEADING_1'),
+        ])
+
+        section = find_section_by_heading(doc, 'Chapter')
+
+        assert section is not None
+        assert 'First paragraph' in section['content']
+        assert 'Second paragraph' in section['content']
+
+    def test_section_ends_at_same_level_heading_after_false_heading(self):
+        """Test that section correctly ends at real same-level heading even after false headings.
+
+        This tests the bug where style-bleed creates empty headings, and the next
+        real heading gets incorrectly marked as false because it immediately follows
+        the empty (false) heading.
+
+        Bug: google_workspace_mcp-4fcb
+        """
+        # Create a document where style bleed creates an empty heading between sections
+        # Structure:
+        # 1. 'Section A' (H2) - target section
+        # 2. Content paragraph
+        # 3. Empty heading (H2) - style bleed artifact (immediately after content)
+        # 4. 'Section B' (H2) - real next section (immediately after empty heading)
+        # 5. Section B content
+        doc = create_mock_document([
+            create_mock_paragraph('Section A', 1, 'HEADING_2'),
+            create_mock_paragraph('Content in section A', 12, 'NORMAL_TEXT'),
+            # Empty heading created by style bleed - starts right after content
+            {
+                'startIndex': 34,
+                'endIndex': 35,
+                'paragraph': {
+                    'paragraphStyle': {'namedStyleType': 'HEADING_2'},
+                    'elements': [{'textRun': {'content': '\n'}}]
+                }
+            },
+            # Real next section - starts right after empty heading
+            create_mock_paragraph('Section B', 35, 'HEADING_2'),
+            create_mock_paragraph('Content in section B', 46, 'NORMAL_TEXT'),
+        ])
+
+        section = find_section_by_heading(doc, 'Section A')
+
+        assert section is not None
+        # Section A should end at Section B (index 35), NOT include Section B content
+        assert section['end_index'] == 35
+        assert 'Content in section A' in section['content']
+        assert 'Section B' not in section['content']
+        assert 'Content in section B' not in section['content']
+        # Subsections should not include Section B
+        for sub in section.get('subsections', []):
+            assert sub['heading'] != 'Section B'
+
+
+class TestExtractTextInRange:
+    """Tests for extract_text_in_range function."""
+
+    def test_extracts_text_from_single_paragraph(self):
+        """Test extracting text from a single paragraph."""
+        doc = create_mock_document([
+            create_mock_paragraph('Hello world', 1, 'NORMAL_TEXT'),
+        ])
+
+        text = extract_text_in_range(doc, 1, 13)
+        assert 'Hello world' in text
+
+    def test_extracts_text_from_range(self):
+        """Test extracting text from a specific range."""
+        doc = create_mock_document([
+            create_mock_paragraph('First paragraph', 1, 'NORMAL_TEXT'),
+            create_mock_paragraph('Second paragraph', 18, 'NORMAL_TEXT'),
+        ])
+
+        # Extract just the second paragraph
+        text = extract_text_in_range(doc, 18, 36)
+        assert 'Second' in text
+        assert 'First' not in text
+
+    def test_returns_empty_for_out_of_range(self):
+        """Test returns empty string for indices outside document."""
+        doc = create_mock_document([
+            create_mock_paragraph('Only content', 1, 'NORMAL_TEXT'),
+        ])
+
+        text = extract_text_in_range(doc, 100, 200)
+        assert text == ''
+
+    def test_extracts_partial_paragraph(self):
+        """Test extracting partial text when range partially overlaps."""
+        doc = create_mock_document([
+            create_mock_paragraph('Hello world', 1, 'NORMAL_TEXT'),
+        ])
+
+        # Try to get just the middle portion
+        text = extract_text_in_range(doc, 1, 6)
+        assert text == 'Hello'
+
 
 class TestGetAllHeadings:
     """Tests for get_all_headings function."""
@@ -492,6 +641,143 @@ class TestFindElementsByType:
         assert len(elements1) == 1
         assert len(elements2) == 1
         assert len(elements3) == 1
+
+    def test_finds_bullet_lists(self):
+        """Test finding bullet lists in a document."""
+        list_id = 'kix.abc123'
+        doc = create_mock_document(
+            [
+                create_mock_paragraph('Before list', 1, 'NORMAL_TEXT'),
+                create_mock_list_item('Item 1', 14, list_id),
+                create_mock_list_item('Item 2', 22, list_id),
+                create_mock_paragraph('After list', 30, 'NORMAL_TEXT'),
+            ],
+            lists={
+                list_id: {
+                    'listProperties': {
+                        'nestingLevels': [{}]  # No glyphType = bullet list
+                    }
+                }
+            }
+        )
+
+        elements = find_elements_by_type(doc, 'bullet_list')
+
+        assert len(elements) == 1
+        assert elements[0]['type'] == 'bullet_list'
+        assert len(elements[0]['items']) == 2
+        assert elements[0]['items'][0]['text'] == 'Item 1'
+        assert elements[0]['items'][1]['text'] == 'Item 2'
+
+    def test_finds_numbered_lists(self):
+        """Test finding numbered lists in a document."""
+        list_id = 'kix.def456'
+        doc = create_mock_document(
+            [
+                create_mock_paragraph('Before list', 1, 'NORMAL_TEXT'),
+                create_mock_list_item('First', 14, list_id),
+                create_mock_list_item('Second', 21, list_id),
+                create_mock_list_item('Third', 29, list_id),
+            ],
+            lists={
+                list_id: {
+                    'listProperties': {
+                        'nestingLevels': [{'glyphType': 'DECIMAL'}]  # numbered list
+                    }
+                }
+            }
+        )
+
+        elements = find_elements_by_type(doc, 'numbered_list')
+
+        assert len(elements) == 1
+        assert elements[0]['type'] == 'numbered_list'
+        assert len(elements[0]['items']) == 3
+
+    def test_finds_all_lists_with_alias(self):
+        """Test finding all lists (both bullet and numbered) with 'list' alias."""
+        bullet_list_id = 'kix.bullets'
+        numbered_list_id = 'kix.numbers'
+        doc = create_mock_document(
+            [
+                create_mock_list_item('Bullet 1', 1, bullet_list_id),
+                create_mock_list_item('Bullet 2', 11, bullet_list_id),
+                create_mock_paragraph('Between lists', 21, 'NORMAL_TEXT'),
+                create_mock_list_item('Number 1', 36, numbered_list_id),
+                create_mock_list_item('Number 2', 46, numbered_list_id),
+            ],
+            lists={
+                bullet_list_id: {
+                    'listProperties': {
+                        'nestingLevels': [{}]  # bullet list
+                    }
+                },
+                numbered_list_id: {
+                    'listProperties': {
+                        'nestingLevels': [{'glyphType': 'DECIMAL'}]  # numbered list
+                    }
+                }
+            }
+        )
+
+        elements = find_elements_by_type(doc, 'list')
+
+        assert len(elements) == 2
+        types = {e['type'] for e in elements}
+        assert 'bullet_list' in types
+        assert 'numbered_list' in types
+
+    def test_plural_aliases_work(self):
+        """Test that plural forms of element types work (fixes bug cb80)."""
+        bullet_list_id = 'kix.bullets'
+        doc = create_mock_document(
+            [
+                create_mock_paragraph('H1 Title', 1, 'HEADING_1'),
+                create_mock_paragraph('Normal text', 11, 'NORMAL_TEXT'),
+                create_mock_table(24, rows=2, columns=3),
+                create_mock_list_item('Item 1', 130, bullet_list_id),
+            ],
+            lists={
+                bullet_list_id: {
+                    'listProperties': {
+                        'nestingLevels': [{}]  # bullet list
+                    }
+                }
+            }
+        )
+
+        # Test 'tables' works like 'table'
+        tables_result = find_elements_by_type(doc, 'tables')
+        table_result = find_elements_by_type(doc, 'table')
+        assert len(tables_result) == len(table_result) == 1
+        assert tables_result[0]['type'] == 'table'
+
+        # Test 'headings' works like 'heading'
+        headings_result = find_elements_by_type(doc, 'headings')
+        heading_result = find_elements_by_type(doc, 'heading')
+        assert len(headings_result) == len(heading_result) == 1
+
+        # Test 'paragraphs' works like 'paragraph'
+        paragraphs_result = find_elements_by_type(doc, 'paragraphs')
+        paragraph_result = find_elements_by_type(doc, 'paragraph')
+        assert len(paragraphs_result) == len(paragraph_result) == 1
+
+        # Test 'lists' works like 'list'
+        lists_result = find_elements_by_type(doc, 'lists')
+        list_result = find_elements_by_type(doc, 'list')
+        assert len(lists_result) == len(list_result) == 1
+
+    def test_toc_alias_works(self):
+        """Test that 'toc' alias works for 'table_of_contents'."""
+        # Create a simple document (no actual TOC, just testing the alias mechanism)
+        doc = create_mock_document([
+            create_mock_paragraph('Content', 1, 'NORMAL_TEXT'),
+        ])
+
+        # Both should return empty (no TOC in doc), but neither should error
+        toc_result = find_elements_by_type(doc, 'toc')
+        full_result = find_elements_by_type(doc, 'table_of_contents')
+        assert toc_result == full_result == []
 
 
 class TestGetElementAncestors:

@@ -3,7 +3,6 @@ Unit tests for insert_doc_image functionality.
 
 Tests verify proper handling of optional width/height parameters.
 """
-import pytest
 from gdocs.docs_helpers import create_insert_image_request
 
 

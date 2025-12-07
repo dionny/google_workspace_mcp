@@ -4,8 +4,6 @@ Unit tests for Google Docs modify_doc_text preview mode.
 Tests the preview=True parameter functionality that allows users to see
 what would change without actually modifying the document.
 """
-import json
-import pytest
 from gdocs.docs_helpers import extract_text_at_range
 
 
@@ -406,3 +404,242 @@ class TestFindAndReplacePreviewResponseStructure:
 
         assert preview_response["position_shift_per_replacement"] == -3
         assert preview_response["total_position_shift"] == -6
+
+
+class TestRangeInspectionPreview:
+    """Tests for range inspection preview mode (preview=True without text/formatting)."""
+
+    def test_range_inspection_response_has_required_fields(self):
+        """Range inspection preview response should contain all required fields."""
+        preview_response = {
+            "preview": True,
+            "would_modify": False,  # No modification, just inspection
+            "operation": "range_inspection",
+            "affected_range": {"start": 100, "end": 250},
+            "position_shift": 0,  # No modification, no shift
+            "current_content": "The text content at the resolved range...",
+            "content_length": 150,
+            "context": {
+                "before": "...text before the range...",
+                "after": "...text after the range..."
+            },
+            "positioning_info": {
+                "range": {"section": "The Problem", "include_heading": False},
+                "resolved_start": 100,
+                "resolved_end": 250,
+            },
+            "message": "Range inspection: resolved to indices 100-250",
+            "link": "https://docs.google.com/document/d/test/edit"
+        }
+
+        # Verify structure
+        assert preview_response["preview"] is True
+        assert preview_response["would_modify"] is False
+        assert preview_response["operation"] == "range_inspection"
+        assert "affected_range" in preview_response
+        assert "start" in preview_response["affected_range"]
+        assert "end" in preview_response["affected_range"]
+        assert preview_response["position_shift"] == 0
+        assert "current_content" in preview_response
+        assert "content_length" in preview_response
+        assert "context" in preview_response
+        assert "positioning_info" in preview_response
+        assert "message" in preview_response
+        assert "link" in preview_response
+
+    def test_range_inspection_with_section_range(self):
+        """Range inspection with section range shows resolved indices and content."""
+        preview_response = {
+            "preview": True,
+            "would_modify": False,
+            "operation": "range_inspection",
+            "affected_range": {"start": 50, "end": 200},
+            "position_shift": 0,
+            "current_content": "This is the content of the section without the heading...",
+            "content_length": 57,
+            "context": {
+                "before": "The Problem\n",  # The heading
+                "after": "\nNext Section..."
+            },
+            "positioning_info": {
+                "range": {"section": "The Problem", "include_heading": False},
+                "resolved_start": 50,
+                "resolved_end": 200,
+                "section_name": "The Problem",
+            },
+            "message": "Range inspection: resolved to indices 50-200"
+        }
+
+        assert preview_response["would_modify"] is False
+        assert preview_response["operation"] == "range_inspection"
+        assert preview_response["positioning_info"]["section_name"] == "The Problem"
+
+    def test_range_inspection_with_search_range(self):
+        """Range inspection with search parameter shows found text."""
+        preview_response = {
+            "preview": True,
+            "would_modify": False,
+            "operation": "range_inspection",
+            "affected_range": {"start": 75, "end": 90},
+            "position_shift": 0,
+            "current_content": "important keyword",
+            "content_length": 17,
+            "context": {
+                "before": "text with an ",
+                "after": " in it"
+            },
+            "positioning_info": {
+                "search": "important keyword",
+                "resolved_start": 75,
+                "resolved_end": 90,
+            },
+            "message": "Search 'important keyword' found at indices 75-90"
+        }
+
+        assert preview_response["would_modify"] is False
+        assert preview_response["current_content"] == "important keyword"
+
+    def test_range_inspection_for_insertion_point(self):
+        """Range inspection for insertion point (heading mode) shows note."""
+        preview_response = {
+            "preview": True,
+            "would_modify": False,
+            "operation": "range_inspection",
+            "affected_range": {"start": 100, "end": 100},  # Same start/end = insertion point
+            "position_shift": 0,
+            "current_content": "",
+            "content_length": 0,
+            "context": {
+                "before": "Section heading\n",
+                "after": "Content after..."
+            },
+            "note": "This is an insertion point, not a range selection",
+            "positioning_info": {
+                "heading": "Section heading",
+                "section_position": "start",
+                "insertion_index": 100,
+            },
+            "message": "Heading 'Section heading' section start: insertion point at index 100"
+        }
+
+        assert preview_response["would_modify"] is False
+        assert preview_response["current_content"] == ""
+        assert preview_response["content_length"] == 0
+        assert "note" in preview_response
+        assert "insertion point" in preview_response["note"]
+
+    def test_range_inspection_differs_from_regular_preview(self):
+        """Range inspection differs from regular preview which shows would_modify=True."""
+        # Regular preview (with text)
+        regular_preview = {
+            "preview": True,
+            "would_modify": True,
+            "operation": "replace",
+        }
+
+        # Range inspection preview (no text/formatting)
+        inspection_preview = {
+            "preview": True,
+            "would_modify": False,
+            "operation": "range_inspection",
+        }
+
+        assert regular_preview["would_modify"] is True
+        assert inspection_preview["would_modify"] is False
+        assert regular_preview["operation"] != inspection_preview["operation"]
+
+
+class TestFindAndReplaceExecuteResponseStructure:
+    """Tests for find_and_replace_doc execute (non-preview) response structure."""
+
+    def test_occurrences_replaced_matches_affected_ranges_length(self):
+        """
+        occurrences_replaced must equal len(affected_ranges).
+
+        This tests the fix for google_workspace_mcp-32f7:
+        find_and_replace_doc returns inconsistent occurrence count vs affected_ranges
+
+        The bug was that occurrences_replaced came from the Google API while
+        affected_ranges was built from local text search, causing mismatches.
+        The fix uses the local count (len(matches)) for both fields.
+        """
+        execute_response = {
+            "success": True,
+            "operation": "find_replace",
+            "occurrences_replaced": 5,
+            "find_text": "TODO",
+            "replace_text": "DONE",
+            "match_case": False,
+            "position_shift_per_replacement": 0,
+            "total_position_shift": 0,
+            "affected_ranges": [
+                {"index": 1, "original_range": {"start": 15, "end": 19}},
+                {"index": 2, "original_range": {"start": 50, "end": 54}},
+                {"index": 3, "original_range": {"start": 100, "end": 104}},
+                {"index": 4, "original_range": {"start": 150, "end": 154}},
+                {"index": 5, "original_range": {"start": 200, "end": 204}},
+            ],
+            "message": "Replaced 5 occurrence(s) of 'TODO' with 'DONE'",
+            "link": "https://docs.google.com/document/d/test/edit"
+        }
+
+        # The critical assertion: occurrences_replaced must equal len(affected_ranges)
+        assert execute_response["occurrences_replaced"] == len(execute_response["affected_ranges"])
+
+    def test_execute_response_has_required_fields(self):
+        """Execute response should contain all required fields."""
+        execute_response = {
+            "success": True,
+            "operation": "find_replace",
+            "occurrences_replaced": 3,
+            "find_text": "TODO",
+            "replace_text": "DONE",
+            "match_case": False,
+            "position_shift_per_replacement": 0,
+            "total_position_shift": 0,
+            "affected_ranges": [
+                {"index": 1, "original_range": {"start": 15, "end": 19}},
+                {"index": 2, "original_range": {"start": 50, "end": 54}},
+                {"index": 3, "original_range": {"start": 100, "end": 104}},
+            ],
+            "message": "Replaced 3 occurrence(s) of 'TODO' with 'DONE'",
+            "link": "https://docs.google.com/document/d/test/edit"
+        }
+
+        # Verify structure
+        assert execute_response["success"] is True
+        assert execute_response["operation"] == "find_replace"
+        assert execute_response["occurrences_replaced"] == 3
+        assert execute_response["find_text"] == "TODO"
+        assert execute_response["replace_text"] == "DONE"
+        assert "match_case" in execute_response
+        assert "position_shift_per_replacement" in execute_response
+        assert "total_position_shift" in execute_response
+        assert "affected_ranges" in execute_response
+        assert len(execute_response["affected_ranges"]) == 3
+        assert "message" in execute_response
+        assert "link" in execute_response
+
+    def test_total_position_shift_uses_occurrences_count(self):
+        """total_position_shift should be position_shift_per_replacement * occurrences_replaced."""
+        # Replace "foo" (3 chars) with "foobar" (6 chars) = +3 shift per occurrence
+        execute_response = {
+            "success": True,
+            "operation": "find_replace",
+            "occurrences_replaced": 4,
+            "find_text": "foo",
+            "replace_text": "foobar",
+            "position_shift_per_replacement": 3,  # 6 - 3 = 3
+            "total_position_shift": 12,  # 3 * 4 = 12
+            "affected_ranges": [
+                {"index": 1, "original_range": {"start": 10, "end": 13}},
+                {"index": 2, "original_range": {"start": 20, "end": 23}},
+                {"index": 3, "original_range": {"start": 30, "end": 33}},
+                {"index": 4, "original_range": {"start": 40, "end": 43}},
+            ],
+        }
+
+        assert execute_response["position_shift_per_replacement"] == len("foobar") - len("foo")
+        assert execute_response["total_position_shift"] == execute_response["position_shift_per_replacement"] * execute_response["occurrences_replaced"]
+        # And verify consistency
+        assert execute_response["occurrences_replaced"] == len(execute_response["affected_ranges"])

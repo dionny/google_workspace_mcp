@@ -25,11 +25,11 @@ class ValidationManager:
     all document operations, reducing code duplication and improving
     error message quality.
     """
-    
+
     def __init__(self):
         """Initialize the validation manager."""
         self.validation_rules = self._setup_validation_rules()
-    
+
     def _setup_validation_rules(self) -> Dict[str, Any]:
         """Setup validation rules and constraints."""
         return {
@@ -38,12 +38,12 @@ class ValidationManager:
             'document_id_pattern': r'^[a-zA-Z0-9-_]+$',
             'max_text_length': 1000000,  # 1MB text limit
             'font_size_range': (1, 400),  # Google Docs font size limits
-            'valid_header_footer_types': ["DEFAULT", "FIRST_PAGE_ONLY", "EVEN_PAGE"],
+            'valid_header_footer_types': ["DEFAULT", "FIRST_PAGE", "EVEN_PAGE"],
             'valid_section_types': ["header", "footer"],
             'valid_list_types': ["UNORDERED", "ORDERED"],
             'valid_element_types': ["table", "list", "page_break"]
         }
-    
+
     def validate_document_id(self, document_id: str) -> Tuple[bool, str]:
         """
         Validate Google Docs document ID format.
@@ -56,16 +56,16 @@ class ValidationManager:
         """
         if not document_id:
             return False, "Document ID cannot be empty"
-            
+
         if not isinstance(document_id, str):
             return False, f"Document ID must be a string, got {type(document_id).__name__}"
-        
+
         # Basic length check (Google Docs IDs are typically 40+ characters)
         if len(document_id) < 20:
             return False, "Document ID appears too short to be valid"
-            
+
         return True, ""
-    
+
     def validate_table_data(self, table_data: List[List[str]]) -> Tuple[bool, str]:
         """
         Comprehensive validation for table data format.
@@ -80,46 +80,46 @@ class ValidationManager:
         """
         if not table_data:
             return False, "Table data cannot be empty. Required format: [['col1', 'col2'], ['row1col1', 'row1col2']]"
-        
+
         if not isinstance(table_data, list):
             return False, f"Table data must be a list, got {type(table_data).__name__}. Required format: [['col1', 'col2'], ['row1col1', 'row1col2']]"
-        
+
         # Check if it's a 2D list
         if not all(isinstance(row, list) for row in table_data):
             non_list_rows = [i for i, row in enumerate(table_data) if not isinstance(row, list)]
             return False, f"All rows must be lists. Rows {non_list_rows} are not lists. Required format: [['col1', 'col2'], ['row1col1', 'row1col2']]"
-        
+
         # Check for empty rows
         if any(len(row) == 0 for row in table_data):
             empty_rows = [i for i, row in enumerate(table_data) if len(row) == 0]
             return False, f"Rows cannot be empty. Empty rows found at indices: {empty_rows}"
-        
+
         # Check column consistency
         col_counts = [len(row) for row in table_data]
         if len(set(col_counts)) > 1:
             return False, f"All rows must have the same number of columns. Found column counts: {col_counts}. Fix your data structure."
-        
+
         rows = len(table_data)
         cols = col_counts[0]
-        
+
         # Check dimension limits
         if rows > self.validation_rules['table_max_rows']:
             return False, f"Too many rows ({rows}). Maximum allowed: {self.validation_rules['table_max_rows']}"
-        
+
         if cols > self.validation_rules['table_max_columns']:
             return False, f"Too many columns ({cols}). Maximum allowed: {self.validation_rules['table_max_columns']}"
-        
+
         # Check cell content types
         for row_idx, row in enumerate(table_data):
             for col_idx, cell in enumerate(row):
                 if cell is None:
                     return False, f"Cell ({row_idx},{col_idx}) is None. All cells must be strings, use empty string '' for empty cells."
-                
+
                 if not isinstance(cell, str):
                     return False, f"Cell ({row_idx},{col_idx}) is {type(cell).__name__}, not string. All cells must be strings. Value: {repr(cell)}"
-        
+
         return True, f"Valid table data: {rows}×{cols} table format"
-    
+
     def validate_text_formatting_params(
         self,
         bold: Optional[bool] = None,
@@ -194,16 +194,51 @@ class ValidationManager:
             if link and not (link.startswith('http://') or link.startswith('https://') or link.startswith('#')):
                 return False, f"link must be a valid URL starting with http://, https://, or # (for internal bookmarks), got '{link}'"
 
-        # Validate colors (basic validation - the actual parsing is done in build_text_style)
+        # Validate colors (full format validation)
         for color, name in [(foreground_color, 'foreground_color'), (background_color, 'background_color')]:
             if color is not None:
                 if not isinstance(color, str):
                     return False, f"{name} must be a string, got {type(color).__name__}"
                 if not color.strip():
                     return False, f"{name} cannot be empty"
+                # Validate color format
+                is_valid, error_msg = self._validate_color_format(color, name)
+                if not is_valid:
+                    return False, error_msg
 
         return True, ""
-    
+
+    def _validate_color_format(self, color: str, param_name: str = "color") -> Tuple[bool, str]:
+        """
+        Validate that a color string is in a valid format.
+
+        Args:
+            color: Color string to validate
+            param_name: Parameter name for error messages
+
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        # Valid named colors (must match _parse_color in docs_helpers.py)
+        named_colors = {'red', 'green', 'blue', 'yellow', 'orange', 'purple', 'black', 'white', 'gray', 'grey'}
+
+        # Check if it's a named color
+        if color.lower() in named_colors:
+            return True, ""
+
+        # Check if it's a hex color
+        if color.startswith('#'):
+            hex_color = color.lstrip('#')
+            # Valid formats: #RGB or #RRGGBB
+            if len(hex_color) == 3 or len(hex_color) == 6:
+                # Verify all characters are valid hex digits
+                if all(c in '0123456789abcdefABCDEF' for c in hex_color):
+                    return True, ""
+            return False, f"Invalid hex color for {param_name}: '{color}'. Use #RGB (e.g., #F00) or #RRGGBB (e.g., #FF0000) format."
+
+        # Not a valid format
+        return False, f"Invalid color format for {param_name}: '{color}'. Use hex (#FF0000, #F00) or named colors (red, blue, green, etc.)."
+
     def validate_index(self, index: int, context: str = "Index") -> Tuple[bool, str]:
         """
         Validate a single document index.
@@ -217,12 +252,12 @@ class ValidationManager:
         """
         if not isinstance(index, int):
             return False, f"{context} must be an integer, got {type(index).__name__}"
-        
+
         if index < 0:
-            return False, f"{context} {index} is negative. You MUST call inspect_doc_structure first to get the proper insertion index."
-        
+            return False, f"{context} {index} is negative. You MUST call get_doc_info first to get the proper insertion index."
+
         return True, ""
-    
+
     def validate_index_range(
         self,
         start_index: int,
@@ -243,28 +278,28 @@ class ValidationManager:
         # Validate start_index
         if not isinstance(start_index, int):
             return False, f"start_index must be an integer, got {type(start_index).__name__}"
-        
+
         if start_index < 0:
             return False, f"start_index cannot be negative, got {start_index}"
-        
+
         # Validate end_index if provided
         if end_index is not None:
             if not isinstance(end_index, int):
                 return False, f"end_index must be an integer, got {type(end_index).__name__}"
-            
+
             if end_index <= start_index:
                 return False, f"end_index ({end_index}) must be greater than start_index ({start_index})"
-        
+
         # Validate against document length if provided
         if document_length is not None:
             if start_index >= document_length:
                 return False, f"start_index ({start_index}) exceeds document length ({document_length})"
-            
+
             if end_index is not None and end_index > document_length:
                 return False, f"end_index ({end_index}) exceeds document length ({document_length})"
-        
+
         return True, ""
-    
+
     def validate_element_insertion_params(
         self,
         element_type: str,
@@ -286,43 +321,43 @@ class ValidationManager:
         if element_type not in self.validation_rules['valid_element_types']:
             valid_types = ', '.join(self.validation_rules['valid_element_types'])
             return False, f"Invalid element_type '{element_type}'. Must be one of: {valid_types}"
-        
+
         # Validate index
         if not isinstance(index, int) or index < 0:
             return False, f"index must be a non-negative integer, got {index}"
-        
+
         # Validate element-specific parameters
         if element_type == "table":
             rows = kwargs.get('rows')
             columns = kwargs.get('columns')
-            
+
             if not rows or not columns:
                 return False, "Table insertion requires 'rows' and 'columns' parameters"
-            
+
             if not isinstance(rows, int) or not isinstance(columns, int):
                 return False, "Table rows and columns must be integers"
-            
+
             if rows <= 0 or columns <= 0:
                 return False, "Table rows and columns must be positive integers"
-            
+
             if rows > self.validation_rules['table_max_rows']:
                 return False, f"Too many rows ({rows}). Maximum: {self.validation_rules['table_max_rows']}"
-            
+
             if columns > self.validation_rules['table_max_columns']:
                 return False, f"Too many columns ({columns}). Maximum: {self.validation_rules['table_max_columns']}"
-        
+
         elif element_type == "list":
             list_type = kwargs.get('list_type')
-            
+
             if not list_type:
                 return False, "List insertion requires 'list_type' parameter"
-            
+
             if list_type not in self.validation_rules['valid_list_types']:
                 valid_types = ', '.join(self.validation_rules['valid_list_types'])
                 return False, f"Invalid list_type '{list_type}'. Must be one of: {valid_types}"
-        
+
         return True, ""
-    
+
     def validate_header_footer_params(
         self,
         section_type: str,
@@ -341,13 +376,13 @@ class ValidationManager:
         if section_type not in self.validation_rules['valid_section_types']:
             valid_types = ', '.join(self.validation_rules['valid_section_types'])
             return False, f"section_type must be one of: {valid_types}, got '{section_type}'"
-        
+
         if header_footer_type not in self.validation_rules['valid_header_footer_types']:
             valid_types = ', '.join(self.validation_rules['valid_header_footer_types'])
             return False, f"header_footer_type must be one of: {valid_types}, got '{header_footer_type}'"
-        
+
         return True, ""
-    
+
     def validate_batch_operations(self, operations: List[Dict[str, Any]]) -> Tuple[bool, str]:
         """
         Validate a list of batch operations.
@@ -360,24 +395,24 @@ class ValidationManager:
         """
         if not operations:
             return False, "Operations list cannot be empty"
-        
+
         if not isinstance(operations, list):
             return False, f"Operations must be a list, got {type(operations).__name__}"
-        
+
         # Validate each operation
         for i, op in enumerate(operations):
             if not isinstance(op, dict):
                 return False, f"Operation {i+1} must be a dictionary, got {type(op).__name__}"
-            
+
             if 'type' not in op:
                 return False, f"Operation {i+1} missing required 'type' field"
-            
+
             # Validate operation-specific fields using existing validation logic
             # This would call the validate_operation function from docs_helpers
             # but we're centralizing the logic here
-            
+
         return True, ""
-    
+
     def validate_text_content(self, text: str, max_length: Optional[int] = None) -> Tuple[bool, str]:
         """
         Validate text content for insertion.
@@ -391,13 +426,13 @@ class ValidationManager:
         """
         if not isinstance(text, str):
             return False, f"Text must be a string, got {type(text).__name__}"
-        
+
         max_len = max_length or self.validation_rules['max_text_length']
         if len(text) > max_len:
             return False, f"Text too long ({len(text)} characters). Maximum: {max_len}"
-        
+
         return True, ""
-    
+
     def get_validation_summary(self) -> Dict[str, Any]:
         """
         Get a summary of all validation rules and constraints.
@@ -464,7 +499,7 @@ class ValidationManager:
             error = StructuredError(
                 code=ErrorCode.INVALID_INDEX_RANGE.value,
                 message=f"start_index cannot be negative, got {start_index}",
-                suggestion="Use inspect_doc_structure to find valid insertion indices"
+                suggestion="Use get_doc_info to find valid insertion indices"
             )
             return False, format_error(error)
 
@@ -586,6 +621,11 @@ class ValidationManager:
 
         return True, None
 
+    def create_empty_search_error(self) -> str:
+        """Create a structured error for empty search text."""
+        error = DocsErrorBuilder.empty_search_text()
+        return format_error(error)
+
     def create_search_not_found_error(
         self,
         search_text: str,
@@ -681,6 +721,18 @@ class ValidationManager:
             received_value=received,
             valid_values=valid_values,
             context_description=context
+        )
+        return format_error(error)
+
+    def create_invalid_color_error(
+        self,
+        color_value: str,
+        param_name: str = "color"
+    ) -> str:
+        """Create a structured error for invalid color format."""
+        error = DocsErrorBuilder.invalid_color_format(
+            color_value=color_value,
+            param_name=param_name
         )
         return format_error(error)
 

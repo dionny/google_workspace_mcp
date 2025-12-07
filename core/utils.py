@@ -308,6 +308,37 @@ def _parse_docs_index_error(error_details: str) -> Optional[str]:
     return None
 
 
+def _create_docs_not_found_error(document_id: str) -> str:
+    """
+    Create a structured error response for document not found (404) errors.
+
+    Args:
+        document_id: The document ID that was not found
+
+    Returns:
+        A JSON string with structured error details
+    """
+    import json
+
+    error_response = {
+        "error": True,
+        "code": "DOCUMENT_NOT_FOUND",
+        "message": f"Document '{document_id}' was not found",
+        "reason": "The document ID may be incorrect or you may not have access to this document.",
+        "suggestion": "Verify the document ID is correct. You can find the ID in the document's URL: docs.google.com/document/d/{document_id}/edit",
+        "context": {
+            "received": {"document_id": document_id},
+            "possible_causes": [
+                "Document ID is incorrect",
+                "Document was deleted",
+                "You don't have permission to access this document",
+                "Document ID includes extra characters (quotes, spaces)"
+            ]
+        }
+    }
+    return json.dumps(error_response, indent=2)
+
+
 def handle_http_errors(tool_name: str, is_read_only: bool = False, service_type: Optional[str] = None):
     """
     A decorator to handle Google API HttpErrors and transient SSL errors in a standardized way.
@@ -383,6 +414,12 @@ def handle_http_errors(tool_name: str, is_read_only: bool = False, service_type:
                             return structured_error
                         # Fall through to generic error handling if not an index error
                         message = f"API error in {tool_name}: {error}"
+                    elif error.resp.status == 404 and service_type == "docs":
+                        # Document not found error - return structured error response
+                        document_id = kwargs.get("document_id", "unknown")
+                        structured_error = _create_docs_not_found_error(document_id)
+                        logger.error(f"Document not found in {tool_name}: {error}", exc_info=True)
+                        return structured_error
                     else:
                         # Other HTTP errors (400 Bad Request, etc.) - don't suggest re-auth
                         message = f"API error in {tool_name}: {error}"

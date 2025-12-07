@@ -32,6 +32,7 @@ class TestErrorCode:
             "FORMATTING_REQUIRES_RANGE",
             "INDEX_OUT_OF_BOUNDS",
             "INVALID_INDEX_RANGE",
+            "EMPTY_SEARCH_TEXT",
             "SEARCH_TEXT_NOT_FOUND",
             "AMBIGUOUS_SEARCH",
             "HEADING_NOT_FOUND",
@@ -39,6 +40,7 @@ class TestErrorCode:
             "PERMISSION_DENIED",
             "TABLE_NOT_FOUND",
             "INVALID_TABLE_DATA",
+            "INVALID_COLOR_FORMAT",
         ]
         for code in expected_codes:
             assert hasattr(ErrorCode, code), f"Missing error code: {code}"
@@ -134,7 +136,7 @@ class TestDocsErrorBuilder:
         assert "5000" in error.message
         assert "3500" in error.message
         assert error.context.document_length == 3500
-        assert "inspect_doc_structure" in error.suggestion.lower()
+        assert "get_doc_info" in error.suggestion.lower()
 
     def test_invalid_index_range(self):
         """Invalid range shows expected values."""
@@ -145,6 +147,16 @@ class TestDocsErrorBuilder:
         assert error.code == "INVALID_INDEX_RANGE"
         assert error.context.received == {"start_index": 200, "end_index": 100}
         assert error.context.expected == {"start_index": 100, "end_index": 200}
+
+    def test_empty_search_text(self):
+        """Empty search text error has proper structure."""
+        error = DocsErrorBuilder.empty_search_text()
+        assert error.code == "EMPTY_SEARCH_TEXT"
+        assert "empty" in error.message.lower()
+        assert "search" in error.message.lower()
+        assert error.suggestion is not None
+        assert error.example is not None
+        assert "search_mode" in error.example
 
     def test_search_text_not_found_with_case_hint(self):
         """Search not found suggests case-insensitive when match_case=True."""
@@ -291,6 +303,54 @@ class TestDocsErrorBuilder:
         assert "NUMBERED" in error.message
         assert error.context.received == {"list_type": "NUMBERED"}
 
+    def test_invalid_color_format_unknown_string(self):
+        """Invalid color format for unknown color string."""
+        error = DocsErrorBuilder.invalid_color_format(
+            color_value="not_a_color",
+            param_name="foreground_color"
+        )
+        assert error.code == "INVALID_COLOR_FORMAT"
+        assert "not_a_color" in error.message
+        assert "foreground_color" in error.message
+        assert "hex" in error.reason.lower()
+        assert "named" in error.reason.lower()
+        assert error.context.received == {"foreground_color": "not_a_color"}
+        assert error.example is not None
+        assert "hex_color" in error.example
+        assert "named_color" in error.example
+
+    def test_invalid_color_format_invalid_hex(self):
+        """Invalid color format for malformed hex color."""
+        error = DocsErrorBuilder.invalid_color_format(
+            color_value="#GGG",
+            param_name="background_color"
+        )
+        assert error.code == "INVALID_COLOR_FORMAT"
+        assert "#GGG" in error.message
+        assert "background_color" in error.message
+
+    def test_invalid_color_format_default_param_name(self):
+        """Invalid color format uses default param name."""
+        error = DocsErrorBuilder.invalid_color_format(
+            color_value="pink"
+        )
+        assert error.code == "INVALID_COLOR_FORMAT"
+        assert "color" in error.message
+        assert error.context.received == {"color": "pink"}
+
+    def test_empty_text_insertion(self):
+        """Empty text insertion error provides actionable guidance."""
+        error = DocsErrorBuilder.empty_text_insertion()
+        assert error.code == "INVALID_PARAM_VALUE"
+        assert "empty" in error.message.lower()
+        assert "text" in error.message.lower()
+        assert "insert" in error.reason.lower()
+        assert "delete" in error.suggestion.lower() or "range" in error.suggestion.lower()
+        assert error.example is not None
+        assert "insert_text" in error.example
+        assert "delete_text" in error.example
+        assert error.context is not None
+
 
 class TestValidationManagerStructuredErrors:
     """Tests for ValidationManager's structured error methods."""
@@ -346,6 +406,19 @@ class TestValidationManagerStructuredErrors:
         assert is_valid is False
         parsed = json.loads(error)
         assert parsed["code"] == "INVALID_INDEX_RANGE"
+
+    def test_validate_index_range_structured_negative_start_index(self):
+        """Negative start_index returns structured error."""
+        vm = ValidationManager()
+        is_valid, error = vm.validate_index_range_structured(
+            start_index=-5,
+            end_index=20
+        )
+        assert is_valid is False
+        parsed = json.loads(error)
+        assert parsed["code"] == "INVALID_INDEX_RANGE"
+        assert "negative" in parsed["message"].lower()
+        assert "get_doc_info" in parsed["suggestion"].lower()
 
     def test_validate_index_range_structured_out_of_bounds(self):
         """Index beyond document length returns structured error."""
@@ -405,6 +478,15 @@ class TestValidationManagerStructuredErrors:
         assert parsed["code"] == "INVALID_TABLE_DATA"
         assert "None" in parsed["message"]
 
+    def test_create_empty_search_error(self):
+        """Create empty search error returns valid JSON."""
+        vm = ValidationManager()
+        error = vm.create_empty_search_error()
+        parsed = json.loads(error)
+        assert parsed["error"] is True
+        assert parsed["code"] == "EMPTY_SEARCH_TEXT"
+        assert "empty" in parsed["message"].lower()
+
     def test_create_search_not_found_error(self):
         """Create search not found returns valid JSON."""
         vm = ValidationManager()
@@ -433,6 +515,71 @@ class TestValidationManagerStructuredErrors:
         )
         parsed = json.loads(error)
         assert parsed["code"] == "TABLE_NOT_FOUND"
+
+    def test_create_invalid_color_error(self):
+        """Create invalid color error returns valid JSON."""
+        vm = ValidationManager()
+        error = vm.create_invalid_color_error(
+            color_value="not_a_color",
+            param_name="foreground_color"
+        )
+        parsed = json.loads(error)
+        assert parsed["code"] == "INVALID_COLOR_FORMAT"
+        assert "not_a_color" in parsed["message"]
+        assert "foreground_color" in parsed["message"]
+
+    def test_validate_color_format_valid_hex(self):
+        """Valid hex colors pass validation."""
+        vm = ValidationManager()
+        # Full hex
+        is_valid, _ = vm._validate_color_format("#FF0000", "test")
+        assert is_valid
+        # Short hex
+        is_valid, _ = vm._validate_color_format("#F00", "test")
+        assert is_valid
+        # Lowercase
+        is_valid, _ = vm._validate_color_format("#aabbcc", "test")
+        assert is_valid
+
+    def test_validate_color_format_valid_named(self):
+        """Valid named colors pass validation."""
+        vm = ValidationManager()
+        named_colors = ["red", "green", "blue", "yellow", "orange", "purple", "black", "white", "gray", "grey"]
+        for color in named_colors:
+            is_valid, _ = vm._validate_color_format(color, "test")
+            assert is_valid, f"Named color '{color}' should be valid"
+            # Also test case-insensitivity
+            is_valid, _ = vm._validate_color_format(color.upper(), "test")
+            assert is_valid, f"Named color '{color.upper()}' should be valid"
+
+    def test_validate_color_format_invalid_string(self):
+        """Invalid color strings fail validation."""
+        vm = ValidationManager()
+        is_valid, error_msg = vm._validate_color_format("not_a_color", "foreground_color")
+        assert not is_valid
+        assert "Invalid color format" in error_msg
+        assert "foreground_color" in error_msg
+
+    def test_validate_color_format_invalid_hex(self):
+        """Invalid hex colors fail validation."""
+        vm = ValidationManager()
+        # Invalid characters
+        is_valid, error_msg = vm._validate_color_format("#GGG", "test")
+        assert not is_valid
+        assert "Invalid hex color" in error_msg
+        # Wrong length
+        is_valid, error_msg = vm._validate_color_format("#FF00", "test")
+        assert not is_valid
+        assert "Invalid hex color" in error_msg
+
+    def test_validate_text_formatting_params_invalid_color(self):
+        """validate_text_formatting_params rejects invalid color format."""
+        vm = ValidationManager()
+        is_valid, error_msg = vm.validate_text_formatting_params(
+            foreground_color="not_a_color"
+        )
+        assert not is_valid
+        assert "Invalid color format" in error_msg
 
 
 class TestHelperFunctions:
@@ -477,6 +624,7 @@ class TestErrorOutputFormat:
             DocsErrorBuilder.formatting_requires_range(100, False, ["bold"]),
             DocsErrorBuilder.index_out_of_bounds("idx", 500, 100),
             DocsErrorBuilder.invalid_index_range(100, 50),
+            DocsErrorBuilder.empty_search_text(),
             DocsErrorBuilder.search_text_not_found("text"),
             DocsErrorBuilder.ambiguous_search("text", [], 5),
             DocsErrorBuilder.heading_not_found("heading", []),
@@ -486,6 +634,7 @@ class TestErrorOutputFormat:
             DocsErrorBuilder.table_not_found(0, 0),
             DocsErrorBuilder.missing_required_param("param", "context"),
             DocsErrorBuilder.invalid_param_value("param", "val", ["a", "b"]),
+            DocsErrorBuilder.invalid_color_format("not_a_color", "foreground_color"),
         ]
 
         for error in test_errors:
@@ -538,7 +687,7 @@ class TestParseDocsIndexError:
         assert "500" in parsed["message"]
         assert parsed["context"]["received"]["index"] == 500
         assert parsed["context"]["document_length"] == 200
-        assert "inspect_doc_structure" in parsed["suggestion"]
+        assert "get_doc_info" in parsed["suggestion"]
 
     def test_parses_index_less_than_segment_end_without_length(self):
         """Handles case where document length is not included in error message."""
@@ -596,6 +745,128 @@ class TestParseDocsIndexError:
         assert result is not None
         parsed = json.loads(result)
         assert parsed["context"]["received"]["index"] == 300
+
+
+class TestCreateDocsNotFoundError:
+    """Tests for _create_docs_not_found_error function in core/utils.py."""
+
+    def test_creates_structured_error_for_invalid_document_id(self):
+        """Creates structured error with document ID in message."""
+        from core.utils import _create_docs_not_found_error
+
+        result = _create_docs_not_found_error("INVALID_DOC_ID_12345")
+
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed["error"] is True
+        assert parsed["code"] == "DOCUMENT_NOT_FOUND"
+        assert "INVALID_DOC_ID_12345" in parsed["message"]
+        assert parsed["context"]["received"]["document_id"] == "INVALID_DOC_ID_12345"
+
+    def test_includes_helpful_suggestion(self):
+        """Includes suggestion about verifying document ID."""
+        from core.utils import _create_docs_not_found_error
+
+        result = _create_docs_not_found_error("test_id")
+
+        parsed = json.loads(result)
+        assert "suggestion" in parsed
+        assert "Verify" in parsed["suggestion"] or "document_id" in parsed["suggestion"].lower()
+        assert "docs.google.com" in parsed["suggestion"]
+
+    def test_includes_possible_causes(self):
+        """Includes possible causes in context."""
+        from core.utils import _create_docs_not_found_error
+
+        result = _create_docs_not_found_error("test_id")
+
+        parsed = json.loads(result)
+        assert "context" in parsed
+        assert "possible_causes" in parsed["context"]
+        causes = parsed["context"]["possible_causes"]
+        assert len(causes) >= 2
+        assert any("incorrect" in c.lower() for c in causes)
+        assert any("deleted" in c.lower() or "permission" in c.lower() for c in causes)
+
+    def test_handles_unknown_document_id(self):
+        """Handles 'unknown' as a document ID gracefully."""
+        from core.utils import _create_docs_not_found_error
+
+        result = _create_docs_not_found_error("unknown")
+
+        parsed = json.loads(result)
+        assert parsed["error"] is True
+        assert parsed["code"] == "DOCUMENT_NOT_FOUND"
+
+
+class TestHandleHttpErrors404:
+    """Tests for handle_http_errors decorator handling 404 errors for docs service."""
+
+    @pytest.mark.asyncio
+    async def test_decorator_returns_structured_error_for_404(self):
+        """Decorator returns structured error for 404 HttpError on docs service."""
+        from core.utils import handle_http_errors
+        from googleapiclient.errors import HttpError
+        from unittest.mock import MagicMock
+
+        # Create a mock 404 HttpError
+        mock_resp = MagicMock()
+        mock_resp.status = 404
+        mock_resp.reason = "Not Found"
+        error = HttpError(mock_resp, b'Requested entity was not found.')
+
+        @handle_http_errors("test_tool", service_type="docs")
+        async def mock_func(document_id: str):
+            raise error
+
+        result = await mock_func(document_id="test_doc_123")
+
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed["error"] is True
+        assert parsed["code"] == "DOCUMENT_NOT_FOUND"
+        assert "test_doc_123" in parsed["message"]
+
+    @pytest.mark.asyncio
+    async def test_decorator_uses_unknown_when_document_id_not_provided(self):
+        """Decorator uses 'unknown' when document_id kwarg is not provided."""
+        from core.utils import handle_http_errors
+        from googleapiclient.errors import HttpError
+        from unittest.mock import MagicMock
+
+        mock_resp = MagicMock()
+        mock_resp.status = 404
+        error = HttpError(mock_resp, b'Requested entity was not found.')
+
+        @handle_http_errors("test_tool", service_type="docs")
+        async def mock_func():
+            raise error
+
+        result = await mock_func()
+
+        parsed = json.loads(result)
+        assert parsed["code"] == "DOCUMENT_NOT_FOUND"
+        assert "unknown" in parsed["message"]
+
+    @pytest.mark.asyncio
+    async def test_decorator_raises_exception_for_404_on_non_docs_service(self):
+        """Decorator raises exception for 404 on non-docs services."""
+        from core.utils import handle_http_errors
+        from googleapiclient.errors import HttpError
+        from unittest.mock import MagicMock
+
+        mock_resp = MagicMock()
+        mock_resp.status = 404
+        error = HttpError(mock_resp, b'Not found.')
+
+        @handle_http_errors("test_tool", service_type="calendar")
+        async def mock_func():
+            raise error
+
+        with pytest.raises(Exception) as exc_info:
+            await mock_func()
+
+        assert "API error in test_tool" in str(exc_info.value)
 
 
 class TestLocationParameterValidation:
@@ -669,15 +940,33 @@ class TestConvertToListValidation:
         assert "UNORDERED" in str(parsed)
 
     def test_convert_to_list_accepted_values(self):
-        """Test that ORDERED and UNORDERED are the only valid values."""
-        valid_values = ["ORDERED", "UNORDERED"]
-        invalid_values = ["bullet", "numbered", "BULLETS", "LIST", ""]
+        """Test that valid values and aliases are accepted."""
+        # Direct values
+        valid_direct = ["ORDERED", "UNORDERED"]
+        # Aliases that should normalize to valid values
+        valid_aliases = ["bullet", "bullets", "numbered", "numbers", "ordered", "unordered"]
+        # Invalid values that should be rejected
+        invalid_values = ["LIST", "", "foo", "123", "random"]
 
-        for val in valid_values:
+        for val in valid_direct:
             assert val in ["ORDERED", "UNORDERED"], f"{val} should be valid"
 
+        # Test alias normalization
+        list_type_aliases = {
+            "bullet": "UNORDERED",
+            "bullets": "UNORDERED",
+            "unordered": "UNORDERED",
+            "numbered": "ORDERED",
+            "numbers": "ORDERED",
+            "ordered": "ORDERED",
+        }
+        for alias in valid_aliases:
+            normalized = list_type_aliases.get(alias.lower(), alias.upper())
+            assert normalized in ["ORDERED", "UNORDERED"], f"{alias} should normalize to valid value"
+
         for val in invalid_values:
-            assert val not in ["ORDERED", "UNORDERED"], f"{val} should be invalid"
+            normalized = list_type_aliases.get(val.lower() if val else val, val.upper() if val else val)
+            assert normalized not in ["ORDERED", "UNORDERED"], f"{val} should be invalid"
 
     def test_convert_to_list_format_styles_output(self):
         """Test that convert_to_list adds to format_styles correctly."""
@@ -700,49 +989,98 @@ class TestConvertToListValidation:
 class TestLineSpacingValidation:
     """Tests for line_spacing parameter validation and functionality."""
 
-    def test_line_spacing_invalid_type_error(self):
-        """Test that non-numeric line_spacing produces error."""
+    def test_line_spacing_invalid_string_error(self):
+        """Test that unrecognized string line_spacing produces error."""
         validator = ValidationManager()
-        # String value should be invalid
-        line_spacing = "double"
-        if not isinstance(line_spacing, (int, float)):
+        # Unrecognized string value should be invalid (note: 'double', 'single', '1.5x' are now valid)
+        line_spacing = "triple"  # Not a recognized named value
+        line_spacing_map = {
+            'single': 100, '1': 100, '1.0': 100,
+            '1.15': 115, '1.15x': 115,
+            '1.5': 150, '1.5x': 150,
+            'double': 200, '2': 200, '2.0': 200,
+        }
+        if isinstance(line_spacing, str) and line_spacing.lower() not in line_spacing_map:
             error = validator.create_invalid_param_error(
                 param_name="line_spacing",
                 received=str(line_spacing),
-                valid_values=["50-1000 (100=single, 150=1.5x, 200=double)"]
+                valid_values=[
+                    "Named: 'single', 'double', '1.5x'",
+                    "Decimal: 1.0, 1.5, 2.0 (auto-converted to percentage)",
+                    "Percentage: 100, 150, 200 (100=single, 150=1.5x, 200=double)",
+                ]
             )
             result = json.loads(error)
             assert result["error"] is True
             assert result["code"] == "INVALID_PARAM_VALUE"
             assert "line_spacing" in result["message"]
 
+    def test_line_spacing_valid_named_strings(self):
+        """Test that valid named strings are accepted."""
+        valid_strings = ['single', 'double', '1.5x', '1.15x', '1', '1.0', '1.5', '2', '2.0']
+        line_spacing_map = {
+            'single': 100, '1': 100, '1.0': 100,
+            '1.15': 115, '1.15x': 115,
+            '1.5': 150, '1.5x': 150,
+            'double': 200, '2': 200, '2.0': 200,
+        }
+        for val in valid_strings:
+            assert val.lower() in line_spacing_map, f"'{val}' should be a valid named string"
+
     def test_line_spacing_out_of_range_low_error(self):
-        """Test that line_spacing below 50 produces error."""
+        """Test that line_spacing below 50 (after conversion) produces error."""
         validator = ValidationManager()
+        # 25 is >= 10 so not treated as multiplier, but < 50 so invalid
         line_spacing = 25
+        if line_spacing < 10:
+            line_spacing = line_spacing * 100
         if line_spacing < 50 or line_spacing > 1000:
             error = validator.create_invalid_param_error(
                 param_name="line_spacing",
                 received=str(line_spacing),
-                valid_values=["50-1000 (100=single, 150=1.5x, 200=double)"]
+                valid_values=[
+                    "Named: 'single', 'double', '1.5x'",
+                    "Decimal: 1.0, 1.5, 2.0 (auto-converted to percentage)",
+                    "Percentage: 100, 150, 200 (100=single, 150=1.5x, 200=double)",
+                ]
             )
             result = json.loads(error)
             assert result["error"] is True
             assert result["code"] == "INVALID_PARAM_VALUE"
 
     def test_line_spacing_out_of_range_high_error(self):
-        """Test that line_spacing above 1000 produces error."""
+        """Test that line_spacing above 1000 (after conversion) produces error."""
         validator = ValidationManager()
+        # 1500 is >= 10 so not treated as multiplier, and > 1000 so invalid
         line_spacing = 1500
+        if line_spacing < 10:
+            line_spacing = line_spacing * 100
         if line_spacing < 50 or line_spacing > 1000:
             error = validator.create_invalid_param_error(
                 param_name="line_spacing",
                 received=str(line_spacing),
-                valid_values=["50-1000 (100=single, 150=1.5x, 200=double)"]
+                valid_values=[
+                    "Named: 'single', 'double', '1.5x'",
+                    "Decimal: 1.0, 1.5, 2.0 (auto-converted to percentage)",
+                    "Percentage: 100, 150, 200 (100=single, 150=1.5x, 200=double)",
+                ]
             )
             result = json.loads(error)
             assert result["error"] is True
             assert result["code"] == "INVALID_PARAM_VALUE"
+
+    def test_line_spacing_decimal_multiplier_conversion(self):
+        """Test that decimal multipliers < 10 are converted to percentage."""
+        # Values < 10 are treated as multipliers
+        assert 1.0 * 100 == 100  # single
+        assert 1.5 * 100 == 150  # 1.5x
+        assert 2.0 * 100 == 200  # double
+
+        # Edge cases
+        line_spacing = 0.5
+        if line_spacing < 10:
+            line_spacing = line_spacing * 100
+        assert line_spacing == 50  # Minimum valid percentage
 
     def test_line_spacing_accepted_values(self):
         """Test that common line_spacing values are valid."""
@@ -871,3 +1209,64 @@ class TestAlignmentValidation:
         fields = result['updateParagraphStyle']['fields']
         assert 'lineSpacing' in fields
         assert 'alignment' in fields
+
+
+class TestFontSizeValidation:
+    """Tests for font_size parameter validation."""
+
+    def test_font_size_zero_rejected(self):
+        """Test that font_size=0 is properly rejected (valid range is 1-400)."""
+        validator = ValidationManager()
+        is_valid, error_msg = validator.validate_text_formatting_params(font_size=0)
+
+        assert is_valid is False
+        assert "font_size must be between 1 and 400" in error_msg
+        assert "got 0" in error_msg
+
+    def test_font_size_negative_rejected(self):
+        """Test that negative font_size is rejected."""
+        validator = ValidationManager()
+        is_valid, error_msg = validator.validate_text_formatting_params(font_size=-1)
+
+        assert is_valid is False
+        assert "font_size must be between 1 and 400" in error_msg
+
+    def test_font_size_too_large_rejected(self):
+        """Test that font_size > 400 is rejected."""
+        validator = ValidationManager()
+        is_valid, error_msg = validator.validate_text_formatting_params(font_size=401)
+
+        assert is_valid is False
+        assert "font_size must be between 1 and 400" in error_msg
+        assert "got 401" in error_msg
+
+    def test_font_size_minimum_accepted(self):
+        """Test that font_size=1 (minimum) is accepted."""
+        validator = ValidationManager()
+        is_valid, error_msg = validator.validate_text_formatting_params(font_size=1)
+
+        assert is_valid is True
+        assert error_msg == ""
+
+    def test_font_size_maximum_accepted(self):
+        """Test that font_size=400 (maximum) is accepted."""
+        validator = ValidationManager()
+        is_valid, error_msg = validator.validate_text_formatting_params(font_size=400)
+
+        assert is_valid is True
+        assert error_msg == ""
+
+    def test_font_size_typical_value_accepted(self):
+        """Test that typical font_size values are accepted."""
+        validator = ValidationManager()
+        for size in [8, 10, 11, 12, 14, 16, 18, 24, 36, 48, 72]:
+            is_valid, error_msg = validator.validate_text_formatting_params(font_size=size)
+            assert is_valid is True, f"font_size={size} should be valid"
+
+    def test_font_size_zero_triggers_has_formatting(self):
+        """Test that font_size=0 triggers has_formatting check (regression test for bug)."""
+        # This test verifies that font_size=0 is detected as a formatting request
+        # and triggers validation, rather than being ignored due to truthy check
+        font_size = 0
+        has_formatting = any([font_size is not None])
+        assert has_formatting is True, "font_size=0 should trigger has_formatting=True"

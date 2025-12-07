@@ -458,7 +458,6 @@ class TestFollowUpEditScenario:
         from gdocs.docs_helpers import calculate_position_shift, OperationType
 
         # Document is 5000 chars, first edit at position 100
-        doc_length = 5000
         edit_position_1 = 100
 
         # First edit: insert "AAA" (3 chars)

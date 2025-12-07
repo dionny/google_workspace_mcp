@@ -8,7 +8,6 @@ from gdocs.managers.history_manager import (
     HistoryManager,
     OperationSnapshot,
     UndoCapability,
-    UndoResult,
     DocumentHistory,
     get_history_manager,
     reset_history_manager,

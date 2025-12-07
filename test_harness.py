@@ -260,30 +260,97 @@ def main():
     # Set verbose logging if requested
     if args.verbose:
         logging.getLogger().setLevel(logging.INFO)
-    
-    # Parse unknown args as tool parameters
-    tool_kwargs = {}
+
+    # Parse unknown args as tool parameters (raw strings initially)
+    import json
+    import inspect
+    raw_kwargs = {}
     i = 0
     while i < len(unknown):
         arg = unknown[i]
         if arg.startswith('--'):
             param_name = arg[2:]
             if i + 1 < len(unknown) and not unknown[i + 1].startswith('--'):
-                value = unknown[i + 1]
-                # Convert common types
-                if value.lower() in ('true', 'false'):
-                    tool_kwargs[param_name] = value.lower() == 'true'
-                elif value.isdigit() or (value.startswith('-') and value[1:].isdigit()):
-                    tool_kwargs[param_name] = int(value)
-                else:
-                    tool_kwargs[param_name] = value
+                raw_kwargs[param_name] = unknown[i + 1]
                 i += 2
             else:
-                tool_kwargs[param_name] = True
+                raw_kwargs[param_name] = True
                 i += 1
         else:
             i += 1
-    
+
+    def convert_value_by_type(value: str, expected_type) -> Any:
+        """Convert a string value based on expected type annotation."""
+        if value is True:  # Boolean flag (--flag without value)
+            return value
+
+        # Handle Optional types (e.g., Optional[int] = Union[int, None])
+        origin = getattr(expected_type, '__origin__', None)
+        if origin is type(None):
+            return None
+
+        # Extract the actual type from Optional/Union
+        type_args = getattr(expected_type, '__args__', ())
+        if type_args:
+            # Filter out NoneType from Union types
+            non_none_types = [t for t in type_args if t is not type(None)]
+            if non_none_types:
+                expected_type = non_none_types[0]
+
+        # Convert based on expected type
+        if expected_type == bool:
+            return value.lower() == 'true'
+        elif expected_type == int:
+            return int(value)
+        elif expected_type == float:
+            return float(value)
+        elif expected_type in (list, dict) or origin in (list, dict):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
+        else:
+            # Default: keep as string
+            return value
+
+    def convert_value_fallback(value: str) -> Any:
+        """Fallback conversion when no type info is available."""
+        if value is True:
+            return value
+        if value.lower() in ('true', 'false'):
+            return value.lower() == 'true'
+        elif value.startswith('[') or value.startswith('{'):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
+        # Don't auto-convert numeric strings - keep as string by default
+        return value
+
+    def parse_tool_kwargs(tool, raw_kwargs: dict) -> dict:
+        """Parse raw kwargs using tool's type annotations."""
+        tool_kwargs = {}
+        type_hints = {}
+
+        # Get type hints from tool function
+        if hasattr(tool, 'fn'):
+            try:
+                type_hints = inspect.signature(tool.fn).parameters
+            except (ValueError, TypeError):
+                pass
+
+        for param_name, value in raw_kwargs.items():
+            if param_name in type_hints:
+                param = type_hints[param_name]
+                if param.annotation != inspect.Parameter.empty:
+                    tool_kwargs[param_name] = convert_value_by_type(value, param.annotation)
+                else:
+                    tool_kwargs[param_name] = convert_value_fallback(value)
+            else:
+                tool_kwargs[param_name] = convert_value_fallback(value)
+
+        return tool_kwargs
+
     # Initialize server
     print("🔧 Initializing server...")
     try:
@@ -312,10 +379,19 @@ def main():
         return
     
     if args.tool:
+        # Get the tool to access type hints for conversion
+        if args.tool not in tester.tools:
+            print(f"❌ Tool '{args.tool}' not found. Use --list to see available tools.")
+            sys.exit(1)
+
+        tool = tester.tools[args.tool]
+        # Parse kwargs using tool's type annotations
+        tool_kwargs = parse_tool_kwargs(tool, raw_kwargs)
+
         # Add user_google_email to kwargs if provided
         if args.user_google_email:
             tool_kwargs['user_google_email'] = args.user_google_email
-        
+
         asyncio.run(tester.call_tool(args.tool, **tool_kwargs))
         return
     

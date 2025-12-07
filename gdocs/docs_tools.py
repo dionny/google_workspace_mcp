@@ -63,6 +63,7 @@ from gdocs.docs_structure import (
     get_heading_siblings,
     get_paragraph_style_at_index,
     is_heading_style,
+    extract_text_in_range,
 )
 from gdocs.docs_tables import extract_table_as_data
 
@@ -360,6 +361,110 @@ async def list_docs_in_folder(
 
 
 @server.tool()
+@handle_http_errors("list_doc_tabs", is_read_only=True, service_type="docs")
+@require_google_service("docs", "docs_read")
+async def list_doc_tabs(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+) -> str:
+    """
+    Lists all tabs in a Google Doc, including nested child tabs.
+
+    Multi-tab documents allow organizing content into separate tabs within a single document.
+    This tool retrieves information about all tabs including their IDs (needed for targeting
+    specific tabs in editing operations), titles, and hierarchy.
+
+    Args:
+        document_id: The ID of the Google Doc
+
+    Returns:
+        str: A formatted list of tabs with their IDs, titles, and hierarchy.
+             The tab_id values can be used with other tools (modify_doc_text, batch_edit_doc, etc.)
+             to target specific tabs for editing.
+    """
+    logger.info(
+        f"[list_doc_tabs] Invoked. Email: '{user_google_email}', Document ID: '{document_id}'"
+    )
+
+    # Fetch document with tab content
+    doc_data = await asyncio.to_thread(
+        service.documents()
+        .get(documentId=document_id, includeTabsContent=True)
+        .execute
+    )
+
+    doc_title = doc_data.get("title", "Untitled Document")
+    tabs = doc_data.get("tabs", [])
+
+    def process_tab(tab, level=0):
+        """Process a tab and its children recursively, returning tab info."""
+        results = []
+        indent = "  " * level
+
+        tab_props = tab.get("tabProperties", {})
+        tab_id = tab_props.get("tabId", "unknown")
+        tab_title = tab_props.get("title", "Untitled Tab")
+
+        # Get content length from documentTab
+        doc_tab = tab.get("documentTab", {})
+        body = doc_tab.get("body", {})
+        content = body.get("content", [])
+
+        # Calculate approximate character count
+        char_count = 0
+        for element in content:
+            if "paragraph" in element:
+                for pe in element.get("paragraph", {}).get("elements", []):
+                    text_run = pe.get("textRun", {})
+                    if text_run and "content" in text_run:
+                        char_count += len(text_run["content"])
+
+        results.append({
+            "level": level,
+            "tab_id": tab_id,
+            "title": tab_title,
+            "char_count": char_count,
+            "indent": indent,
+        })
+
+        # Process child tabs
+        child_tabs = tab.get("childTabs", [])
+        for child_tab in child_tabs:
+            results.extend(process_tab(child_tab, level + 1))
+
+        return results
+
+    # Process all tabs
+    all_tabs = []
+    for tab in tabs:
+        all_tabs.extend(process_tab(tab))
+
+    if not all_tabs:
+        return f"Document '{doc_title}' (ID: {document_id}) has no tabs (single-tab document without explicit tab structure)."
+
+    # Format output
+    out = [
+        f"Document: '{doc_title}' (ID: {document_id})",
+        f"Total tabs: {len(all_tabs)}",
+        "",
+        "Tabs:",
+    ]
+
+    for tab_info in all_tabs:
+        indent = tab_info["indent"]
+        hierarchy_marker = "└─ " if tab_info["level"] > 0 else ""
+        out.append(
+            f"{indent}{hierarchy_marker}'{tab_info['title']}' (tab_id: {tab_info['tab_id']}) - ~{tab_info['char_count']} chars"
+        )
+
+    out.append("")
+    out.append("TIP: Use the tab_id value with modify_doc_text, batch_edit_doc, or find_and_replace_doc to edit specific tabs.")
+
+    return "\n".join(out)
+
+
+@server.tool()
 @handle_http_errors("create_doc", service_type="docs")
 @require_google_service("docs", "docs_write")
 async def create_doc(
@@ -439,6 +544,7 @@ async def modify_doc_text(
     convert_to_list: str = None,
     code_block: bool = None,
     delete_paragraph: bool = False,
+    tab_id: str = None,
 ) -> str:
     """
     Modifies text in a Google Doc - can insert/replace text and/or apply formatting.
@@ -580,6 +686,11 @@ async def modify_doc_text(
             newline to delete the entire paragraph/list item. This prevents orphaned bullet
             markers or empty paragraphs after deletion. Only applies when text="" (delete mode).
             Default: False
+
+        Multi-tab document support:
+        tab_id: Optional tab ID for multi-tab documents. If not provided, operates on
+            the first tab (default behavior). Use list_doc_tabs() to discover tab IDs
+            in a multi-tab document.
 
     Examples:
         # Append to document end (simplest - location-based):
@@ -779,7 +890,6 @@ async def modify_doc_text(
         - deleted_length (int, optional): Deleted text length (for delete operations)
         - styles_applied (list, optional): List of styles applied (for format operations)
         - resolved_range (dict, optional): For range-based operations, details about how range was resolved
-        - legacy_message (str): Backward-compatible text summary
 
         Example response for insert:
         {
@@ -1518,14 +1628,14 @@ async def modify_doc_text(
                 if start_index == 0:
                     # Cannot delete at index 0 (first section break), start from 1
                     actual_start_index = 1
-                    requests.append(create_delete_range_request(1, delete_end))
+                    requests.append(create_delete_range_request(1, delete_end, tab_id=tab_id))
                     op_msg = f"Deleted text from index 1 to {delete_end}"
                     if paragraph_deleted:
                         op_msg += " (including paragraph break)"
                     operations.append(op_msg)
                 else:
                     requests.append(
-                        create_delete_range_request(start_index, delete_end)
+                        create_delete_range_request(start_index, delete_end, tab_id=tab_id)
                     )
                     op_msg = f"Deleted text from index {start_index} to {delete_end}"
                     if paragraph_deleted:
@@ -1540,10 +1650,10 @@ async def modify_doc_text(
                     # Special case: Cannot delete at index 0 (first section break)
                     # Instead, we insert new text at index 1 and then delete the old text
                     actual_start_index = 1
-                    requests.append(create_insert_text_request(1, text))
+                    requests.append(create_insert_text_request(1, text, tab_id=tab_id))
                     adjusted_end = end_index + len(text)
                     requests.append(
-                        create_delete_range_request(1 + len(text), adjusted_end)
+                        create_delete_range_request(1 + len(text), adjusted_end, tab_id=tab_id)
                     )
                     operations.append(
                         f"Replaced text from index {start_index} to {end_index}"
@@ -1552,8 +1662,8 @@ async def modify_doc_text(
                     # Normal replacement: delete old text, then insert new text
                     requests.extend(
                         [
-                            create_delete_range_request(start_index, end_index),
-                            create_insert_text_request(start_index, text),
+                            create_delete_range_request(start_index, end_index, tab_id=tab_id),
+                            create_insert_text_request(start_index, text, tab_id=tab_id),
                         ]
                     )
                     operations.append(
@@ -1568,7 +1678,7 @@ async def modify_doc_text(
             operation_type = OperationType.INSERT
             actual_start_index = 1 if start_index == 0 else start_index
             actual_end_index = None  # Insert has no end_index
-            requests.append(create_insert_text_request(actual_start_index, text))
+            requests.append(create_insert_text_request(actual_start_index, text, tab_id=tab_id))
             operations.append(f"Inserted text at index {actual_start_index}")
             search_info["inserted_at_index"] = actual_start_index
 
@@ -1578,7 +1688,7 @@ async def modify_doc_text(
         format_start = 1 if start_index == 0 else start_index
         format_end = format_start + len(text)
         requests.append(
-            create_clear_formatting_request(format_start, format_end, preserve_links=False)
+            create_clear_formatting_request(format_start, format_end, preserve_links=False, tab_id=tab_id)
         )
         operations.append(f"Cleared inherited formatting from range {format_start}-{format_end}")
 
@@ -1617,7 +1727,7 @@ async def modify_doc_text(
         if should_clear_formatting:
             requests.append(
                 create_clear_formatting_request(
-                    format_start, format_end, preserve_links=(link is not None)
+                    format_start, format_end, preserve_links=(link is not None), tab_id=tab_id
                 )
             )
 
@@ -1637,6 +1747,7 @@ async def modify_doc_text(
                 link,
                 foreground_color,
                 background_color,
+                tab_id=tab_id,
             )
         )
 
@@ -1767,7 +1878,7 @@ async def modify_doc_text(
                 general_para_request = create_paragraph_style_request(
                     para_start, para_end, line_spacing, None, alignment,
                     indent_first_line, indent_start, indent_end,
-                    space_above, space_below
+                    space_above, space_below, tab_id=tab_id
                 )
                 if general_para_request:
                     requests.append(general_para_request)
@@ -1800,7 +1911,8 @@ async def modify_doc_text(
             # or to all paragraphs (auto-applied NORMAL_TEXT to prevent inheritance)
             if heading_style is not None and heading_style_end > heading_style_start:
                 heading_request = create_paragraph_style_request(
-                    heading_style_start, heading_style_end, None, heading_style, None
+                    heading_style_start, heading_style_end, None, heading_style, None,
+                    tab_id=tab_id
                 )
                 if heading_request:
                     requests.append(heading_request)
@@ -1870,7 +1982,7 @@ async def modify_doc_text(
         # Validate we have a valid range for list conversion
         if list_start is not None and list_end is not None and list_end > list_start:
             requests.append(
-                create_bullet_list_request(list_start, list_end, convert_to_list)
+                create_bullet_list_request(list_start, list_end, convert_to_list, tab_id=tab_id)
             )
             list_type_display = (
                 "bullet" if convert_to_list == "UNORDERED" else "numbered"
@@ -2203,10 +2315,6 @@ async def modify_doc_text(
             "Prevented heading style inheritance - insertion point was in a heading paragraph"
         )
 
-    # Add legacy message for backward compatibility
-    operation_summary = "; ".join(operations)
-    result_dict["legacy_message"] = operation_summary
-
     return json.dumps(result_dict, indent=2)
 
 
@@ -2233,6 +2341,7 @@ async def find_and_replace_doc(
     link: str = None,
     foreground_color: str = None,
     background_color: str = None,
+    tab_id: str = None,
 ) -> str:
     """
     Replaces ALL occurrences of text throughout a Google Doc.
@@ -2283,6 +2392,10 @@ async def find_and_replace_doc(
         link: URL to create a hyperlink on replaced text
         foreground_color: Text color as hex (#FF0000) or named color (red, blue, green, etc.)
         background_color: Background/highlight color as hex or named color
+        tab_id: Optional tab ID for multi-tab documents. If not provided, replaces in all tabs
+            (default behavior for replaceAllText). Use list_doc_tabs() to discover tab IDs.
+            Note: The underlying Google Docs API replaceAllText operation affects all tabs by
+            default, or can be restricted to specific tabs using tabsCriteria.
 
     Returns:
         str: JSON string with operation details.
@@ -2488,7 +2601,10 @@ async def find_and_replace_doc(
         )
 
     # Execute the actual replacement
-    requests = [create_find_replace_request(find_text, replace_text, match_case)]
+    # Note: tab_id is passed as a single-element list (tab_ids) since replaceAllText
+    # uses tabsCriteria which accepts multiple tab IDs
+    tab_ids = [tab_id] if tab_id else None
+    requests = [create_find_replace_request(find_text, replace_text, match_case, tab_ids=tab_ids)]
 
     result = await asyncio.to_thread(
         service.documents()
@@ -2523,7 +2639,7 @@ async def find_and_replace_doc(
         for start, end in replaced_occurrences:
             # Clear existing formatting first (preserve links if user is setting a link)
             clear_request = create_clear_formatting_request(
-                start, end, preserve_links=(link is not None)
+                start, end, preserve_links=(link is not None), tab_id=tab_id
             )
             format_requests.append(clear_request)
 
@@ -2543,6 +2659,7 @@ async def find_and_replace_doc(
                 link,
                 foreground_color,
                 background_color,
+                tab_id=tab_id,
             )
             if format_request:
                 format_requests.append(format_request)
@@ -2557,27 +2674,31 @@ async def find_and_replace_doc(
             occurrences_formatted = len(replaced_occurrences)
 
     link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    # Use len(matches) for consistency - occurrences_replaced should match len(affected_ranges)
+    # The API's replacements count may differ slightly due to different matching algorithms
+    reported_count = len(matches)
     message = (
-        f"Replaced {replacements} occurrence(s) of '{find_text}' with '{replace_text}'"
+        f"Replaced {reported_count} occurrence(s) of '{find_text}' with '{replace_text}'"
     )
 
     if occurrences_formatted > 0:
         message += f" and applied formatting to {occurrences_formatted} occurrence(s)"
 
     # Add hint when only 1 replacement was made - user might have wanted targeted replacement
-    if replacements == 1 and not has_formatting:
+    if reported_count == 1 and not has_formatting:
         message += ". Tip: For single replacements, you can also use modify_doc_text with search + position='replace' to target a specific occurrence."
 
     # Build structured response consistent with other tools
     operation_result = {
         "success": True,
         "operation": "find_replace",
-        "occurrences_replaced": replacements,
+        "occurrences_replaced": reported_count,
         "find_text": find_text,
         "replace_text": replace_text,
         "match_case": match_case,
         "position_shift_per_replacement": len_diff,
-        "total_position_shift": len_diff * replacements,
+        "total_position_shift": len_diff * reported_count,
         "affected_ranges": matches,
         "message": message,
         "link": link,
@@ -3933,33 +4054,52 @@ async def update_doc_headers_footers(
     service: Any,
     user_google_email: str,
     document_id: str,
-    section_type: str,
+    section_type: str = None,
     content: str = None,
     header_footer_type: str = "DEFAULT",
     create_if_missing: bool = True,
     # Parameter alias for consistency with other tools
     text: str = None,  # Alias for content (matches modify_doc_text, insert_doc_elements)
+    # New parameters for combined header+footer updates
+    header_content: str = None,  # Set header content directly (use instead of section_type+content)
+    footer_content: str = None,  # Set footer content directly (use instead of section_type+content)
 ) -> str:
     """
     Updates headers or footers in a Google Doc. Creates the header/footer if it doesn't exist.
 
+    Supports two usage modes:
+    1. Single section: Use section_type + content to update one section
+    2. Combined: Use header_content and/or footer_content to update both in one call
+
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document to update
-        section_type: Type of section to update ("header" or "footer")
-        content: Text content for the header/footer
+        section_type: Type of section to update ("header" or "footer") - used with content param
+        content: Text content for the header/footer - used with section_type param
         header_footer_type: Type of header/footer ("DEFAULT", "FIRST_PAGE", "EVEN_PAGE")
         create_if_missing: If true, creates the header/footer if it doesn't exist (default: true)
         text: Alias for content (for consistency with modify_doc_text, insert_doc_elements)
+        header_content: Header text - set directly without section_type (can combine with footer_content)
+        footer_content: Footer text - set directly without section_type (can combine with header_content)
 
     Returns:
         str: Confirmation message with update details
+
+    Examples:
+        # Single section (original API):
+        update_doc_headers_footers(doc_id, section_type="header", content="My Header")
+
+        # Combined header and footer in one call:
+        update_doc_headers_footers(doc_id, header_content="My Header", footer_content="My Footer")
+
+        # Just header using new parameter:
+        update_doc_headers_footers(doc_id, header_content="My Header")
     """
     # Resolve parameter alias: 'text' is an alias for 'content'
     if text is not None and content is None:
         content = text
 
-    logger.info(f"[update_doc_headers_footers] Doc={document_id}, type={section_type}")
+    logger.info(f"[update_doc_headers_footers] Doc={document_id}, type={section_type}, header_content={header_content is not None}, footer_content={footer_content is not None}")
 
     # Input validation
     validator = ValidationManager()
@@ -3968,48 +4108,148 @@ async def update_doc_headers_footers(
     if not is_valid:
         return structured_error
 
-    is_valid, error_msg = validator.validate_header_footer_params(
-        section_type, header_footer_type
-    )
-    if not is_valid:
-        if "section_type" in error_msg.lower():
+    # Determine which mode we're in: combined (header_content/footer_content) or single (section_type+content)
+    use_combined_mode = header_content is not None or footer_content is not None
+
+    if use_combined_mode:
+        # Combined mode: use header_content and/or footer_content
+        # Cannot mix with section_type+content
+        if section_type is not None and content is not None:
             return validator.create_invalid_param_error(
-                param_name="section_type",
-                received=section_type,
-                valid_values=["header", "footer"],
+                param_name="parameters",
+                received="both section_type+content and header_content/footer_content",
+                valid_values=["Use either section_type+content OR header_content/footer_content, not both"],
+                context="Choose one usage mode: single section (section_type+content) or combined (header_content/footer_content)",
             )
-        else:
+
+        # Validate header_footer_type
+        if header_footer_type not in ["DEFAULT", "FIRST_PAGE", "EVEN_PAGE"]:
             return validator.create_invalid_param_error(
                 param_name="header_footer_type",
                 received=header_footer_type,
                 valid_values=["DEFAULT", "FIRST_PAGE", "EVEN_PAGE"],
             )
 
-    is_valid, error_msg = validator.validate_text_content(content)
-    if not is_valid:
-        return validator.create_invalid_param_error(
-            param_name="content",
-            received=repr(content)[:50],
-            valid_values=["non-empty string"],
-            context=error_msg,
-        )
+        # Validate that at least one content is provided (should always be true given how we got here)
+        if header_content is None and footer_content is None:
+            return validator.create_invalid_param_error(
+                param_name="header_content/footer_content",
+                received="both None",
+                valid_values=["at least one of header_content or footer_content"],
+            )
 
-    # Use HeaderFooterManager to handle the complex logic
-    header_footer_manager = HeaderFooterManager(service)
+        # Use HeaderFooterManager to handle the complex logic
+        header_footer_manager = HeaderFooterManager(service)
 
-    success, message = await header_footer_manager.update_header_footer_content(
-        document_id, section_type, content, header_footer_type, create_if_missing
-    )
+        results = []
+        errors = []
 
-    if success:
+        # Update header if provided
+        if header_content is not None:
+            is_valid, error_msg = validator.validate_text_content(header_content)
+            if not is_valid:
+                return validator.create_invalid_param_error(
+                    param_name="header_content",
+                    received=repr(header_content)[:50],
+                    valid_values=["non-empty string"],
+                    context=error_msg,
+                )
+
+            success, message = await header_footer_manager.update_header_footer_content(
+                document_id, "header", header_content, header_footer_type, create_if_missing
+            )
+            if success:
+                results.append("header")
+            else:
+                errors.append(f"header: {message}")
+
+        # Update footer if provided
+        if footer_content is not None:
+            is_valid, error_msg = validator.validate_text_content(footer_content)
+            if not is_valid:
+                return validator.create_invalid_param_error(
+                    param_name="footer_content",
+                    received=repr(footer_content)[:50],
+                    valid_values=["non-empty string"],
+                    context=error_msg,
+                )
+
+            success, message = await header_footer_manager.update_header_footer_content(
+                document_id, "footer", footer_content, header_footer_type, create_if_missing
+            )
+            if success:
+                results.append("footer")
+            else:
+                errors.append(f"footer: {message}")
+
         link = f"https://docs.google.com/document/d/{document_id}/edit"
-        return f"{message}. Link: {link}"
+
+        if errors and not results:
+            # All operations failed
+            return validator.create_api_error(
+                operation="update_header_footer",
+                error_message="; ".join(errors),
+                document_id=document_id,
+            )
+        elif errors:
+            # Partial success
+            return f"Partially updated: {', '.join(results)}. Errors: {'; '.join(errors)}. Link: {link}"
+        else:
+            # All succeeded
+            return f"Updated {' and '.join(results)} in document {document_id}. Link: {link}"
+
     else:
-        return validator.create_api_error(
-            operation="update_header_footer",
-            error_message=message,
-            document_id=document_id,
+        # Single section mode: original behavior with section_type + content
+        if section_type is None:
+            return validator.create_invalid_param_error(
+                param_name="section_type",
+                received="None",
+                valid_values=["header", "footer"],
+                context="Either use section_type+content, or use header_content/footer_content",
+            )
+
+        is_valid, error_msg = validator.validate_header_footer_params(
+            section_type, header_footer_type
         )
+        if not is_valid:
+            if "section_type" in error_msg.lower():
+                return validator.create_invalid_param_error(
+                    param_name="section_type",
+                    received=section_type,
+                    valid_values=["header", "footer"],
+                )
+            else:
+                return validator.create_invalid_param_error(
+                    param_name="header_footer_type",
+                    received=header_footer_type,
+                    valid_values=["DEFAULT", "FIRST_PAGE", "EVEN_PAGE"],
+                )
+
+        is_valid, error_msg = validator.validate_text_content(content)
+        if not is_valid:
+            return validator.create_invalid_param_error(
+                param_name="content",
+                received=repr(content)[:50],
+                valid_values=["non-empty string"],
+                context=error_msg,
+            )
+
+        # Use HeaderFooterManager to handle the complex logic
+        header_footer_manager = HeaderFooterManager(service)
+
+        success, message = await header_footer_manager.update_header_footer_content(
+            document_id, section_type, content, header_footer_type, create_if_missing
+        )
+
+        if success:
+            link = f"https://docs.google.com/document/d/{document_id}/edit"
+            return f"{message}. Link: {link}"
+        else:
+            return validator.create_api_error(
+                operation="update_header_footer",
+                error_message=message,
+                document_id=document_id,
+            )
 
 
 @server.tool()
@@ -4154,249 +4394,6 @@ def _infer_header_footer_type(section_id: str) -> str:
 
 
 @server.tool()
-@handle_http_errors("batch_update_doc", service_type="docs")
-@require_google_service("docs", "docs_write")
-async def batch_update_doc(
-    service: Any,
-    user_google_email: str,
-    document_id: str,
-    operations: List[Dict[str, Any]],
-) -> str:
-    """
-    DEPRECATED: Use batch_edit_doc instead.
-
-    This tool is maintained for backward compatibility. The new batch_edit_doc tool
-    combines all features from batch_update_doc and batch_modify_doc with:
-    - Search-based positioning (insert before/after search text)
-    - Automatic position adjustment
-    - Both naming conventions (insert/insert_text, etc.)
-
-    Executes multiple document operations in a single atomic batch update.
-
-    Args:
-        user_google_email: User's Google email address
-        document_id: ID of the document to update
-        operations: List of operation dictionaries. Each operation should contain:
-                   - type: Operation type ('insert_text', 'delete_text', 'replace_text', 'format_text', 'insert_table', 'insert_page_break')
-                   - Additional parameters specific to each operation type
-
-    Example operations:
-        [
-            {"type": "insert_text", "index": 1, "text": "Hello World"},
-            {"type": "format_text", "start_index": 1, "end_index": 12, "bold": true},
-            {"type": "insert_table", "index": 20, "rows": 2, "columns": 3}
-        ]
-
-    Returns:
-        str: JSON string with operation results including:
-            - success (bool): Whether the batch succeeded
-            - operations_count (int): Number of operations executed
-            - total_position_shift (int): Cumulative position change from all operations
-            - per_operation_shifts (list): Position shift for each operation
-            - message (str): Human-readable summary
-            - document_link (str): Link to the document
-
-        Example response:
-        {
-            "success": true,
-            "operations_count": 3,
-            "total_position_shift": 15,
-            "per_operation_shifts": [11, 0, 4],
-            "message": "Successfully executed 3 operations",
-            "document_link": "https://docs.google.com/document/d/.../edit"
-        }
-
-        Use total_position_shift for efficient follow-up edits:
-        If you had a position at index 100 before these operations,
-        the new position is 100 + total_position_shift.
-    """
-    import json
-
-    logger.debug(f"[batch_update_doc] Doc={document_id}, operations={len(operations)}")
-
-    # Input validation
-    validator = ValidationManager()
-
-    is_valid, structured_error = validator.validate_document_id_structured(document_id)
-    if not is_valid:
-        return structured_error
-
-    is_valid, error_msg = validator.validate_batch_operations(operations)
-    if not is_valid:
-        return validator.create_invalid_param_error(
-            param_name="operations",
-            received=f"list with {len(operations) if isinstance(operations, list) else 'invalid'} items",
-            valid_values=["list of operation dicts with 'type' field"],
-            context=error_msg,
-        )
-
-    # Use BatchOperationManager to handle the complex logic
-    batch_manager = BatchOperationManager(service)
-
-    success, message, metadata = await batch_manager.execute_batch_operations(
-        document_id, operations
-    )
-
-    if success:
-        result = {
-            "success": True,
-            "operations_count": metadata.get("operations_count", len(operations)),
-            "total_position_shift": metadata.get("total_position_shift", 0),
-            "per_operation_shifts": metadata.get("per_operation_shifts", []),
-            "message": message,
-            "document_link": metadata.get(
-                "document_link",
-                f"https://docs.google.com/document/d/{document_id}/edit",
-            ),
-        }
-        return json.dumps(result, indent=2)
-    else:
-        error_result = {"success": False, "error": message, "document_id": document_id}
-        return json.dumps(error_result, indent=2)
-
-
-@server.tool()
-@handle_http_errors("batch_modify_doc", service_type="docs")
-@require_google_service("docs", "docs_write")
-async def batch_modify_doc(
-    service: Any,
-    user_google_email: str,
-    document_id: str,
-    operations: List[Dict[str, Any]],
-    auto_adjust_positions: bool = True,
-) -> str:
-    """
-    DEPRECATED: Use batch_edit_doc instead.
-
-    This tool is maintained for backward compatibility. The new batch_edit_doc tool
-    provides identical functionality with a clearer name.
-
-    Execute multiple document operations atomically with search-based positioning.
-
-    This tool enables efficient batch editing with:
-    - Search-based positioning (insert before/after search text)
-    - Automatic position adjustment for sequential operations
-    - Per-operation results with position shift tracking
-    - Atomic execution (all succeed or all fail)
-
-    Args:
-        user_google_email: User's Google email address
-        document_id: ID of the document to update
-        operations: List of operations. Each operation can use either:
-            - Index-based: {"type": "insert_text", "index": 100, "text": "Hello"}
-            - Search-based: {"type": "insert", "search": "Conclusion", "position": "before", "text": "New text"}
-
-        auto_adjust_positions: If True (default), automatically adjusts positions
-            for subsequent operations based on cumulative shifts from earlier operations.
-
-    Supported operation types:
-        - insert/insert_text: Insert text at position
-        - delete/delete_text: Delete text range
-        - replace/replace_text: Replace text range with new text
-        - format/format_text: Apply formatting (bold, italic, underline, font_size, font_family)
-        - insert_table: Insert table at position
-        - insert_page_break: Insert page break
-        - find_replace: Find and replace all occurrences
-
-    Search-based positioning options:
-        - search: Text to find in the document
-        - position: "before" (insert before match), "after" (insert after), "replace" (replace match)
-        - occurrence: Which occurrence to target (1=first, 2=second, -1=last)
-        - all_occurrences: If True, apply operation to ALL occurrences (not just first)
-        - match_case: Whether to match case exactly (default: True)
-
-    Example operations:
-        [
-            {"type": "insert", "search": "Conclusion", "position": "before",
-             "text": "\\n\\nNew section content.\\n"},
-            {"type": "format", "search": "Important Note", "position": "replace",
-             "bold": True, "font_size": 14},
-            {"type": "insert_text", "index": 1, "text": "Header text\\n"},
-            {"type": "find_replace", "find_text": "old term", "replace_text": "new term"}
-        ]
-
-    Example with all_occurrences (format ALL matching text):
-        [
-            {"type": "format", "search": "TODO", "all_occurrences": True,
-             "bold": True, "foreground_color": "red"},
-            {"type": "replace", "search": "DRAFT", "all_occurrences": True,
-             "text": "FINAL"}
-        ]
-
-    Returns:
-        JSON string with detailed results including:
-        - success: Overall success status
-        - operations_completed: Number of operations executed
-        - results: Per-operation details with position shifts
-        - total_position_shift: Cumulative position change
-        - document_link: Link to edited document
-
-        Example response:
-        {
-            "success": true,
-            "operations_completed": 2,
-            "total_operations": 2,
-            "results": [
-                {
-                    "index": 0,
-                    "type": "insert",
-                    "success": true,
-                    "description": "insert 'New section...' at 150",
-                    "position_shift": 20,
-                    "affected_range": {"start": 150, "end": 170},
-                    "resolved_index": 150
-                },
-                {
-                    "index": 1,
-                    "type": "format",
-                    "success": true,
-                    "description": "format 180-195 (bold=True)",
-                    "position_shift": 0,
-                    "affected_range": {"start": 180, "end": 195}
-                }
-            ],
-            "total_position_shift": 20,
-            "message": "Successfully executed 2 operation(s)",
-            "document_link": "https://docs.google.com/document/d/.../edit"
-        }
-
-        Using position_shift for chained operations:
-        ```python
-        # First operation at index 100 inserts 15 chars
-        result1 = batch_modify_doc(doc_id, [{"type": "insert_text", "index": 100, "text": "15 char string."}])
-        # result1["results"][0]["position_shift"] = 15
-
-        # For a subsequent edit originally targeting index 200:
-        # new_index = 200 + result1["total_position_shift"] = 215
-        ```
-    """
-    import json
-
-    logger.debug(f"[batch_modify_doc] Doc={document_id}, operations={len(operations)}")
-
-    # Input validation
-    validator = ValidationManager()
-
-    is_valid, error_msg = validator.validate_document_id(document_id)
-    if not is_valid:
-        return json.dumps({"success": False, "error": error_msg}, indent=2)
-
-    if not operations or not isinstance(operations, list):
-        return json.dumps(
-            {"success": False, "error": "Operations must be a non-empty list"}, indent=2
-        )
-
-    # Use BatchOperationManager with enhanced search support
-    batch_manager = BatchOperationManager(service)
-
-    result = await batch_manager.execute_batch_with_search(
-        document_id, operations, auto_adjust_positions=auto_adjust_positions
-    )
-
-    return json.dumps(result.to_dict(), indent=2)
-
-
-@server.tool()
 @handle_http_errors("batch_edit_doc", service_type="docs")
 @require_google_service("docs", "docs_write")
 async def batch_edit_doc(
@@ -4406,12 +4403,12 @@ async def batch_edit_doc(
     operations: List[Dict[str, Any]],
     auto_adjust_positions: bool = True,
     preview: bool = False,
+    tab_id: str = None,
 ) -> str:
     """
     Execute multiple document operations atomically with search-based positioning.
 
-    This is the RECOMMENDED batch editing tool, combining features from both
-    batch_update_doc and batch_modify_doc. Use this tool for all batch operations.
+    This is the RECOMMENDED batch editing tool for all batch operations.
 
     Features:
     - Search-based positioning (insert before/after search text)
@@ -4433,13 +4430,16 @@ async def batch_edit_doc(
             for subsequent operations based on cumulative shifts from earlier operations.
         preview: If True, returns what would be modified without actually executing
             the operations. Useful for validating operations before committing changes.
+        tab_id: Optional tab ID for multi-tab documents. If not provided, operates on
+            the first tab (default behavior). Use list_doc_tabs() to discover tab IDs.
 
     Supported operation types (both naming styles work):
         - insert / insert_text: Insert text at position
         - delete / delete_text: Delete text range
         - replace / replace_text: Replace text range with new text
         - format / format_text: Apply formatting (bold, italic, underline, font_size, font_family)
-        - insert_table: Insert table at position
+        - insert_table: Insert table at position (requires: index/location, rows, columns)
+          Example: {"type": "insert_table", "location": "end", "rows": 3, "columns": 4}
         - insert_page_break: Insert page break
         - find_replace: Find and replace all occurrences
 
@@ -4452,6 +4452,11 @@ async def batch_edit_doc(
         - occurrence: Which occurrence to target (1=first, 2=second, -1=last)
         - all_occurrences: If True, apply operation to ALL occurrences (not just first)
         - match_case: Whether to match case exactly (default: True)
+        - extend: Extend position to boundary: "paragraph", "sentence", or "line"
+          When extend is used:
+          - position="after" + extend="paragraph": Insert after the END of the paragraph
+          - position="before" + extend="paragraph": Insert before the START of the paragraph
+          - position="replace" + extend="paragraph": Replace the ENTIRE paragraph
 
     Example operations:
         [
@@ -4475,6 +4480,14 @@ async def batch_edit_doc(
              "bold": True, "foreground_color": "red"},
             {"type": "replace", "search": "DRAFT", "all_occurrences": True,
              "text": "FINAL"}
+        ]
+
+    Example with extend (insert after entire paragraph, not just after matched text):
+        [
+            {"type": "insert", "search": "Introduction", "position": "after",
+             "extend": "paragraph", "text": "\\n\\nNew paragraph after Introduction."},
+            {"type": "delete", "search": "deprecated", "position": "replace",
+             "extend": "sentence"}
         ]
 
     Returns:
@@ -4551,7 +4564,7 @@ async def batch_edit_doc(
         )
 
     # Use BatchOperationManager with enhanced search support
-    batch_manager = BatchOperationManager(service)
+    batch_manager = BatchOperationManager(service, tab_id=tab_id)
 
     result = await batch_manager.execute_batch_with_search(
         document_id,
@@ -4699,223 +4712,6 @@ async def get_doc_info(
 
     link = f"https://docs.google.com/document/d/{document_id}/edit"
     return f"Document info for {document_id} (detail={detail}):\n\n{json.dumps(result, indent=2)}\n\nLink: {link}"
-
-
-@server.tool()
-@handle_http_errors("inspect_doc_structure", is_read_only=True, service_type="docs")
-@require_google_service("docs", "docs_read")
-async def inspect_doc_structure(
-    service: Any,
-    user_google_email: str,
-    document_id: str,
-    detailed: bool = False,
-) -> str:
-    """
-    [LEGACY] Find safe insertion points and document structure.
-
-    DEPRECATED: Use get_doc_info() instead for a unified interface.
-    - get_doc_info(doc_id, detail="summary") - equivalent to inspect_doc_structure(detailed=False)
-    - get_doc_info(doc_id, detail="all") - equivalent to inspect_doc_structure(detailed=True)
-
-    This function is maintained for backward compatibility.
-
-    Args:
-        user_google_email: User's Google email address
-        document_id: ID of the document to inspect
-        detailed: Whether to return detailed structure information
-
-    Returns:
-        str: JSON string containing document structure and safe insertion indices
-    """
-    logger.debug(f"[inspect_doc_structure] Doc={document_id}, detailed={detailed}")
-
-    # Get the document
-    doc = await asyncio.to_thread(
-        service.documents().get(documentId=document_id).execute
-    )
-
-    if detailed:
-        # Return full parsed structure
-        structure = parse_document_structure(doc)
-
-        # Simplify for JSON serialization
-        result = {
-            "title": structure["title"],
-            "total_length": structure["total_length"],
-            "statistics": {
-                "elements": len(structure["body"]),
-                "tables": len(structure["tables"]),
-                "paragraphs": sum(
-                    1 for e in structure["body"] if e.get("type") == "paragraph"
-                ),
-                "has_headers": bool(structure["headers"]),
-                "has_footers": bool(structure["footers"]),
-            },
-            "elements": [],
-        }
-
-        # Add element summaries
-        for element in structure["body"]:
-            elem_summary = {
-                "type": element["type"],
-                "start_index": element["start_index"],
-                "end_index": element["end_index"],
-            }
-
-            if element["type"] == "table":
-                elem_summary["rows"] = element["rows"]
-                elem_summary["columns"] = element["columns"]
-                elem_summary["cell_count"] = len(element.get("cells", []))
-            elif element["type"] == "paragraph":
-                elem_summary["text_preview"] = element.get("text", "")[:100]
-
-            result["elements"].append(elem_summary)
-
-        # Add table details
-        if structure["tables"]:
-            result["tables"] = []
-            for i, table in enumerate(structure["tables"]):
-                table_data = extract_table_as_data(table)
-                result["tables"].append(
-                    {
-                        "index": i,
-                        "position": {
-                            "start": table["start_index"],
-                            "end": table["end_index"],
-                        },
-                        "dimensions": {
-                            "rows": table["rows"],
-                            "columns": table["columns"],
-                        },
-                        "preview": table_data[:3] if table_data else [],  # First 3 rows
-                    }
-                )
-
-    else:
-        # Return basic analysis
-        result = analyze_document_complexity(doc)
-
-        # Add table information
-        tables = find_tables(doc)
-        if tables:
-            result["table_details"] = []
-            for i, table in enumerate(tables):
-                result["table_details"].append(
-                    {
-                        "index": i,
-                        "rows": table["rows"],
-                        "columns": table["columns"],
-                        "start_index": table["start_index"],
-                        "end_index": table["end_index"],
-                    }
-                )
-
-    import json
-
-    link = f"https://docs.google.com/document/d/{document_id}/edit"
-    return f"Document structure analysis for {document_id}:\n\n{json.dumps(result, indent=2)}\n\nLink: {link}"
-
-
-@server.tool()
-@handle_http_errors("get_doc_structure", is_read_only=True, service_type="docs")
-@require_google_service("docs", "docs_read")
-async def get_doc_structure(
-    service: Any,
-    user_google_email: str,
-    document_id: str,
-    element_types: List[str] = None,
-) -> str:
-    """
-    [LEGACY] Get a hierarchical view of the document's structural elements.
-
-    DEPRECATED: Use get_doc_info() instead for a unified interface.
-    - get_doc_info(doc_id, detail="structure") - for full element hierarchy
-    - get_doc_info(doc_id, detail="headings") - for headings outline only
-
-    Note: get_doc_info does not support element_types filtering. If you need
-    specific element type filtering, continue using this function.
-
-    This function is maintained for backward compatibility.
-
-    Args:
-        user_google_email: User's Google email address
-        document_id: ID of the document to analyze
-        element_types: Optional list of element types to filter (e.g., ["heading1", "heading2", "table"])
-                      Supported types: heading1-6, title, paragraph, table, bullet_list, numbered_list
-
-    Returns:
-        str: JSON containing:
-            - elements: List of structural elements with type, text, and positions
-            - headings_outline: Hierarchical outline of headings
-            - statistics: Count of each element type
-    """
-    logger.debug(f"[get_doc_structure] Doc={document_id}, filters={element_types}")
-
-    # Input validation
-    validator = ValidationManager()
-    is_valid, structured_error = validator.validate_document_id_structured(document_id)
-    if not is_valid:
-        return structured_error
-
-    # Get the document
-    doc = await asyncio.to_thread(
-        service.documents().get(documentId=document_id).execute
-    )
-
-    # Extract structural elements
-    elements = extract_structural_elements(doc)
-
-    # Filter by element types if specified
-    if element_types:
-        elements = [e for e in elements if e["type"] in element_types]
-
-    # Build headings outline
-    all_elements = extract_structural_elements(doc)  # Need full list for outline
-    headings_outline = build_headings_outline(all_elements)
-
-    # Calculate statistics
-    statistics = {}
-    for elem in all_elements:
-        elem_type = elem["type"]
-        statistics[elem_type] = statistics.get(elem_type, 0) + 1
-
-    # Clean up elements for output (remove internal fields)
-    clean_elements = []
-    for elem in elements:
-        clean_elem = {
-            "type": elem["type"],
-            "start_index": elem["start_index"],
-            "end_index": elem["end_index"],
-        }
-        if "text" in elem:
-            clean_elem["text"] = elem["text"]
-        if "level" in elem:
-            clean_elem["level"] = elem["level"]
-        if "rows" in elem:
-            clean_elem["rows"] = elem["rows"]
-            clean_elem["columns"] = elem.get("columns", 0)
-        if "items" in elem:
-            clean_elem["items"] = [
-                {
-                    "text": item["text"],
-                    "start_index": item["start_index"],
-                    "end_index": item["end_index"],
-                }
-                for item in elem["items"]
-            ]
-        clean_elements.append(clean_elem)
-
-    # Build result
-    result = {
-        "elements": clean_elements,
-        "headings_outline": _clean_outline(headings_outline),
-        "statistics": statistics,
-    }
-
-    import json
-
-    link = f"https://docs.google.com/document/d/{document_id}/edit"
-    return f"Document structure for {document_id}:\n\n{json.dumps(result, indent=2)}\n\nLink: {link}"
 
 
 def _clean_outline(outline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -6446,7 +6242,7 @@ async def preview_search_results(
 
     USE THIS TOOL BEFORE:
     - Using modify_doc_text with search parameter
-    - Using batch_modify_doc with search-based operations
+    - Using batch_edit_doc with search-based operations
     - Any operation where you need to verify search targets
 
     This tool shows ALL occurrences of search text in the document with
@@ -6649,15 +6445,15 @@ async def find_doc_elements(
         user_google_email: User's Google email address
         document_id: ID of the document to search
         element_type: Type of element to find. Supported values:
-            - 'table': All tables in the document
-            - 'heading': All headings (any level)
+            - 'table' (or 'tables'): All tables in the document
+            - 'heading' (or 'headings'): All headings (any level)
             - 'heading1' through 'heading6': Specific heading levels
             - 'title': Document title style elements
-            - 'paragraph': Regular paragraphs (non-heading, non-list)
-            - 'bullet_list': Bulleted lists
-            - 'numbered_list': Numbered/ordered lists
-            - 'list': Both bullet and numbered lists
-            - 'table_of_contents': Table of contents elements
+            - 'paragraph' (or 'paragraphs'): Regular paragraphs (non-heading, non-list)
+            - 'bullet_list' (or 'bullet_lists'): Bulleted lists
+            - 'numbered_list' (or 'numbered_lists'): Numbered/ordered lists
+            - 'list' (or 'lists'): Both bullet and numbered lists
+            - 'table_of_contents' (or 'toc'): Table of contents elements
 
     Returns:
         str: JSON containing:
@@ -6870,8 +6666,11 @@ async def get_text_formatting(
     service: Any,
     user_google_email: str,
     document_id: str,
-    start_index: int,
+    start_index: int = None,
     end_index: int = None,
+    search: str = None,
+    occurrence: int = 1,
+    match_case: bool = True,
 ) -> str:
     """
     Get the text formatting/style attributes at a specific location or range.
@@ -6882,12 +6681,24 @@ async def get_text_formatting(
     - Debugging formatting issues
     - Building reports of document formatting patterns
 
+    Supports two positioning modes:
+    1. Index-based: Use start_index/end_index for exact positions
+    2. Search-based: Use search to find text and get its formatting
+
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document to analyze
+
+        Index-based positioning:
         start_index: Starting character position (inclusive)
         end_index: Ending character position (exclusive). If not provided,
                    returns formatting for just the character at start_index.
+
+        Search-based positioning:
+        search: Text to search for in the document. Returns formatting for
+                the found text.
+        occurrence: Which occurrence to target (1=first, 2=second, -1=last). Default: 1
+        match_case: Whether to match case exactly. Default: True
 
     Returns:
         str: JSON containing:
@@ -6911,35 +6722,29 @@ async def get_text_formatting(
                 - link_url: URL if text is a hyperlink (if set)
             - has_mixed_formatting: Boolean indicating if the range has different
                                     formatting across different spans
+            - search_info: (only for search-based) Info about the search match
 
-    Example Response:
+    Example Response (index-based):
         {
             "start_index": 100,
             "end_index": 120,
             "text": "formatted text here",
-            "formatting": [
-                {
-                    "start_index": 100,
-                    "end_index": 110,
-                    "text": "formatted ",
-                    "bold": true,
-                    "italic": false,
-                    "underline": false,
-                    "font_size": 12,
-                    "font_family": "Arial"
-                },
-                {
-                    "start_index": 110,
-                    "end_index": 120,
-                    "text": "text here",
-                    "bold": false,
-                    "italic": true,
-                    "underline": false,
-                    "font_size": 12,
-                    "font_family": "Arial"
-                }
-            ],
+            "formatting": [...],
             "has_mixed_formatting": true
+        }
+
+    Example Response (search-based):
+        {
+            "start_index": 100,
+            "end_index": 120,
+            "text": "formatted text here",
+            "formatting": [...],
+            "has_mixed_formatting": true,
+            "search_info": {
+                "search_text": "formatted text here",
+                "occurrence": 1,
+                "match_case": true
+            }
         }
 
     Use Cases:
@@ -6951,7 +6756,7 @@ async def get_text_formatting(
     import json
 
     logger.debug(
-        f"[get_text_formatting] Doc={document_id}, start={start_index}, end={end_index}"
+        f"[get_text_formatting] Doc={document_id}, start={start_index}, end={end_index}, search={search}"
     )
 
     # Input validation
@@ -6961,32 +6766,93 @@ async def get_text_formatting(
     if not is_valid:
         return structured_error
 
-    if start_index < 0:
+    # Determine positioning mode
+    use_search_mode = search is not None
+    use_index_mode = start_index is not None
+
+    # Validate that exactly one positioning mode is used
+    if use_search_mode and use_index_mode:
         error = DocsErrorBuilder.invalid_param(
-            param_name="start_index",
-            received_value=str(start_index),
-            valid_values=["non-negative integer"],
-            context_description="document position",
+            param_name="positioning",
+            received_value="both search and start_index",
+            valid_values=["search OR start_index (not both)"],
+            context_description="Use either search-based or index-based positioning, not both",
         )
         return format_error(error)
 
-    # Default end_index to start_index + 1 if not provided
-    if end_index is None:
-        end_index = start_index + 1
-
-    if end_index <= start_index:
+    if not use_search_mode and not use_index_mode:
         error = DocsErrorBuilder.invalid_param(
-            param_name="end_index",
-            received_value=str(end_index),
-            valid_values=[f"integer greater than start_index ({start_index})"],
-            context_description="document position range",
+            param_name="positioning",
+            received_value="neither search nor start_index",
+            valid_values=["search", "start_index"],
+            context_description="Must provide either search text or start_index",
         )
         return format_error(error)
 
-    # Get the document
+    # Get the document first (needed for both modes)
     doc_data = await asyncio.to_thread(
         service.documents().get(documentId=document_id).execute
     )
+
+    search_info = None
+
+    if use_search_mode:
+        # Search-based positioning
+        if search == "":
+            return validator.create_empty_search_error()
+
+        result = find_text_in_document(doc_data, search, occurrence, match_case)
+        if result is None:
+            all_occurrences = find_all_occurrences_in_document(doc_data, search, match_case)
+            if all_occurrences:
+                if occurrence != 1:
+                    return validator.create_invalid_occurrence_error(
+                        occurrence=occurrence,
+                        total_found=len(all_occurrences),
+                        search_text=search,
+                    )
+                occurrences_data = [
+                    {"index": i + 1, "position": f"{s}-{e}"}
+                    for i, (s, e) in enumerate(all_occurrences[:5])
+                ]
+                return validator.create_ambiguous_search_error(
+                    search_text=search,
+                    occurrences=occurrences_data,
+                    total_count=len(all_occurrences),
+                )
+            return validator.create_search_not_found_error(
+                search_text=search, match_case=match_case
+            )
+
+        start_index, end_index = result
+        search_info = {
+            "search_text": search,
+            "occurrence": occurrence,
+            "match_case": match_case,
+        }
+    else:
+        # Index-based positioning
+        if start_index < 0:
+            error = DocsErrorBuilder.invalid_param(
+                param_name="start_index",
+                received_value=str(start_index),
+                valid_values=["non-negative integer"],
+                context_description="document position",
+            )
+            return format_error(error)
+
+        # Default end_index to start_index + 1 if not provided
+        if end_index is None:
+            end_index = start_index + 1
+
+        if end_index <= start_index:
+            error = DocsErrorBuilder.invalid_param(
+                param_name="end_index",
+                received_value=str(end_index),
+                valid_values=[f"integer greater than start_index ({start_index})"],
+                context_description="document position range",
+            )
+            return format_error(error)
 
     # Extract formatting from the specified range
     formatting_spans = _extract_text_formatting_from_range(
@@ -7007,10 +6873,16 @@ async def get_text_formatting(
         "has_mixed_formatting": has_mixed,
     }
 
+    # Add search_info if using search-based positioning
+    if search_info:
+        result["search_info"] = search_info
+
     link = f"https://docs.google.com/document/d/{document_id}/edit"
 
     if formatting_spans:
         summary = f"Found {len(formatting_spans)} formatting span(s) in range {start_index}-{end_index}"
+        if search_info:
+            summary += f" for search '{search_info['search_text']}'"
     else:
         summary = f"No text content found in range {start_index}-{end_index}"
 
@@ -9616,24 +9488,26 @@ async def delete_doc_named_range(
     # Find all named ranges in the document (from all tabs)
     def find_all_named_ranges(doc_data):
         """Extract all named ranges from document, including from all tabs."""
-        all_ranges = {}  # name -> list of IDs
-        all_ids = set()  # all known IDs
+        all_ranges = {}  # name -> list of (ID, tab_id) tuples
+        all_ids = {}  # id -> tab_id mapping
 
-        def extract_from_dict(named_ranges_dict):
+        def extract_from_dict(named_ranges_dict, tab_id=None):
             for range_name, range_data in named_ranges_dict.items():
                 for nr in range_data.get("namedRanges", []):
                     nr_id = nr.get("namedRangeId")
                     if nr_id:
-                        all_ids.add(nr_id)
+                        all_ids[nr_id] = tab_id
                         if range_name not in all_ranges:
                             all_ranges[range_name] = []
-                        all_ranges[range_name].append(nr_id)
+                        all_ranges[range_name].append((nr_id, tab_id))
 
         def process_tabs(tabs):
             for tab in tabs:
+                tab_props = tab.get("tabProperties", {})
+                tab_id = tab_props.get("tabId")
                 doc_tab = tab.get("documentTab", {})
                 tab_named_ranges = doc_tab.get("namedRanges", {})
-                extract_from_dict(tab_named_ranges)
+                extract_from_dict(tab_named_ranges, tab_id)
                 child_tabs = tab.get("childTabs", [])
                 if child_tabs:
                     process_tabs(child_tabs)
@@ -9673,10 +9547,26 @@ async def delete_doc_named_range(
                 "link": doc_link,
             }, indent=2)
 
+    # Determine tabs_criteria for multi-tab support
+    tabs_criteria = None
+    if named_range_id:
+        # Get the tab_id for this specific named range
+        tab_id = all_ids.get(named_range_id)
+        if tab_id:
+            tabs_criteria = {"tabIds": [tab_id]}
+    else:
+        # Deleting by name - collect all unique tab_ids for ranges with this name
+        tab_ids = set()
+        for _, tab_id in all_ranges.get(name, []):
+            if tab_id:
+                tab_ids.add(tab_id)
+        if tab_ids:
+            tabs_criteria = {"tabIds": list(tab_ids)}
+
     # Create the delete request
     try:
         request = create_delete_named_range_request(
-            named_range_id=named_range_id, name=name
+            named_range_id=named_range_id, name=name, tabs_criteria=tabs_criteria
         )
     except ValueError as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
@@ -9831,7 +9721,8 @@ async def convert_list_type(
                 "error": True,
                 "code": "LIST_NOT_FOUND",
                 "message": f"No list containing text '{search}' found",
-                "suggestion": "Check the search text or use find_doc_elements with element_type='list' to see all lists",
+                "suggestion": "Check the search text or use find_doc_elements "
+                              "with element_type='list' to see all lists",
                 "available_lists": len(all_lists),
                 "link": doc_link,
             }, indent=2)
@@ -9944,3 +9835,690 @@ async def convert_list_type(
         "items_count": len(target_list.get("items", [])),
         "link": doc_link,
     }, indent=2)
+
+
+@server.tool()
+@handle_http_errors("append_to_list", service_type="docs")
+@require_google_service("docs", "docs_write")
+async def append_to_list(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    items: list,
+    list_index: int = 0,
+    search: str = None,
+    nesting_levels: list = None,
+    preview: bool = False,
+) -> str:
+    """
+    Append items to an existing list in a Google Doc.
+
+    This tool adds new items to the end of an existing list without creating a new list.
+    The appended items will automatically continue the list's formatting (bullet or numbered).
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document containing the list
+        items: List of strings to append as new list items
+        list_index: Which list to append to (0-based, default 0 for first list).
+            Used when not specifying search.
+        search: Text to search for within a list item. If provided, appends to the
+            list containing that text.
+        nesting_levels: Optional list of integers specifying nesting level for each item (0-8).
+            Must match length of 'items'. Default is 0 (top level) for all items.
+            Use higher numbers for sub-items (1 = first indent, 2 = second indent, etc.)
+        preview: If True, show what would be appended without making changes.
+
+    Returns:
+        JSON string with operation result or preview information.
+
+    Examples:
+        # Append single item to first list
+        append_to_list(document_id="abc123", items=["New item"])
+
+        # Append multiple items to the second list
+        append_to_list(document_id="abc123", items=["Item A", "Item B"], list_index=1)
+
+        # Append to list containing specific text
+        append_to_list(document_id="abc123", items=["Follow-up task"],
+                      search="existing task")
+
+        # Append nested items
+        append_to_list(document_id="abc123",
+                      items=["Main point", "Sub point 1", "Sub point 2", "Another main"],
+                      nesting_levels=[0, 1, 1, 0])
+
+        # Preview what would be appended
+        append_to_list(document_id="abc123", items=["Test item"], preview=True)
+
+    Notes:
+        - The appended items will inherit the list type (bullet or numbered) of the target list
+        - Use find_doc_elements with element_type='list' to see all lists first
+        - For creating new lists, use insert_doc_elements with element_type='list'
+    """
+    import json
+
+    logger.debug(
+        f"[append_to_list] Doc={document_id}, items={items}, "
+        f"list_index={list_index}, search={search}"
+    )
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    # Validate items parameter
+    if not isinstance(items, list):
+        return validator.create_invalid_param_error(
+            param_name="items",
+            received=type(items).__name__,
+            valid_values=["list of strings"],
+        )
+    if len(items) == 0:
+        return validator.create_invalid_param_error(
+            param_name="items",
+            received="empty list",
+            valid_values=["non-empty list of strings"],
+        )
+    # Validate all items are strings
+    for i, item in enumerate(items):
+        if not isinstance(item, str):
+            return validator.create_invalid_param_error(
+                param_name=f"items[{i}]",
+                received=type(item).__name__,
+                valid_values=["string"],
+            )
+
+    # Process items with escape sequences
+    processed_items = [interpret_escape_sequences(item) for item in items]
+
+    # Handle nesting_levels parameter
+    item_nesting = []
+    if nesting_levels is not None:
+        if not isinstance(nesting_levels, list):
+            return validator.create_invalid_param_error(
+                param_name="nesting_levels",
+                received=type(nesting_levels).__name__,
+                valid_values=["list of integers"],
+            )
+        if len(nesting_levels) != len(items):
+            return validator.create_invalid_param_error(
+                param_name="nesting_levels",
+                received=f"list of length {len(nesting_levels)}",
+                valid_values=[f"list of length {len(items)} (must match items length)"],
+            )
+        # Validate all nesting levels are valid integers
+        for i, level in enumerate(nesting_levels):
+            if not isinstance(level, int):
+                return validator.create_invalid_param_error(
+                    param_name=f"nesting_levels[{i}]",
+                    received=type(level).__name__,
+                    valid_values=["integer (0-8)"],
+                )
+            if level < 0 or level > 8:
+                return validator.create_invalid_param_error(
+                    param_name=f"nesting_levels[{i}]",
+                    received=str(level),
+                    valid_values=["integer from 0 to 8"],
+                )
+        item_nesting = nesting_levels
+    else:
+        # Default to level 0 for all items
+        item_nesting = [0] * len(items)
+
+    doc_link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    # Get document content
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Find all lists in the document
+    all_lists = find_elements_by_type(doc_data, "list")
+
+    if not all_lists:
+        return json.dumps({
+            "error": True,
+            "code": "NO_LISTS_FOUND",
+            "message": "No lists found in the document",
+            "suggestion": "Use insert_doc_elements with element_type='list' to create a list first",
+            "link": doc_link,
+        }, indent=2)
+
+    # Find the target list
+    target_list = None
+
+    if search:
+        # Find list containing the search text
+        search_lower = search.lower()
+        for lst in all_lists:
+            for item in lst.get("items", []):
+                if search_lower in item.get("text", "").lower():
+                    target_list = lst
+                    break
+            if target_list:
+                break
+
+        if not target_list:
+            return json.dumps({
+                "error": True,
+                "code": "LIST_NOT_FOUND",
+                "message": f"No list containing text '{search}' found",
+                "suggestion": "Check the search text or use find_doc_elements "
+                              "with element_type='list' to see all lists",
+                "available_lists": len(all_lists),
+                "link": doc_link,
+            }, indent=2)
+
+    else:
+        # Use list_index
+        if list_index < 0 or list_index >= len(all_lists):
+            return json.dumps({
+                "error": True,
+                "code": "INVALID_LIST_INDEX",
+                "message": f"List index {list_index} is out of range. Document has {len(all_lists)} list(s).",
+                "suggestion": f"Use list_index between 0 and {len(all_lists) - 1}",
+                "available_lists": len(all_lists),
+                "link": doc_link,
+            }, indent=2)
+        target_list = all_lists[list_index]
+
+    # Determine list type for applying bullet formatting
+    list_type_raw = target_list.get("list_type", target_list.get("type", "bullet"))
+    if "bullet" in list_type_raw or "unordered" in list_type_raw.lower():
+        list_type = "UNORDERED"
+        list_type_display = "bullet"
+    else:
+        list_type = "ORDERED"
+        list_type_display = "numbered"
+
+    # Build the text to insert with tab prefixes for nesting levels
+    nested_items = []
+    for item_text, level in zip(processed_items, item_nesting):
+        prefix = "\t" * level
+        nested_items.append(prefix + item_text)
+
+    combined_text = "\n".join(nested_items) + "\n"
+    text_length = len(combined_text) - 1  # Exclude final newline from bullet range
+
+    # Calculate insertion point: at the end of the last list item
+    # The end_index points to after the last character of the list
+    # We need to insert at the end of the list content
+    insertion_index = target_list["end_index"]
+
+    # Build preview info
+    has_nested = any(level > 0 for level in item_nesting)
+    max_level = max(item_nesting) if has_nested else 0
+    preview_info = {
+        "target_list": {
+            "type": list_type_display,
+            "start_index": target_list["start_index"],
+            "end_index": target_list["end_index"],
+            "current_items_count": len(target_list.get("items", [])),
+        },
+        "items_to_append": len(processed_items),
+        "insertion_index": insertion_index,
+        "nesting": {
+            "has_nested_items": has_nested,
+            "max_depth": max_level,
+        } if has_nested else None,
+        "items_preview": [
+            {
+                "text": item[:50] + ("..." if len(item) > 50 else ""),
+                "nesting_level": level,
+            }
+            for item, level in zip(processed_items, item_nesting)
+        ][:5],  # Show up to 5 items in preview
+    }
+
+    if preview:
+        return json.dumps({
+            "preview": True,
+            "message": f"Would append {len(processed_items)} item(s) to {list_type_display} list",
+            **preview_info,
+            "link": doc_link,
+        }, indent=2)
+
+    # Create the requests:
+    # 1. Insert the text at the end of the list
+    # 2. Apply bullet formatting to the new text
+    requests = [
+        create_insert_text_request(insertion_index, combined_text),
+        create_bullet_list_request(
+            insertion_index,
+            insertion_index + text_length,
+            list_type
+        ),
+    ]
+
+    # Execute the requests
+    await asyncio.to_thread(
+        service.documents()
+        .batchUpdate(documentId=document_id, body={"requests": requests})
+        .execute
+    )
+
+    return json.dumps({
+        "success": True,
+        "message": f"Appended {len(processed_items)} item(s) to {list_type_display} list",
+        "list_type": list_type_display,
+        "items_appended": len(processed_items),
+        "new_list_range": {
+            "start_index": target_list["start_index"],
+            "end_index": insertion_index + len(combined_text),
+        },
+        "link": doc_link,
+    }, indent=2)
+
+
+@server.tool()
+@handle_http_errors("copy_doc_section", service_type="docs")
+@require_google_service("docs", "docs_write")
+async def copy_doc_section(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    # Source specification (one of these methods)
+    heading: str = None,
+    start_index: int = None,
+    end_index: int = None,
+    search: str = None,
+    search_end: str = None,
+    # Destination specification
+    destination_index: int = None,
+    destination_location: str = None,
+    destination_after_heading: str = None,
+    # Options
+    include_heading: bool = True,
+    match_case: bool = False,
+    preserve_formatting: bool = True,
+    preview: bool = False,
+) -> str:
+    """
+    Copy a section or text range from one location to another in a Google Doc.
+
+    This tool allows you to duplicate content within a document, preserving
+    text and optionally its formatting. Useful for template-based editing,
+    duplicating sections, or reorganizing document content.
+
+    SOURCE SPECIFICATION (use ONE of these methods):
+    1. By heading: Use 'heading' to copy an entire section (heading + content until next same-level heading)
+    2. By indices: Use 'start_index' and 'end_index' for precise range selection
+    3. By search: Use 'search' and optionally 'search_end' to find text boundaries
+
+    DESTINATION SPECIFICATION (use ONE of these methods):
+    1. By index: Use 'destination_index' to specify exact insertion point
+    2. By location: Use 'destination_location' with values 'start' or 'end'
+    3. After heading: Use 'destination_after_heading' to insert after a section heading
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document to modify
+        heading: Copy a section by its heading text (includes all content until next same/higher level heading)
+        start_index: Start position for explicit range copy
+        end_index: End position for explicit range copy
+        search: Search text to find start of range to copy
+        search_end: Search text to find end of range (if omitted with search, copies just the found text)
+        destination_index: Exact index where content should be inserted
+        destination_location: 'start' or 'end' of document
+        destination_after_heading: Insert after this heading's content
+        include_heading: When copying by heading, whether to include the heading itself (default True)
+        match_case: Whether to match case exactly when searching for headings/text
+        preserve_formatting: Whether to preserve text formatting in the copy (default True)
+        preview: If True, shows what would be copied without modifying the document
+
+    Returns:
+        str: JSON containing:
+            - success: True if copy was successful
+            - source: Information about what was copied (indices, text preview)
+            - destination: Where content was inserted
+            - characters_copied: Number of characters copied
+            - formatting_spans: Number of formatting spans preserved (if preserve_formatting=True)
+            - preview: True if this was a preview operation
+            - link: Link to the document
+
+    Example - Copy a section to the end:
+        copy_doc_section(
+            document_id="...",
+            heading="Template Section",
+            destination_location="end"
+        )
+
+    Example - Copy a text range by search:
+        copy_doc_section(
+            document_id="...",
+            search="[START]",
+            search_end="[END]",
+            destination_after_heading="New Section"
+        )
+
+    Example - Copy by indices:
+        copy_doc_section(
+            document_id="...",
+            start_index=100,
+            end_index=500,
+            destination_index=1000
+        )
+    """
+    import json
+
+    logger.debug(
+        f"[copy_doc_section] Doc={document_id}, heading={heading}, "
+        f"start_index={start_index}, end_index={end_index}, search={search}"
+    )
+
+    # Input validation
+    validator = ValidationManager()
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    # Validate source specification - exactly one method should be used
+    source_methods = [
+        heading is not None,
+        (start_index is not None and end_index is not None),
+        search is not None,
+    ]
+    if sum(source_methods) == 0:
+        return validator.create_missing_param_error(
+            param_name="source specification",
+            context="for copy operation",
+            valid_values=["heading", "start_index + end_index", "search"],
+        )
+    if sum(source_methods) > 1:
+        return json.dumps({
+            "error": "INVALID_PARAMETERS",
+            "message": "Multiple source methods specified. Use only one of: heading, start_index+end_index, or search",
+            "hint": "Choose one method to specify the source content to copy"
+        }, indent=2)
+
+    # Validate destination specification - exactly one method should be used
+    dest_methods = [
+        destination_index is not None,
+        destination_location is not None,
+        destination_after_heading is not None,
+    ]
+    if sum(dest_methods) == 0:
+        return validator.create_missing_param_error(
+            param_name="destination specification",
+            context="for copy operation",
+            valid_values=["destination_index", "destination_location", "destination_after_heading"],
+        )
+    if sum(dest_methods) > 1:
+        return json.dumps({
+            "error": "INVALID_PARAMETERS",
+            "message": "Multiple destination methods specified. Use only one of: destination_index, destination_location, or destination_after_heading",
+            "hint": "Choose one method to specify where the content should be copied to"
+        }, indent=2)
+
+    # Validate destination_location if provided
+    if destination_location and destination_location not in ("start", "end"):
+        return json.dumps({
+            "error": "INVALID_PARAMETERS",
+            "message": f"Invalid destination_location: '{destination_location}'",
+            "valid_values": ["start", "end"],
+            "hint": "Use 'start' to insert at beginning or 'end' to append at document end"
+        }, indent=2)
+
+    # Get the document
+    doc = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Determine source range
+    copy_start = None
+    copy_end = None
+    source_info = {}
+
+    if heading:
+        # Copy by heading/section
+        section = find_section_by_heading(doc, heading, match_case)
+        if section is None:
+            all_headings = get_all_headings(doc)
+            heading_list = [h["text"] for h in all_headings] if all_headings else []
+            return validator.create_heading_not_found_error(
+                heading=heading, available_headings=heading_list, match_case=match_case
+            )
+
+        if include_heading:
+            copy_start = section["start_index"]
+        else:
+            # Find where the heading ends
+            elements = extract_structural_elements(doc)
+            for elem in elements:
+                if elem["type"].startswith("heading") or elem["type"] == "title":
+                    elem_text = elem["text"] if match_case else elem["text"].lower()
+                    search_text = heading if match_case else heading.lower()
+                    if elem_text.strip() == search_text.strip():
+                        copy_start = elem["end_index"]
+                        break
+            if copy_start is None:
+                copy_start = section["start_index"]
+
+        copy_end = section["end_index"]
+        source_info = {
+            "method": "heading",
+            "heading": section["heading"],
+            "level": section["level"],
+            "include_heading": include_heading,
+            "subsections_count": len(section.get("subsections", [])),
+        }
+
+    elif start_index is not None and end_index is not None:
+        # Copy by explicit indices
+        if start_index < 1:
+            return json.dumps({
+                "error": "INVALID_INDEX",
+                "message": f"start_index must be >= 1, got {start_index}",
+                "hint": "Document indices start at 1"
+            }, indent=2)
+        if end_index <= start_index:
+            return json.dumps({
+                "error": "INVALID_RANGE",
+                "message": f"end_index ({end_index}) must be greater than start_index ({start_index})",
+                "hint": "Specify a valid range with end_index > start_index"
+            }, indent=2)
+
+        copy_start = start_index
+        copy_end = end_index
+        source_info = {
+            "method": "indices",
+            "start_index": start_index,
+            "end_index": end_index,
+        }
+
+    elif search:
+        # Copy by search text
+        # find_all_occurrences_in_document returns List[Tuple[int, int]] - (start, end) pairs
+        positions = find_all_occurrences_in_document(doc, search, match_case)
+        if not positions:
+            return json.dumps({
+                "error": "TEXT_NOT_FOUND",
+                "message": f"Search text not found: '{search}'",
+                "match_case": match_case,
+                "hint": "Check your search text or try with match_case=False"
+            }, indent=2)
+
+        copy_start = positions[0][0]  # First tuple's start index
+
+        if search_end:
+            # Find end marker
+            end_positions = find_all_occurrences_in_document(doc, search_end, match_case)
+            if not end_positions:
+                return json.dumps({
+                    "error": "TEXT_NOT_FOUND",
+                    "message": f"End search text not found: '{search_end}'",
+                    "match_case": match_case,
+                    "hint": "Check your search_end text or try with match_case=False"
+                }, indent=2)
+            # Find the first occurrence of search_end that comes after our start
+            copy_end = None
+            for start, end in end_positions:
+                if end > copy_start:
+                    copy_end = end
+                    break
+            if copy_end is None:
+                return json.dumps({
+                    "error": "INVALID_RANGE",
+                    "message": f"End marker '{search_end}' not found after start marker '{search}'",
+                    "hint": "Ensure search_end appears after search in the document"
+                }, indent=2)
+        else:
+            copy_end = positions[0][1]  # First tuple's end index
+
+        source_info = {
+            "method": "search",
+            "search": search,
+            "search_end": search_end,
+        }
+
+    # Check if section extends to document end and adjust
+    body = doc.get("body", {})
+    body_content = body.get("content", [])
+    doc_end_index = body_content[-1].get("endIndex", 0) if body_content else 1
+
+    # Adjust copy_end to not include the final document terminator if at the end
+    if copy_end >= doc_end_index:
+        copy_end = doc_end_index - 1
+
+    # Extract the text to copy
+    text_to_copy = extract_text_in_range(doc, copy_start, copy_end)
+
+    if not text_to_copy:
+        return json.dumps({
+            "error": "EMPTY_CONTENT",
+            "message": "No content to copy in the specified range",
+            "source_range": {"start": copy_start, "end": copy_end},
+            "hint": "Check your source specification - the range may be empty"
+        }, indent=2)
+
+    # Extract formatting spans if needed
+    formatting_spans = []
+    if preserve_formatting:
+        formatting_spans = _extract_text_formatting_from_range(doc, copy_start, copy_end)
+
+    # Determine destination index
+    dest_index = None
+
+    if destination_index is not None:
+        dest_index = destination_index
+    elif destination_location == "start":
+        dest_index = 1
+    elif destination_location == "end":
+        dest_index = doc_end_index - 1
+    elif destination_after_heading:
+        dest_section = find_section_by_heading(doc, destination_after_heading, match_case)
+        if dest_section is None:
+            all_headings = get_all_headings(doc)
+            heading_list = [h["text"] for h in all_headings] if all_headings else []
+            return validator.create_heading_not_found_error(
+                heading=destination_after_heading,
+                available_headings=heading_list,
+                match_case=match_case
+            )
+        # Insert at the end of the destination section
+        dest_index = dest_section["end_index"]
+        # Adjust if at document end
+        if dest_index >= doc_end_index:
+            dest_index = doc_end_index - 1
+
+    # Build result info
+    doc_link = f"https://docs.google.com/document/d/{document_id}/edit"
+    text_preview = text_to_copy[:200] + ("..." if len(text_to_copy) > 200 else "")
+
+    result = {
+        "source": {
+            **source_info,
+            "start_index": copy_start,
+            "end_index": copy_end,
+            "characters": len(text_to_copy),
+            "text_preview": text_preview,
+        },
+        "destination": {
+            "index": dest_index,
+            "method": (
+                "index" if destination_index is not None
+                else "location" if destination_location is not None
+                else "after_heading"
+            ),
+        },
+        "characters_copied": len(text_to_copy),
+        "formatting_spans": len(formatting_spans) if preserve_formatting else 0,
+        "preserve_formatting": preserve_formatting,
+        "link": doc_link,
+    }
+
+    if destination_location:
+        result["destination"]["location"] = destination_location
+    if destination_after_heading:
+        result["destination"]["after_heading"] = destination_after_heading
+
+    # Handle preview mode
+    if preview:
+        result["preview"] = True
+        result["would_copy"] = True
+        result["success"] = False
+        return (
+            f"Preview - Would copy {len(text_to_copy)} characters:\n\n"
+            f"{json.dumps(result, indent=2)}"
+        )
+
+    # Build the requests for the copy operation
+    requests = []
+
+    # 1. Insert the text at the destination
+    requests.append(create_insert_text_request(dest_index, text_to_copy))
+
+    # 2. Clear formatting first if we're going to apply specific formatting
+    # This prevents style inheritance issues
+    if preserve_formatting and formatting_spans:
+        text_length = len(text_to_copy)
+        requests.append(create_clear_formatting_request(dest_index, dest_index + text_length))
+
+        # 3. Re-apply the original formatting at the new location
+        for span in formatting_spans:
+            # Calculate the new position for this span
+            # Original span offset from copy_start
+            span_offset = span["start_index"] - copy_start
+            span_length = span["end_index"] - span["start_index"]
+
+            new_start = dest_index + span_offset
+            new_end = new_start + span_length
+
+            # Build format request from span info
+            format_req = create_format_text_request(
+                start_index=new_start,
+                end_index=new_end,
+                bold=span.get("bold") if span.get("bold") else None,
+                italic=span.get("italic") if span.get("italic") else None,
+                underline=span.get("underline") if span.get("underline") else None,
+                strikethrough=span.get("strikethrough") if span.get("strikethrough") else None,
+                small_caps=span.get("small_caps") if span.get("small_caps") else None,
+                font_size=span.get("font_size"),
+                font_family=span.get("font_family"),
+                foreground_color=span.get("foreground_color"),
+                background_color=span.get("background_color"),
+                link=span.get("link_url"),
+                subscript=span.get("baseline_offset") == "SUBSCRIPT",
+                superscript=span.get("baseline_offset") == "SUPERSCRIPT",
+            )
+            if format_req:
+                requests.append(format_req)
+
+    # Execute the batch update
+    await asyncio.to_thread(
+        service.documents()
+        .batchUpdate(documentId=document_id, body={"requests": requests})
+        .execute
+    )
+
+    result["success"] = True
+    result["preview"] = False
+
+    return (
+        f"Copied {len(text_to_copy)} characters to destination:\n\n"
+        f"{json.dumps(result, indent=2)}\n\nLink: {doc_link}"
+    )

@@ -55,29 +55,29 @@ def parse_document_structure(doc_data: dict[str, Any]) -> dict[str, Any]:
         'footers': {},
         'total_length': 0
     }
-    
+
     body = doc_data.get('body', {})
     content = body.get('content', [])
-    
+
     for element in content:
         element_info = _parse_element(element)
         if element_info:
             structure['body'].append(element_info)
             if element_info['type'] == 'table':
                 structure['tables'].append(element_info)
-    
+
     # Calculate total document length
     if structure['body']:
         last_element = structure['body'][-1]
         structure['total_length'] = last_element.get('end_index', 0)
-    
+
     # Parse headers and footers
     for header_id, header_data in doc_data.get('headers', {}).items():
         structure['headers'][header_id] = _parse_segment(header_data)
-    
+
     for footer_id, footer_data in doc_data.get('footers', {}).items():
         structure['footers'][footer_id] = _parse_segment(footer_data)
-    
+
     return structure
 
 
@@ -95,13 +95,13 @@ def _parse_element(element: dict[str, Any]) -> Optional[dict[str, Any]]:
         'start_index': element.get('startIndex', 0),
         'end_index': element.get('endIndex', 0)
     }
-    
+
     if 'paragraph' in element:
         paragraph = element['paragraph']
         element_info['type'] = 'paragraph'
         element_info['text'] = _extract_paragraph_text(paragraph)
         element_info['style'] = paragraph.get('paragraphStyle', {})
-        
+
     elif 'table' in element:
         table = element['table']
         element_info['type'] = 'table'
@@ -109,17 +109,17 @@ def _parse_element(element: dict[str, Any]) -> Optional[dict[str, Any]]:
         element_info['columns'] = len(table.get('tableRows', [{}])[0].get('tableCells', []))
         element_info['cells'] = _parse_table_cells(table)
         element_info['table_style'] = table.get('tableStyle', {})
-        
+
     elif 'sectionBreak' in element:
         element_info['type'] = 'section_break'
         element_info['section_style'] = element['sectionBreak'].get('sectionStyle', {})
-        
+
     elif 'tableOfContents' in element:
         element_info['type'] = 'table_of_contents'
-        
+
     else:
         return None
-    
+
     return element_info
 
 
@@ -139,7 +139,7 @@ def _parse_table_cells(table: dict[str, Any]) -> list[list[dict[str, Any]]]:
         for col_idx, cell in enumerate(row.get('tableCells', [])):
             # Find the first paragraph in the cell for insertion
             insertion_index = cell.get('startIndex', 0) + 1  # Default fallback
-            
+
             # Look for the first paragraph in cell content
             content_elements = cell.get('content', [])
             for element in content_elements:
@@ -152,7 +152,12 @@ def _parse_table_cells(table: dict[str, Any]) -> list[list[dict[str, Any]]]:
                         if 'startIndex' in first_element:
                             insertion_index = first_element['startIndex']
                             break
-            
+
+            # Extract cell span information from tableCellStyle
+            cell_style = cell.get('tableCellStyle', {})
+            row_span = cell_style.get('rowSpan', 1)
+            column_span = cell_style.get('columnSpan', 1)
+
             cell_info = {
                 'row': row_idx,
                 'column': col_idx,
@@ -160,7 +165,9 @@ def _parse_table_cells(table: dict[str, Any]) -> list[list[dict[str, Any]]]:
                 'end_index': cell.get('endIndex', 0),
                 'insertion_index': insertion_index,  # Where to insert text in this cell
                 'content': _extract_cell_text(cell),
-                'content_elements': content_elements
+                'content_elements': content_elements,
+                'row_span': row_span,
+                'column_span': column_span,
             }
             row_cells.append(cell_info)
         cells.append(row_cells)
@@ -274,7 +281,7 @@ def find_tables(doc_data: dict[str, Any]) -> list[dict[str, Any]]:
     """
     tables = []
     structure = parse_document_structure(doc_data)
-    
+
     for idx, table_info in enumerate(structure['tables']):
         tables.append({
             'index': idx,
@@ -284,7 +291,7 @@ def find_tables(doc_data: dict[str, Any]) -> list[dict[str, Any]]:
             'columns': table_info['columns'],
             'cells': table_info['cells']
         })
-    
+
     return tables
 
 
@@ -300,14 +307,14 @@ def get_table_cell_indices(doc_data: dict[str, Any], table_index: int = 0) -> Op
         2D list of (start_index, end_index) tuples for each cell, or None if table not found
     """
     tables = find_tables(doc_data)
-    
+
     if table_index >= len(tables):
         logger.warning(f"Table index {table_index} not found. Document has {len(tables)} tables.")
         return None
-    
+
     table = tables[table_index]
     cell_indices = []
-    
+
     for row in table['cells']:
         row_indices = []
         for cell in row:
@@ -321,7 +328,7 @@ def get_table_cell_indices(doc_data: dict[str, Any], table_index: int = 0) -> Op
                     if 'paragraph' in element:
                         first_para = element['paragraph']
                         break
-                
+
                 if first_para and 'elements' in first_para and first_para['elements']:
                     # Insert at the start of the first text run in the paragraph
                     first_text_element = first_para['elements'][0]
@@ -330,13 +337,13 @@ def get_table_cell_indices(doc_data: dict[str, Any], table_index: int = 0) -> Op
                         end_idx = first_text_element.get('endIndex', start_idx + 1)
                         row_indices.append((start_idx, end_idx))
                         continue
-            
+
             # Fallback: use cell boundaries with safe margins
-            content_start = cell['start_index'] + 1  
+            content_start = cell['start_index'] + 1
             content_end = cell['end_index'] - 1
             row_indices.append((content_start, content_end))
         cell_indices.append(row_indices)
-    
+
     return cell_indices
 
 
@@ -352,11 +359,11 @@ def find_element_at_index(doc_data: dict[str, Any], index: int) -> Optional[dict
         Information about the element at that position, or None
     """
     structure = parse_document_structure(doc_data)
-    
+
     for element in structure['body']:
         if element['start_index'] <= index < element['end_index']:
             element_copy = element.copy()
-            
+
             # If it's a table, find which cell contains the index
             if element['type'] == 'table' and 'cells' in element:
                 for row_idx, row in enumerate(element['cells']):
@@ -369,9 +376,9 @@ def find_element_at_index(doc_data: dict[str, Any], index: int) -> Optional[dict
                                 'cell_end': cell['end_index']
                             }
                             break
-            
+
             return element_copy
-    
+
     return None
 
 
@@ -387,13 +394,13 @@ def get_next_paragraph_index(doc_data: dict[str, Any], after_index: int = 0) -> 
         Safe index for insertion
     """
     structure = parse_document_structure(doc_data)
-    
+
     # Find the first paragraph element after the given index
     for element in structure['body']:
         if element['type'] == 'paragraph' and element['start_index'] > after_index:
             # Insert at the end of the previous element or start of this paragraph
             return element['start_index']
-    
+
     # If no paragraph found, return the end of document
     return structure['total_length'] - 1 if structure['total_length'] > 0 else 1
 
@@ -409,7 +416,7 @@ def analyze_document_complexity(doc_data: dict[str, Any]) -> dict[str, Any]:
         Dictionary with document statistics
     """
     structure = parse_document_structure(doc_data)
-    
+
     stats = {
         'total_elements': len(structure['body']),
         'tables': len(structure['tables']),
@@ -419,7 +426,7 @@ def analyze_document_complexity(doc_data: dict[str, Any]) -> dict[str, Any]:
         'has_headers': bool(structure['headers']),
         'has_footers': bool(structure['footers'])
     }
-    
+
     # Add table statistics
     if structure['tables']:
         total_cells = sum(
@@ -714,6 +721,11 @@ def find_section_by_heading(
     # 1. Empty text (just whitespace)
     # 2. Immediately follows the target heading (within ~2 chars - just newlines)
     # 3. Very long text (>100 chars) that looks like body content
+    #
+    # IMPORTANT: We track which elements are "false" so we don't use them as evidence
+    # for marking subsequent headings as false. A real heading following a false heading
+    # should still be considered real.
+    false_heading_indices = set()
     for i in range(target_idx + 1, len(elements)):
         elem = elements[i]
         if elem['type'].startswith('heading') or elem['type'] == 'title':
@@ -744,10 +756,15 @@ def find_section_by_heading(
                     # (allowing for just newlines/whitespace), it's likely style bleed
                     if elem_start - prev_end <= 2:
                         # Check if the previous element is also a heading
-                        if prev_elem['type'].startswith('heading') or prev_elem['type'] == 'title':
+                        # BUT only if that heading wasn't already marked as false
+                        prev_is_heading = prev_elem['type'].startswith('heading') or prev_elem['type'] == 'title'
+                        prev_is_false = (i - 1) in false_heading_indices
+                        if prev_is_heading and not prev_is_false:
                             is_false_heading = True
 
-                if not is_false_heading:
+                if is_false_heading:
+                    false_heading_indices.add(i)
+                else:
                     section_end = elem['start_index']
                     break
 
@@ -873,15 +890,15 @@ def find_elements_by_type(
     Args:
         doc_data: Raw document data from Google Docs API
         element_type: Type of element to find. Supported values:
-            - 'table': All tables in the document
-            - 'heading': All headings (any level)
+            - 'table' (or 'tables'): All tables in the document
+            - 'heading' (or 'headings'): All headings (any level)
             - 'heading1' through 'heading6': Specific heading levels
             - 'title': Document title style elements
-            - 'paragraph': Regular paragraphs (non-heading, non-list)
-            - 'bullet_list': Bulleted lists
-            - 'numbered_list': Numbered/ordered lists
-            - 'list': Both bullet and numbered lists
-            - 'table_of_contents': Table of contents elements
+            - 'paragraph' (or 'paragraphs'): Regular paragraphs (non-heading, non-list)
+            - 'bullet_list' (or 'bullet_lists'): Bulleted lists
+            - 'numbered_list' (or 'numbered_lists'): Numbered/ordered lists
+            - 'list' (or 'lists'): Both bullet and numbered lists
+            - 'table_of_contents' (or 'toc'): Table of contents elements
 
     Returns:
         List of element dictionaries, each containing:
@@ -910,11 +927,18 @@ def find_elements_by_type(
     # Normalize element type for matching
     search_type = element_type.lower().strip()
 
-    # Map common aliases
+    # Map common aliases (including plural forms)
     type_aliases = {
         'heading': ['heading1', 'heading2', 'heading3', 'heading4', 'heading5', 'heading6', 'title'],
+        'headings': ['heading1', 'heading2', 'heading3', 'heading4', 'heading5', 'heading6', 'title'],
         'list': ['bullet_list', 'numbered_list'],
+        'lists': ['bullet_list', 'numbered_list'],
         'toc': ['table_of_contents'],
+        # Plural -> singular mappings
+        'tables': ['table'],
+        'paragraphs': ['paragraph'],
+        'bullet_lists': ['bullet_list'],
+        'numbered_lists': ['numbered_list'],
     }
 
     # Determine which types to match

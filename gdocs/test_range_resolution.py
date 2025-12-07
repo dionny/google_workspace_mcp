@@ -11,7 +11,6 @@ Tests the new range resolution functions:
 - find_sentence_boundaries
 - find_line_boundaries
 """
-import pytest
 from gdocs.docs_helpers import (
     resolve_range,
     resolve_range_by_search_bounds,

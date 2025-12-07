@@ -29,5 +29,5 @@ mcp_server_debug.log
 # ---- Local development files -------------------------------------------
 /.credentials
 /.claude
-PROMPT.md
+PROMPT*
 .beads

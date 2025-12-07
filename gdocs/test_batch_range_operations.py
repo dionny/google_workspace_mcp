@@ -8,13 +8,10 @@ These tests verify:
 - Error handling for range resolution failures
 """
 import pytest
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock
 from gdocs.managers.batch_operation_manager import (
     BatchOperationManager,
-    BatchOperationResult,
-    BatchExecutionResult,
 )
-from gdocs.docs_helpers import RangeResult
 
 
 class TestBatchOperationManagerRangeResolution:
@@ -217,6 +214,42 @@ class TestBatchOperationManagerRangeConversion:
         assert result["end_index"] == 89
         assert result["bold"] is True
         assert result["font_size"] == 14
+
+    def test_convert_range_to_insert_table(self):
+        """Test converting range-based insert_table to index-based.
+
+        Fix for google_workspace_mcp-9b57: insert_table with range-based positioning
+        should correctly set the index field.
+        """
+        op = {
+            "type": "insert_table",
+            "range_spec": {"search": "Conclusion"},
+            "rows": 3,
+            "columns": 4,
+        }
+        result = self.manager._convert_range_to_index_op(op, "insert_table", 89, 100)
+
+        assert result["type"] == "insert_table"
+        assert result["index"] == 89
+        assert result["rows"] == 3
+        assert result["columns"] == 4
+        assert "range_spec" not in result
+
+    def test_convert_range_to_insert_page_break(self):
+        """Test converting range-based insert_page_break to index-based.
+
+        Fix for google_workspace_mcp-9b57: insert_page_break with range-based positioning
+        should correctly set the index field.
+        """
+        op = {
+            "type": "insert_page_break",
+            "range_spec": {"search": "Conclusion"},
+        }
+        result = self.manager._convert_range_to_index_op(op, "insert_page_break", 89, 100)
+
+        assert result["type"] == "insert_page_break"
+        assert result["index"] == 89
+        assert "range_spec" not in result
 
 
 class TestBatchOperationManagerRangeIntegration:
@@ -605,3 +638,257 @@ class TestBatchOperationManagerRangeEdgeCases:
         assert result.success is True
         # The operation should have been executed with all formatting options
         assert result.operations_completed == 1
+
+
+class TestSearchBasedExtendPositioning:
+    """Tests for extend parameter in search-based positioning (not range_spec)."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.manager = BatchOperationManager(MagicMock())
+        # Create sample document data with clear paragraph boundaries
+        self.doc_data = {
+            "body": {
+                "content": [
+                    {
+                        "startIndex": 1,
+                        "endIndex": 50,
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "textRun": {
+                                        "content": "First paragraph with intro text here.\n",
+                                    },
+                                    "startIndex": 1,
+                                    "endIndex": 39,
+                                }
+                            ]
+                        }
+                    },
+                    {
+                        "startIndex": 50,
+                        "endIndex": 100,
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "textRun": {
+                                        "content": "Second paragraph with conclusion text.\n",
+                                    },
+                                    "startIndex": 50,
+                                    "endIndex": 89,
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_search_extend_paragraph_after_resolves_to_paragraph_end(self):
+        """Test that search with extend='paragraph' and position='after' inserts at paragraph end."""
+        mock_service = MagicMock()
+        mock_service.documents.return_value.get.return_value.execute = MagicMock(
+            return_value=self.doc_data
+        )
+        mock_service.documents.return_value.batchUpdate.return_value.execute = MagicMock(
+            return_value={}
+        )
+
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {
+                "type": "insert",
+                "search": "intro",
+                "position": "after",
+                "extend": "paragraph",
+                "text": "\n\nNew content",
+            }
+        ]
+
+        resolved_ops, results = await manager._resolve_operations_with_search(
+            operations, self.doc_data, True
+        )
+
+        assert len(resolved_ops) == 1
+        assert resolved_ops[0] is not None
+        # The resolved index should be at the paragraph end (50), not after 'intro' (around 30)
+        assert resolved_ops[0]["index"] == 50
+
+    @pytest.mark.asyncio
+    async def test_search_extend_paragraph_before_resolves_to_paragraph_start(self):
+        """Test that search with extend='paragraph' and position='before' inserts at paragraph start."""
+        mock_service = MagicMock()
+        mock_service.documents.return_value.get.return_value.execute = MagicMock(
+            return_value=self.doc_data
+        )
+        mock_service.documents.return_value.batchUpdate.return_value.execute = MagicMock(
+            return_value={}
+        )
+
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {
+                "type": "insert",
+                "search": "intro",
+                "position": "before",
+                "extend": "paragraph",
+                "text": "Prepended: ",
+            }
+        ]
+
+        resolved_ops, results = await manager._resolve_operations_with_search(
+            operations, self.doc_data, True
+        )
+
+        assert len(resolved_ops) == 1
+        assert resolved_ops[0] is not None
+        # The resolved index should be at the paragraph start (1), not before 'intro' (around 25)
+        assert resolved_ops[0]["index"] == 1
+
+    @pytest.mark.asyncio
+    async def test_search_extend_paragraph_replace_resolves_to_full_paragraph(self):
+        """Test that search with extend='paragraph' and position='replace' deletes full paragraph."""
+        mock_service = MagicMock()
+        mock_service.documents.return_value.get.return_value.execute = MagicMock(
+            return_value=self.doc_data
+        )
+        mock_service.documents.return_value.batchUpdate.return_value.execute = MagicMock(
+            return_value={}
+        )
+
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {
+                "type": "delete",
+                "search": "intro",
+                "position": "replace",
+                "extend": "paragraph",
+            }
+        ]
+
+        resolved_ops, results = await manager._resolve_operations_with_search(
+            operations, self.doc_data, True
+        )
+
+        assert len(resolved_ops) == 1
+        assert resolved_ops[0] is not None
+        # For delete with replace, should get full paragraph range
+        assert resolved_ops[0]["start_index"] == 1
+        assert resolved_ops[0]["end_index"] == 50
+
+    @pytest.mark.asyncio
+    async def test_search_extend_invalid_value_returns_error(self):
+        """Test that an invalid extend value returns an error."""
+        mock_service = MagicMock()
+        mock_service.documents.return_value.get.return_value.execute = MagicMock(
+            return_value=self.doc_data
+        )
+
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {
+                "type": "insert",
+                "search": "intro",
+                "position": "after",
+                "extend": "invalid_boundary",
+                "text": "test",
+            }
+        ]
+
+        resolved_ops, results = await manager._resolve_operations_with_search(
+            operations, self.doc_data, True
+        )
+
+        assert len(results) == 1
+        assert results[0].success is False
+        assert "invalid" in results[0].error.lower()
+        assert resolved_ops[0] is None
+
+    @pytest.mark.asyncio
+    async def test_search_extend_sentence_after_resolves_to_sentence_end(self):
+        """Test that search with extend='sentence' and position='after' inserts at sentence end."""
+        # Create document with multiple sentences in a paragraph
+        doc_data_with_sentences = {
+            "body": {
+                "content": [
+                    {
+                        "startIndex": 1,
+                        "endIndex": 100,
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "textRun": {
+                                        "content": "First sentence here. Second sentence with keyword in it. Third sentence.\n",
+                                    },
+                                    "startIndex": 1,
+                                    "endIndex": 74,
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+
+        mock_service = MagicMock()
+        mock_service.documents.return_value.get.return_value.execute = MagicMock(
+            return_value=doc_data_with_sentences
+        )
+
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {
+                "type": "insert",
+                "search": "keyword",
+                "position": "after",
+                "extend": "sentence",
+                "text": " [INSERTED]",
+            }
+        ]
+
+        resolved_ops, results = await manager._resolve_operations_with_search(
+            operations, doc_data_with_sentences, True
+        )
+
+        assert len(resolved_ops) == 1
+        assert resolved_ops[0] is not None
+        # Should resolve to end of sentence containing 'keyword' (around position 57)
+        # Not just after the word 'keyword' (around position 47)
+
+    @pytest.mark.asyncio
+    async def test_search_without_extend_behaves_as_before(self):
+        """Test that search without extend parameter still works as before."""
+        mock_service = MagicMock()
+        mock_service.documents.return_value.get.return_value.execute = MagicMock(
+            return_value=self.doc_data
+        )
+        mock_service.documents.return_value.batchUpdate.return_value.execute = MagicMock(
+            return_value={}
+        )
+
+        manager = BatchOperationManager(mock_service)
+
+        operations = [
+            {
+                "type": "insert",
+                "search": "intro",
+                "position": "after",
+                "text": "[INSERTED]",
+            }
+        ]
+
+        resolved_ops, results = await manager._resolve_operations_with_search(
+            operations, self.doc_data, True
+        )
+
+        assert len(resolved_ops) == 1
+        assert resolved_ops[0] is not None
+        # Without extend, should resolve to position right after 'intro' text
+        # Not at the paragraph end
+        assert resolved_ops[0]["index"] < 50  # Should be less than paragraph end

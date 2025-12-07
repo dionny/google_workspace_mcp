@@ -1,5 +1,5 @@
 """
-Unit tests for batch_modify_doc with search-based positioning and position tracking.
+Unit tests for batch_edit_doc with search-based positioning and position tracking.
 
 These tests verify:
 - Search-based positioning (before/after/replace)
@@ -252,6 +252,46 @@ class TestBatchOperationManagerSearchConversion:
         assert result["start_index"] == 100
         assert result["end_index"] == 108
 
+    def test_convert_insert_table_search_to_index(self):
+        """Test converting search-based insert_table to index-based.
+
+        Fix for google_workspace_mcp-9b57: insert_table with search-based positioning
+        should correctly set the index field.
+        """
+        op = {
+            "type": "insert_table",
+            "search": "Conclusion",
+            "position": "after",
+            "rows": 3,
+            "columns": 4,
+        }
+        result = self.manager._convert_search_to_index_op(op, "insert_table", 500, 510)
+
+        assert result["type"] == "insert_table"
+        assert result["index"] == 500
+        assert result["rows"] == 3
+        assert result["columns"] == 4
+        assert "search" not in result
+        assert "position" not in result
+
+    def test_convert_insert_page_break_search_to_index(self):
+        """Test converting search-based insert_page_break to index-based.
+
+        Fix for google_workspace_mcp-9b57: insert_page_break with search-based positioning
+        should correctly set the index field.
+        """
+        op = {
+            "type": "insert_page_break",
+            "search": "Chapter 2",
+            "position": "before",
+        }
+        result = self.manager._convert_search_to_index_op(op, "insert_page_break", 300, 309)
+
+        assert result["type"] == "insert_page_break"
+        assert result["index"] == 300
+        assert "search" not in result
+        assert "position" not in result
+
 
 class TestBatchOperationManagerDescriptions:
     """Tests for operation description generation."""
@@ -334,6 +374,29 @@ class TestBatchOperationManagerDescriptions:
         assert "superscript" in desc
         assert "link" in desc
 
+    def test_describe_format_with_paragraph_options(self):
+        """Test description includes paragraph-level formatting options.
+
+        Fix for google_workspace_mcp-a332: batch_edit_doc format operation
+        description should include heading_style and other paragraph options.
+        """
+        op = {
+            "type": "format_text",
+            "start_index": 10,
+            "end_index": 20,
+            "heading_style": "HEADING_2",
+            "alignment": "CENTER",
+            "line_spacing": 150,
+        }
+        desc = self.manager._describe_operation(op)
+
+        assert "heading_style" in desc
+        assert "HEADING_2" in desc
+        assert "alignment" in desc
+        assert "CENTER" in desc
+        assert "line_spacing" in desc
+        assert "150" in desc
+
     def test_describe_find_replace(self):
         """Test description for find/replace operation."""
         op = {
@@ -407,6 +470,89 @@ class TestBatchOperationManagerRequestBuilding:
 
         assert len(requests) == 1
         assert "updateTextStyle" in requests[0]
+
+    def test_build_format_request_with_heading_style(self):
+        """Test building format request with heading_style.
+
+        Fix for google_workspace_mcp-a332: batch_edit_doc format operation should
+        apply heading_style by creating an updateParagraphStyle request.
+        """
+        ops = [
+            {
+                "type": "format_text",
+                "start_index": 0,
+                "end_index": 50,
+                "heading_style": "HEADING_2",
+            }
+        ]
+        requests = self.manager._build_requests_from_resolved(ops)
+
+        # Should create 1 request: updateParagraphStyle for heading
+        assert len(requests) == 1
+        assert "updateParagraphStyle" in requests[0]
+        assert requests[0]["updateParagraphStyle"]["paragraphStyle"]["namedStyleType"] == "HEADING_2"
+
+    def test_build_format_request_with_heading_style_and_bold(self):
+        """Test building format request with both heading_style and text formatting.
+
+        Fix for google_workspace_mcp-a332: batch_edit_doc format operation should
+        handle both text-level and paragraph-level formatting together.
+        """
+        ops = [
+            {
+                "type": "format_text",
+                "start_index": 0,
+                "end_index": 50,
+                "bold": True,
+                "heading_style": "HEADING_2",
+            }
+        ]
+        requests = self.manager._build_requests_from_resolved(ops)
+
+        # Should create 2 requests: updateTextStyle for bold + updateParagraphStyle for heading
+        assert len(requests) == 2
+
+        # Check for text style request
+        text_style_reqs = [r for r in requests if "updateTextStyle" in r]
+        assert len(text_style_reqs) == 1
+        assert text_style_reqs[0]["updateTextStyle"]["textStyle"]["bold"] is True
+
+        # Check for paragraph style request
+        para_style_reqs = [r for r in requests if "updateParagraphStyle" in r]
+        assert len(para_style_reqs) == 1
+        assert para_style_reqs[0]["updateParagraphStyle"]["paragraphStyle"]["namedStyleType"] == "HEADING_2"
+
+    def test_build_format_request_with_alignment(self):
+        """Test building format request with paragraph alignment."""
+        ops = [
+            {
+                "type": "format_text",
+                "start_index": 0,
+                "end_index": 50,
+                "alignment": "CENTER",
+            }
+        ]
+        requests = self.manager._build_requests_from_resolved(ops)
+
+        assert len(requests) == 1
+        assert "updateParagraphStyle" in requests[0]
+        assert requests[0]["updateParagraphStyle"]["paragraphStyle"]["alignment"] == "CENTER"
+
+    def test_build_format_request_with_line_spacing(self):
+        """Test building format request with line spacing."""
+        ops = [
+            {
+                "type": "format_text",
+                "start_index": 0,
+                "end_index": 50,
+                "line_spacing": 150,  # 1.5x spacing
+            }
+        ]
+        requests = self.manager._build_requests_from_resolved(ops)
+
+        assert len(requests) == 1
+        assert "updateParagraphStyle" in requests[0]
+        assert requests[0]["updateParagraphStyle"]["paragraphStyle"]["lineSpacing"] == 150
 
     def test_build_skips_none_operations(self):
         """Test that None operations are skipped."""

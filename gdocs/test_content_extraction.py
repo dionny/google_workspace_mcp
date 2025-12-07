@@ -533,3 +533,99 @@ class TestTableContentExtraction:
 
         assert len(links) == 1
         assert links[0] == 'https://table-link.com'
+
+
+class TestGetCharacterAtIndex:
+    """Tests for get_character_at_index helper function."""
+
+    def test_gets_character_at_valid_index(self):
+        """Test that we can get a character at a valid index."""
+        from gdocs.docs_helpers import get_character_at_index
+
+        doc_data = {
+            'body': {
+                'content': [
+                    {
+                        'paragraph': {
+                            'elements': [{
+                                'startIndex': 1,
+                                'endIndex': 7,
+                                'textRun': {'content': 'Hello\n'}
+                            }]
+                        }
+                    }
+                ]
+            }
+        }
+
+        # Test character at index 1 (H)
+        assert get_character_at_index(doc_data, 1) == 'H'
+        # Test character at index 5 (o)
+        assert get_character_at_index(doc_data, 5) == 'o'
+        # Test newline at index 6
+        assert get_character_at_index(doc_data, 6) == '\n'
+
+    def test_returns_none_for_out_of_bounds_index(self):
+        """Test that None is returned for an index outside document bounds."""
+        from gdocs.docs_helpers import get_character_at_index
+
+        doc_data = {
+            'body': {
+                'content': [
+                    {
+                        'paragraph': {
+                            'elements': [{
+                                'startIndex': 1,
+                                'endIndex': 7,
+                                'textRun': {'content': 'Hello\n'}
+                            }]
+                        }
+                    }
+                ]
+            }
+        }
+
+        # Index 0 is before the text starts
+        assert get_character_at_index(doc_data, 0) is None
+        # Index 7 is past the text end
+        assert get_character_at_index(doc_data, 7) is None
+        # Index 100 is way past the document
+        assert get_character_at_index(doc_data, 100) is None
+
+    def test_handles_list_items_with_newlines(self):
+        """Test character extraction from list items which end with newlines."""
+        from gdocs.docs_helpers import get_character_at_index
+
+        doc_data = {
+            'body': {
+                'content': [
+                    {
+                        'paragraph': {
+                            'bullet': {'listId': 'list1'},
+                            'elements': [{
+                                'startIndex': 1,
+                                'endIndex': 7,
+                                'textRun': {'content': 'Item1\n'}
+                            }]
+                        }
+                    },
+                    {
+                        'paragraph': {
+                            'bullet': {'listId': 'list1'},
+                            'elements': [{
+                                'startIndex': 7,
+                                'endIndex': 13,
+                                'textRun': {'content': 'Item2\n'}
+                            }]
+                        }
+                    }
+                ]
+            }
+        }
+
+        # First item's newline at index 6
+        assert get_character_at_index(doc_data, 6) == '\n'
+        # Second item starts at index 7
+        assert get_character_at_index(doc_data, 7) == 'I'
+        # Second item's newline at index 12
+        assert get_character_at_index(doc_data, 12) == '\n'
