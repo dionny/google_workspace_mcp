@@ -1572,6 +1572,16 @@ async def modify_doc_text(
             operations.append(f"Inserted text at index {actual_start_index}")
             search_info["inserted_at_index"] = actual_start_index
 
+    # Clear formatting for plain text insertions (no formatting specified).
+    # This ensures inserted text doesn't inherit surrounding formatting.
+    if text is not None and operation_type == OperationType.INSERT and not has_formatting:
+        format_start = 1 if start_index == 0 else start_index
+        format_end = format_start + len(text)
+        requests.append(
+            create_clear_formatting_request(format_start, format_end, preserve_links=False)
+        )
+        operations.append(f"Cleared inherited formatting from range {format_start}-{format_end}")
+
     # Handle formatting
     if has_formatting:
         # Adjust range for formatting based on text operations
@@ -1594,10 +1604,17 @@ async def modify_doc_text(
         if format_end is not None and format_end <= format_start:
             format_end = format_start + 1
 
-        # When code_block=True, clear existing formatting first to ensure code block
-        # only has the specified styling (monospace font + gray background) without
-        # inheriting italic, subscript, foreground_color, etc. from surrounding text
-        if code_block is True:
+        # Clear existing formatting before applying new styles to inserted text.
+        # This prevents the inserted text from inheriting formatting from surrounding text
+        # (e.g., if inserting after bold text, new text would otherwise inherit bold).
+        # We clear formatting when:
+        # 1. Text was inserted (not replaced) AND has formatting to apply
+        # 2. code_block=True (regardless of insert/replace)
+        should_clear_formatting = (
+            (text is not None and operation_type == OperationType.INSERT) or
+            code_block is True
+        )
+        if should_clear_formatting:
             requests.append(
                 create_clear_formatting_request(
                     format_start, format_end, preserve_links=(link is not None)

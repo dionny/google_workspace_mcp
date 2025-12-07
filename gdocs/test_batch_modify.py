@@ -355,13 +355,16 @@ class TestBatchOperationManagerRequestBuilding:
         self.manager = BatchOperationManager(MagicMock())
 
     def test_build_insert_request(self):
-        """Test building insert text request."""
+        """Test building insert text request with clear formatting."""
         ops = [{"type": "insert_text", "index": 100, "text": "Hello"}]
         requests = self.manager._build_requests_from_resolved(ops)
 
-        assert len(requests) == 1
+        # Insert creates 2 requests: insert + clear formatting (to prevent inheritance)
+        assert len(requests) == 2
         assert "insertText" in requests[0]
         assert requests[0]["insertText"]["location"]["index"] == 100
+        # Second request clears formatting to prevent inheriting surrounding styles
+        assert "updateTextStyle" in requests[1]
 
     def test_build_delete_request(self):
         """Test building delete request."""
@@ -371,8 +374,8 @@ class TestBatchOperationManagerRequestBuilding:
         assert len(requests) == 1
         assert "deleteContentRange" in requests[0]
 
-    def test_build_replace_request_creates_two(self):
-        """Test that replace creates delete + insert requests."""
+    def test_build_replace_request_creates_three(self):
+        """Test that replace creates delete + insert + clear formatting requests."""
         ops = [
             {
                 "type": "replace_text",
@@ -383,9 +386,12 @@ class TestBatchOperationManagerRequestBuilding:
         ]
         requests = self.manager._build_requests_from_resolved(ops)
 
-        assert len(requests) == 2
+        # Replace creates 3 requests: delete + insert + clear formatting
+        assert len(requests) == 3
         assert "deleteContentRange" in requests[0]
         assert "insertText" in requests[1]
+        # Third request clears formatting to prevent inheriting surrounding styles
+        assert "updateTextStyle" in requests[2]
 
     def test_build_format_request(self):
         """Test building format request."""
@@ -411,7 +417,8 @@ class TestBatchOperationManagerRequestBuilding:
         ]
         requests = self.manager._build_requests_from_resolved(ops)
 
-        assert len(requests) == 2
+        # 2 inserts * 2 requests each (insert + clear formatting) = 4 requests
+        assert len(requests) == 4
 
     def test_build_table_request(self):
         """Test building table insert request."""
@@ -516,13 +523,19 @@ class TestInsertWithFormatting:
         format_req = requests[2]["updateTextStyle"]
         assert "foregroundColor" in format_req["textStyle"]
 
-    def test_build_insert_without_formatting_creates_single_request(self):
-        """Test that insert without formatting only creates insert request."""
+    def test_build_insert_without_formatting_clears_inherited_styles(self):
+        """Test that insert without formatting creates insert + clear formatting requests.
+
+        This prevents inserted text from inheriting surrounding formatting.
+        """
         ops = [{"type": "insert_text", "index": 100, "text": "Plain Text"}]
         requests = self.manager._build_requests_from_resolved(ops)
 
-        assert len(requests) == 1
+        # Insert without explicit formatting still clears inherited styles
+        assert len(requests) == 2
         assert "insertText" in requests[0]
+        # Second request clears formatting to ensure plain text stays plain
+        assert "updateTextStyle" in requests[1]
 
     def test_build_replace_with_bold_creates_format_request(self):
         """Test that replace with bold=True creates delete, insert, clear, and format requests."""
@@ -545,8 +558,11 @@ class TestInsertWithFormatting:
         assert format_req["range"]["startIndex"] == 100
         assert format_req["range"]["endIndex"] == 116  # 100 + len("Bold Replacement")
 
-    def test_build_replace_without_formatting_creates_two_requests(self):
-        """Test that replace without formatting only creates delete and insert requests."""
+    def test_build_replace_without_formatting_clears_inherited_styles(self):
+        """Test that replace without formatting creates delete, insert, and clear formatting requests.
+
+        This prevents replaced text from inheriting surrounding formatting.
+        """
         ops = [{
             "type": "replace_text",
             "start_index": 50,
@@ -555,9 +571,12 @@ class TestInsertWithFormatting:
         }]
         requests = self.manager._build_requests_from_resolved(ops)
 
-        assert len(requests) == 2
+        # Replace without explicit formatting still clears inherited styles
+        assert len(requests) == 3
         assert "deleteContentRange" in requests[0]
         assert "insertText" in requests[1]
+        # Third request clears formatting to ensure plain text stays plain
+        assert "updateTextStyle" in requests[2]
 
     def test_build_insert_with_link(self):
         """Test insert with hyperlink formatting."""
