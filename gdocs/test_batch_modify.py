@@ -436,28 +436,38 @@ class TestInsertWithFormatting:
         self.manager = BatchOperationManager(MagicMock())
 
     def test_build_insert_with_bold_creates_format_request(self):
-        """Test that insert with bold=True creates both insert and format requests."""
+        """Test that insert with bold=True creates insert, clear formatting, and format requests.
+
+        Fix for google_workspace_mcp-332b: Clear formatting before applying styles to prevent
+        inheriting surrounding text formatting.
+        """
         ops = [{"type": "insert_text", "index": 100, "text": "Bold Text", "bold": True}]
         requests = self.manager._build_requests_from_resolved(ops)
 
-        assert len(requests) == 2
+        assert len(requests) == 3  # insert + clear formatting + apply formatting
         assert "insertText" in requests[0]
-        assert "updateTextStyle" in requests[1]
-        # Verify the format request targets the correct range
-        format_req = requests[1]["updateTextStyle"]
+        assert "updateTextStyle" in requests[1]  # clear formatting request
+        assert "updateTextStyle" in requests[2]  # apply formatting request
+        # Verify the clear formatting request resets styles
+        clear_req = requests[1]["updateTextStyle"]
+        assert clear_req["textStyle"]["bold"] is False
+        assert clear_req["textStyle"]["italic"] is False
+        # Verify the format request targets the correct range and sets bold
+        format_req = requests[2]["updateTextStyle"]
         assert format_req["range"]["startIndex"] == 100
         assert format_req["range"]["endIndex"] == 109  # 100 + len("Bold Text")
         assert format_req["textStyle"]["bold"] is True
 
     def test_build_insert_with_italic_creates_format_request(self):
-        """Test that insert with italic=True creates both insert and format requests."""
+        """Test that insert with italic=True creates insert, clear, and format requests."""
         ops = [{"type": "insert_text", "index": 50, "text": "Italic", "italic": True}]
         requests = self.manager._build_requests_from_resolved(ops)
 
-        assert len(requests) == 2
+        assert len(requests) == 3  # insert + clear formatting + apply formatting
         assert "insertText" in requests[0]
-        assert "updateTextStyle" in requests[1]
-        format_req = requests[1]["updateTextStyle"]
+        assert "updateTextStyle" in requests[1]  # clear formatting
+        assert "updateTextStyle" in requests[2]  # apply formatting
+        format_req = requests[2]["updateTextStyle"]
         assert format_req["textStyle"]["italic"] is True
 
     def test_build_insert_with_multiple_formats(self):
@@ -472,8 +482,8 @@ class TestInsertWithFormatting:
         }]
         requests = self.manager._build_requests_from_resolved(ops)
 
-        assert len(requests) == 2
-        format_req = requests[1]["updateTextStyle"]
+        assert len(requests) == 3  # insert + clear formatting + apply formatting
+        format_req = requests[2]["updateTextStyle"]
         assert format_req["textStyle"]["bold"] is True
         assert format_req["textStyle"]["italic"] is True
         assert format_req["textStyle"]["underline"] is True
@@ -488,8 +498,8 @@ class TestInsertWithFormatting:
         }]
         requests = self.manager._build_requests_from_resolved(ops)
 
-        assert len(requests) == 2
-        format_req = requests[1]["updateTextStyle"]
+        assert len(requests) == 3  # insert + clear formatting + apply formatting
+        format_req = requests[2]["updateTextStyle"]
         assert format_req["textStyle"]["fontSize"]["magnitude"] == 24
 
     def test_build_insert_with_foreground_color(self):
@@ -502,8 +512,8 @@ class TestInsertWithFormatting:
         }]
         requests = self.manager._build_requests_from_resolved(ops)
 
-        assert len(requests) == 2
-        format_req = requests[1]["updateTextStyle"]
+        assert len(requests) == 3  # insert + clear formatting + apply formatting
+        format_req = requests[2]["updateTextStyle"]
         assert "foregroundColor" in format_req["textStyle"]
 
     def test_build_insert_without_formatting_creates_single_request(self):
@@ -515,7 +525,7 @@ class TestInsertWithFormatting:
         assert "insertText" in requests[0]
 
     def test_build_replace_with_bold_creates_format_request(self):
-        """Test that replace with bold=True creates delete, insert, and format requests."""
+        """Test that replace with bold=True creates delete, insert, clear, and format requests."""
         ops = [{
             "type": "replace_text",
             "start_index": 100,
@@ -525,12 +535,13 @@ class TestInsertWithFormatting:
         }]
         requests = self.manager._build_requests_from_resolved(ops)
 
-        assert len(requests) == 3
+        assert len(requests) == 4  # delete + insert + clear formatting + apply formatting
         assert "deleteContentRange" in requests[0]
         assert "insertText" in requests[1]
-        assert "updateTextStyle" in requests[2]
+        assert "updateTextStyle" in requests[2]  # clear formatting
+        assert "updateTextStyle" in requests[3]  # apply formatting
         # Verify format range matches the replacement text
-        format_req = requests[2]["updateTextStyle"]
+        format_req = requests[3]["updateTextStyle"]
         assert format_req["range"]["startIndex"] == 100
         assert format_req["range"]["endIndex"] == 116  # 100 + len("Bold Replacement")
 
@@ -558,8 +569,8 @@ class TestInsertWithFormatting:
         }]
         requests = self.manager._build_requests_from_resolved(ops)
 
-        assert len(requests) == 2
-        format_req = requests[1]["updateTextStyle"]
+        assert len(requests) == 3  # insert + clear formatting + apply formatting
+        format_req = requests[2]["updateTextStyle"]
         assert format_req["textStyle"]["link"]["url"] == "https://example.com"
 
     def test_build_insert_with_strikethrough(self):
@@ -572,8 +583,8 @@ class TestInsertWithFormatting:
         }]
         requests = self.manager._build_requests_from_resolved(ops)
 
-        assert len(requests) == 2
-        format_req = requests[1]["updateTextStyle"]
+        assert len(requests) == 3  # insert + clear formatting + apply formatting
+        format_req = requests[2]["updateTextStyle"]
         assert format_req["textStyle"]["strikethrough"] is True
 
 

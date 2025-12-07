@@ -19,6 +19,7 @@ from gdocs.docs_helpers import (
     create_insert_text_request,
     create_delete_range_request,
     create_format_text_request,
+    create_clear_formatting_request,
     create_find_replace_request,
     create_insert_table_request,
     create_insert_page_break_request,
@@ -1663,6 +1664,13 @@ class BatchOperationManager:
                     op.get('link'), op.get('foreground_color'), op.get('background_color')
                 )
                 if format_req:
+                    # Clear existing formatting first to prevent inheriting surrounding styles
+                    # Preserve links only if the user is explicitly setting a link
+                    clear_req = create_clear_formatting_request(
+                        op['index'], op['index'] + len(op['text']),
+                        preserve_links=(op.get('link') is not None)
+                    )
+                    requests.append(clear_req)
                     requests.append(format_req)
 
             elif op_type == 'delete_text':
@@ -1687,6 +1695,13 @@ class BatchOperationManager:
                     op.get('link'), op.get('foreground_color'), op.get('background_color')
                 )
                 if format_req:
+                    # Clear existing formatting first to prevent inheriting surrounding styles
+                    # Preserve links only if the user is explicitly setting a link
+                    clear_req = create_clear_formatting_request(
+                        op['start_index'], op['start_index'] + len(op.get('text', '')),
+                        preserve_links=(op.get('link') is not None)
+                    )
+                    requests.append(clear_req)
                     requests.append(format_req)
 
             elif op_type == 'format_text':
