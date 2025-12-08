@@ -1,5 +1,31 @@
 # Agent Guide for Google Workspace MCP
 
+## Repository Information
+
+**IMPORTANT**: This is a fork of [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp) maintained by Indeed (dionny/google_workspace_mcp).
+
+### Fork Status
+- We are generally doing our own thing and developing features for Indeed's specific needs
+- **We do NOT intend to push all changes upstream** to the original repository
+- Some features may be Indeed-specific and not appropriate for the upstream project
+- **By default, PRs should target `dionny/google_workspace_mcp:main`**, NOT `taylorwilsdon/google_workspace_mcp`
+
+### Creating Pull Requests
+```bash
+# CORRECT: PR against our fork
+gh pr create --repo dionny/google_workspace_mcp --base main --head <branch-name>
+
+# INCORRECT: Do not PR against upstream by default
+# gh pr create (without --repo flag may target upstream)
+```
+
+### When to Contribute Upstream
+If you believe a feature or fix would benefit the broader community:
+1. Discuss with the team first
+2. Create a separate branch if needed
+3. Ensure the feature is generic and well-documented
+4. Submit PR to `taylorwilsdon/google_workspace_mcp` only after team approval
+
 ## Testing Tools
 
 ### Using tools_cli.py
