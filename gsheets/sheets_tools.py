@@ -1247,6 +1247,107 @@ async def format_cells(
 
 
 @server.tool()
+@handle_http_errors("freeze_panes", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def freeze_panes(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    frozen_row_count: int = 0,
+    frozen_column_count: int = 0,
+) -> str:
+    """
+    Freezes rows and/or columns in a sheet to keep them visible while scrolling.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_id (int): The ID of the sheet (not the sheet name). Required.
+            Use get_spreadsheet_info to find sheet IDs.
+        frozen_row_count (int): Number of rows to freeze from the top. Defaults to 0.
+            Set to 0 to unfreeze all rows. Common values: 1 (freeze header row),
+            2 (freeze header + subheader).
+        frozen_column_count (int): Number of columns to freeze from the left. Defaults to 0.
+            Set to 0 to unfreeze all columns. Common values: 1 (freeze ID/name column).
+
+    Returns:
+        str: Confirmation message of the successful freeze operation.
+
+    Example:
+        # Freeze the first row (header)
+        freeze_panes(spreadsheet_id="abc123", sheet_id=0, frozen_row_count=1)
+
+        # Freeze first row and first column
+        freeze_panes(spreadsheet_id="abc123", sheet_id=0, frozen_row_count=1, frozen_column_count=1)
+
+        # Unfreeze all rows and columns
+        freeze_panes(spreadsheet_id="abc123", sheet_id=0, frozen_row_count=0, frozen_column_count=0)
+    """
+    logger.info(
+        f"[freeze_panes] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"Sheet ID: {sheet_id}, Frozen Rows: {frozen_row_count}, Frozen Cols: {frozen_column_count}"
+    )
+
+    # Validate inputs
+    if frozen_row_count < 0:
+        raise ValueError(f"frozen_row_count must be >= 0, got {frozen_row_count}")
+    if frozen_column_count < 0:
+        raise ValueError(f"frozen_column_count must be >= 0, got {frozen_column_count}")
+
+    # Build the fields mask - only update the frozen properties
+    fields = []
+    grid_properties = {}
+
+    if frozen_row_count >= 0:
+        grid_properties["frozenRowCount"] = frozen_row_count
+        fields.append("gridProperties.frozenRowCount")
+
+    if frozen_column_count >= 0:
+        grid_properties["frozenColumnCount"] = frozen_column_count
+        fields.append("gridProperties.frozenColumnCount")
+
+    request_body = {
+        "requests": [
+            {
+                "updateSheetProperties": {
+                    "properties": {
+                        "sheetId": sheet_id,
+                        "gridProperties": grid_properties,
+                    },
+                    "fields": ",".join(fields),
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Build description of the freeze operation
+    if frozen_row_count == 0 and frozen_column_count == 0:
+        freeze_description = "unfrozen all rows and columns"
+    else:
+        parts = []
+        if frozen_row_count > 0:
+            parts.append(f"{frozen_row_count} row(s)")
+        if frozen_column_count > 0:
+            parts.append(f"{frozen_column_count} column(s)")
+        freeze_description = f"frozen {' and '.join(parts)}"
+
+    text_output = (
+        f"Successfully {freeze_description} in sheet ID {sheet_id} "
+        f"of spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully {freeze_description} for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
 @handle_http_errors("sort_range", service_type="sheets")
 @require_google_service("sheets", "sheets_write")
 async def sort_range(
