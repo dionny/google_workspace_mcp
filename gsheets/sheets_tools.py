@@ -1725,6 +1725,12 @@ async def batch_update_sheet(
         - range (str): Range in A1 notation. Required.
         - sort_specs (list): List of {column_index, order} dicts. Required.
 
+    8. auto_resize_dimension - Auto-resize columns or rows to fit content
+        - sheet_id (int): Sheet ID. Required.
+        - dimension (str): 'COLUMNS' or 'ROWS'. Required.
+        - start_index (int): Start index (0-based). Required.
+        - end_index (int): End index (exclusive). Required.
+
     Returns:
         str: Summary of all operations performed.
 
@@ -1812,11 +1818,16 @@ async def batch_update_sheet(
                 requests.append(request)
                 operation_summaries.append(summary)
 
+            elif op_type == "auto_resize_dimension":
+                request, summary = _build_auto_resize_dimension_request(op, i)
+                requests.append(request)
+                operation_summaries.append(summary)
+
             else:
                 raise Exception(
                     f"operations[{i}] has unknown type '{op_type}'. "
                     f"Supported types: format_cells, freeze_panes, set_column_width, "
-                    f"set_row_height, merge_cells, unmerge_cells, sort_range"
+                    f"set_row_height, merge_cells, unmerge_cells, sort_range, auto_resize_dimension"
                 )
         except Exception as e:
             raise Exception(f"Error in operations[{i}] ({op_type}): {e}")
@@ -2215,6 +2226,330 @@ def _build_sort_range_request(op: dict, index: int) -> tuple:
     sort_desc = ", ".join(f"col{s['column_index']} {s['order']}" for s in sort_specs)
     summary = f"sort_range: {range_name} by {sort_desc}"
     return request, summary
+
+
+def _build_auto_resize_dimension_request(op: dict, index: int) -> tuple:
+    """Build an autoResizeDimensions request for auto_resize_dimension operation."""
+    sheet_id = op.get("sheet_id")
+    dimension = op.get("dimension")
+    start_index = op.get("start_index")
+    end_index = op.get("end_index")
+
+    if sheet_id is None:
+        raise ValueError("missing required 'sheet_id' field")
+    if dimension is None:
+        raise ValueError("missing required 'dimension' field")
+    if start_index is None:
+        raise ValueError("missing required 'start_index' field")
+    if end_index is None:
+        raise ValueError("missing required 'end_index' field")
+
+    valid_dimensions = ["COLUMNS", "ROWS"]
+    if dimension.upper() not in valid_dimensions:
+        raise ValueError(
+            f"dimension must be one of {valid_dimensions}, got '{dimension}'"
+        )
+    if start_index < 0:
+        raise ValueError(f"start_index must be >= 0, got {start_index}")
+    if end_index <= start_index:
+        raise ValueError(
+            f"end_index ({end_index}) must be > start_index ({start_index})"
+        )
+
+    request = {
+        "autoResizeDimensions": {
+            "dimensions": {
+                "sheetId": sheet_id,
+                "dimension": dimension.upper(),
+                "startIndex": start_index,
+                "endIndex": end_index,
+            }
+        }
+    }
+
+    dim_name = "column" if dimension.upper() == "COLUMNS" else "row"
+    if end_index - start_index == 1:
+        summary = f"auto_resize: {dim_name} {start_index}"
+    else:
+        summary = f"auto_resize: {dim_name}s {start_index}-{end_index - 1}"
+    return request, summary
+
+
+@server.tool()
+@handle_http_errors("set_column_width", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def set_column_width(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    start_index: int,
+    end_index: int,
+    width: int,
+) -> str:
+    """
+    Sets the width of one or more columns in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_id (int): The ID of the sheet (not the sheet name). Required.
+            Use get_spreadsheet_info to find sheet IDs.
+        start_index (int): The starting column index (0-based, A=0, B=1, etc.). Required.
+        end_index (int): The ending column index (exclusive). Required.
+            For a single column, use start_index + 1.
+        width (int): The width in pixels. Required.
+            Common values: 100 (narrow), 150 (medium), 200 (wide), 300 (extra wide).
+
+    Returns:
+        str: Confirmation message of the successful column width change.
+
+    Example:
+        # Set column A to 200 pixels wide
+        set_column_width(spreadsheet_id="abc123", sheet_id=0, start_index=0, end_index=1, width=200)
+
+        # Set columns A through D to 150 pixels wide
+        set_column_width(spreadsheet_id="abc123", sheet_id=0, start_index=0, end_index=4, width=150)
+    """
+    logger.info(
+        f"[set_column_width] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"Sheet ID: {sheet_id}, Columns: {start_index}-{end_index - 1}, Width: {width}px"
+    )
+
+    # Validate inputs
+    if start_index < 0:
+        raise ValueError(f"start_index must be >= 0, got {start_index}")
+    if end_index <= start_index:
+        raise ValueError(
+            f"end_index ({end_index}) must be greater than start_index ({start_index})"
+        )
+    if width <= 0:
+        raise ValueError(f"width must be > 0, got {width}")
+
+    request_body = {
+        "requests": [
+            {
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "COLUMNS",
+                        "startIndex": start_index,
+                        "endIndex": end_index,
+                    },
+                    "properties": {"pixelSize": width},
+                    "fields": "pixelSize",
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    columns_affected = end_index - start_index
+    if columns_affected == 1:
+        col_desc = f"column {start_index}"
+    else:
+        col_desc = f"columns {start_index}-{end_index - 1}"
+
+    text_output = (
+        f"Successfully set {col_desc} to {width}px wide "
+        f"in sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully set {col_desc} to {width}px for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("set_row_height", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def set_row_height(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    start_index: int,
+    end_index: int,
+    height: int,
+) -> str:
+    """
+    Sets the height of one or more rows in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_id (int): The ID of the sheet (not the sheet name). Required.
+            Use get_spreadsheet_info to find sheet IDs.
+        start_index (int): The starting row index (0-based, row 1 = index 0). Required.
+        end_index (int): The ending row index (exclusive). Required.
+            For a single row, use start_index + 1.
+        height (int): The height in pixels. Required.
+            Common values: 21 (default), 30 (medium), 50 (tall), 100 (extra tall).
+
+    Returns:
+        str: Confirmation message of the successful row height change.
+
+    Example:
+        # Set row 1 to 40 pixels tall
+        set_row_height(spreadsheet_id="abc123", sheet_id=0, start_index=0, end_index=1, height=40)
+
+        # Set rows 1 through 5 to 30 pixels tall
+        set_row_height(spreadsheet_id="abc123", sheet_id=0, start_index=0, end_index=5, height=30)
+    """
+    logger.info(
+        f"[set_row_height] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"Sheet ID: {sheet_id}, Rows: {start_index}-{end_index - 1}, Height: {height}px"
+    )
+
+    # Validate inputs
+    if start_index < 0:
+        raise ValueError(f"start_index must be >= 0, got {start_index}")
+    if end_index <= start_index:
+        raise ValueError(
+            f"end_index ({end_index}) must be greater than start_index ({start_index})"
+        )
+    if height <= 0:
+        raise ValueError(f"height must be > 0, got {height}")
+
+    request_body = {
+        "requests": [
+            {
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": start_index,
+                        "endIndex": end_index,
+                    },
+                    "properties": {"pixelSize": height},
+                    "fields": "pixelSize",
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    rows_affected = end_index - start_index
+    if rows_affected == 1:
+        row_desc = f"row {start_index}"
+    else:
+        row_desc = f"rows {start_index}-{end_index - 1}"
+
+    text_output = (
+        f"Successfully set {row_desc} to {height}px tall "
+        f"in sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully set {row_desc} to {height}px for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("auto_resize_dimension", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def auto_resize_dimension(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    dimension: str,
+    start_index: int,
+    end_index: int,
+) -> str:
+    """
+    Auto-resizes columns or rows to fit their content in a Google Sheet.
+
+    This adjusts the width of columns or height of rows to automatically fit
+    the content they contain, similar to double-clicking the column/row border
+    in the Google Sheets UI.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_id (int): The ID of the sheet (not the sheet name). Required.
+            Use get_spreadsheet_info to find sheet IDs.
+        dimension (str): The dimension to resize - "COLUMNS" or "ROWS". Required.
+        start_index (int): The starting index (0-based). Required.
+            For columns: A=0, B=1, etc.
+            For rows: row 1 = index 0.
+        end_index (int): The ending index (exclusive). Required.
+            For a single column/row, use start_index + 1.
+
+    Returns:
+        str: Confirmation message of the successful auto-resize operation.
+
+    Example:
+        # Auto-resize column A to fit content
+        auto_resize_dimension(spreadsheet_id="abc123", sheet_id=0, dimension="COLUMNS", start_index=0, end_index=1)
+
+        # Auto-resize columns A through D
+        auto_resize_dimension(spreadsheet_id="abc123", sheet_id=0, dimension="COLUMNS", start_index=0, end_index=4)
+
+        # Auto-resize rows 1 through 10
+        auto_resize_dimension(spreadsheet_id="abc123", sheet_id=0, dimension="ROWS", start_index=0, end_index=10)
+    """
+    logger.info(
+        f"[auto_resize_dimension] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"Sheet ID: {sheet_id}, Dimension: {dimension}, Range: {start_index}-{end_index - 1}"
+    )
+
+    # Validate inputs
+    valid_dimensions = ["COLUMNS", "ROWS"]
+    if dimension.upper() not in valid_dimensions:
+        raise ValueError(
+            f"dimension must be one of {valid_dimensions}, got '{dimension}'"
+        )
+    if start_index < 0:
+        raise ValueError(f"start_index must be >= 0, got {start_index}")
+    if end_index <= start_index:
+        raise ValueError(
+            f"end_index ({end_index}) must be greater than start_index ({start_index})"
+        )
+
+    request_body = {
+        "requests": [
+            {
+                "autoResizeDimensions": {
+                    "dimensions": {
+                        "sheetId": sheet_id,
+                        "dimension": dimension.upper(),
+                        "startIndex": start_index,
+                        "endIndex": end_index,
+                    }
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    dim_name = "column" if dimension.upper() == "COLUMNS" else "row"
+    items_affected = end_index - start_index
+    if items_affected == 1:
+        dim_desc = f"{dim_name} {start_index}"
+    else:
+        dim_desc = f"{dim_name}s {start_index}-{end_index - 1}"
+
+    text_output = (
+        f"Successfully auto-resized {dim_desc} to fit content "
+        f"in sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully auto-resized {dim_desc} for {user_google_email}.")
+    return text_output
 
 
 # Create comment management tools for sheets
