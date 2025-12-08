@@ -560,5 +560,321 @@ class TestUndoEdgeCases:
         assert result4.success is False
 
 
+class TestBatchUndo:
+    """Tests for batch undo functionality."""
+
+    def setup_method(self):
+        """Reset the global manager before each test."""
+        reset_history_manager()
+
+    def test_generate_batch_id(self):
+        """Test generating unique batch IDs."""
+        manager = HistoryManager()
+
+        batch_id1 = manager.generate_batch_id()
+        batch_id2 = manager.generate_batch_id()
+
+        assert batch_id1.startswith("batch_")
+        assert batch_id2.startswith("batch_")
+        assert batch_id1 != batch_id2
+
+    def test_record_operations_with_batch_id(self):
+        """Test recording operations with batch_id."""
+        manager = HistoryManager()
+        batch_id = manager.generate_batch_id()
+
+        snapshot1 = manager.record_operation(
+            document_id="doc_abc",
+            operation_type="insert_text",
+            operation_params={"text": "First"},
+            start_index=0,
+            position_shift=5,
+            batch_id=batch_id,
+            batch_index=0,
+        )
+
+        snapshot2 = manager.record_operation(
+            document_id="doc_abc",
+            operation_type="insert_text",
+            operation_params={"text": "Second"},
+            start_index=5,
+            position_shift=6,
+            batch_id=batch_id,
+            batch_index=1,
+        )
+
+        assert snapshot1.batch_id == batch_id
+        assert snapshot1.batch_index == 0
+        assert snapshot2.batch_id == batch_id
+        assert snapshot2.batch_index == 1
+
+    def test_get_batch_operations(self):
+        """Test retrieving operations by batch_id."""
+        manager = HistoryManager()
+        batch_id = manager.generate_batch_id()
+
+        # Record operations in batch
+        manager.record_operation(
+            document_id="doc_abc",
+            operation_type="insert_text",
+            operation_params={"text": "First"},
+            start_index=0,
+            batch_id=batch_id,
+            batch_index=0,
+        )
+
+        manager.record_operation(
+            document_id="doc_abc",
+            operation_type="insert_text",
+            operation_params={"text": "Second"},
+            start_index=5,
+            batch_id=batch_id,
+            batch_index=1,
+        )
+
+        # Record operation NOT in batch
+        manager.record_operation(
+            document_id="doc_abc",
+            operation_type="insert_text",
+            operation_params={"text": "Third"},
+            start_index=11,
+        )
+
+        batch_ops = manager.get_batch_operations("doc_abc", batch_id)
+
+        assert len(batch_ops) == 2
+        assert batch_ops[0].batch_index == 0
+        assert batch_ops[1].batch_index == 1
+
+    def test_get_batch_operations_empty(self):
+        """Test getting operations for nonexistent batch."""
+        manager = HistoryManager()
+
+        batch_ops = manager.get_batch_operations("doc_abc", "batch_nonexistent")
+
+        assert len(batch_ops) == 0
+
+    def test_generate_batch_undo_operations(self):
+        """Test generating undo operations for entire batch."""
+        manager = HistoryManager()
+        batch_id = manager.generate_batch_id()
+
+        # Record insert operations in batch
+        manager.record_operation(
+            document_id="doc_abc",
+            operation_type="insert_text",
+            operation_params={"text": "First"},
+            start_index=0,
+            position_shift=5,
+            batch_id=batch_id,
+            batch_index=0,
+        )
+
+        manager.record_operation(
+            document_id="doc_abc",
+            operation_type="insert_text",
+            operation_params={"text": "Second"},
+            start_index=5,
+            position_shift=6,
+            batch_id=batch_id,
+            batch_index=1,
+        )
+
+        result = manager.generate_batch_undo_operations("doc_abc", batch_id)
+
+        assert result.success is True
+        assert result.operation_id == batch_id
+        assert result.reverse_operation is not None
+        assert result.reverse_operation["batch_undo"] is True
+        assert len(result.reverse_operation["operations"]) == 2
+        # Operations should be in reverse order (LIFO)
+        ops = result.reverse_operation["operations"]
+        assert ops[0]["type"] == "delete_text"  # Reverse of second insert
+        assert ops[1]["type"] == "delete_text"  # Reverse of first insert
+
+    def test_generate_batch_undo_nonexistent(self):
+        """Test batch undo for nonexistent batch."""
+        manager = HistoryManager()
+
+        result = manager.generate_batch_undo_operations("doc_abc", "batch_fake")
+
+        assert result.success is False
+        assert "no batch found" in result.message.lower()
+
+    def test_generate_batch_undo_already_undone(self):
+        """Test batch undo when some operations are already undone."""
+        manager = HistoryManager()
+        batch_id = manager.generate_batch_id()
+
+        snapshot = manager.record_operation(
+            document_id="doc_abc",
+            operation_type="insert_text",
+            operation_params={"text": "Test"},
+            start_index=0,
+            batch_id=batch_id,
+            batch_index=0,
+        )
+
+        # Mark as already undone
+        manager.mark_undone("doc_abc", snapshot.id)
+
+        result = manager.generate_batch_undo_operations("doc_abc", batch_id)
+
+        assert result.success is False
+        assert "already been" in result.message.lower()
+
+    def test_generate_batch_undo_with_non_undoable(self):
+        """Test batch undo with non-undoable operations."""
+        manager = HistoryManager()
+        batch_id = manager.generate_batch_id()
+
+        manager.record_operation(
+            document_id="doc_abc",
+            operation_type="insert_text",
+            operation_params={"text": "Test"},
+            start_index=0,
+            batch_id=batch_id,
+            batch_index=0,
+        )
+
+        manager.record_operation(
+            document_id="doc_abc",
+            operation_type="find_replace",
+            operation_params={},
+            start_index=0,
+            undo_capability=UndoCapability.NONE,
+            batch_id=batch_id,
+            batch_index=1,
+        )
+
+        result = manager.generate_batch_undo_operations("doc_abc", batch_id)
+
+        assert result.success is False
+        assert "cannot be undone" in result.message.lower()
+
+    def test_mark_batch_undone(self):
+        """Test marking all operations in batch as undone."""
+        manager = HistoryManager()
+        batch_id = manager.generate_batch_id()
+
+        manager.record_operation(
+            document_id="doc_abc",
+            operation_type="insert_text",
+            operation_params={"text": "First"},
+            start_index=0,
+            batch_id=batch_id,
+            batch_index=0,
+        )
+
+        manager.record_operation(
+            document_id="doc_abc",
+            operation_type="insert_text",
+            operation_params={"text": "Second"},
+            start_index=5,
+            batch_id=batch_id,
+            batch_index=1,
+        )
+
+        count = manager.mark_batch_undone("doc_abc", batch_id)
+
+        assert count == 2
+
+        # Verify all operations are marked as undone
+        batch_ops = manager.get_batch_operations("doc_abc", batch_id)
+        assert all(op.undone for op in batch_ops)
+
+    def test_mark_batch_undone_already_undone(self):
+        """Test that already undone operations are not counted."""
+        manager = HistoryManager()
+        batch_id = manager.generate_batch_id()
+
+        snapshot = manager.record_operation(
+            document_id="doc_abc",
+            operation_type="insert_text",
+            operation_params={"text": "Test"},
+            start_index=0,
+            batch_id=batch_id,
+            batch_index=0,
+        )
+
+        # Mark as undone first
+        manager.mark_undone("doc_abc", snapshot.id)
+
+        # Try to mark batch as undone
+        count = manager.mark_batch_undone("doc_abc", batch_id)
+
+        assert count == 0  # Already undone, so count is 0
+
+    def test_batch_undo_with_delete_operations(self):
+        """Test batch undo with delete operations (requires deleted_text)."""
+        manager = HistoryManager()
+        batch_id = manager.generate_batch_id()
+
+        manager.record_operation(
+            document_id="doc_abc",
+            operation_type="delete_text",
+            operation_params={"start_index": 10, "end_index": 20},
+            start_index=10,
+            end_index=20,
+            position_shift=-10,
+            deleted_text="deleted content",
+            batch_id=batch_id,
+            batch_index=0,
+        )
+
+        result = manager.generate_batch_undo_operations("doc_abc", batch_id)
+
+        assert result.success is True
+        ops = result.reverse_operation["operations"]
+        assert len(ops) == 1
+        assert ops[0]["type"] == "insert_text"
+        assert ops[0]["text"] == "deleted content"
+        assert ops[0]["index"] == 10
+
+    def test_batch_undo_with_replace_operations(self):
+        """Test batch undo with replace operations."""
+        manager = HistoryManager()
+        batch_id = manager.generate_batch_id()
+
+        manager.record_operation(
+            document_id="doc_abc",
+            operation_type="replace_text",
+            operation_params={"start_index": 20, "end_index": 30, "text": "new text"},
+            start_index=20,
+            end_index=30,
+            position_shift=-2,
+            original_text="old content",
+            batch_id=batch_id,
+            batch_index=0,
+        )
+
+        result = manager.generate_batch_undo_operations("doc_abc", batch_id)
+
+        assert result.success is True
+        ops = result.reverse_operation["operations"]
+        assert len(ops) == 1
+        assert ops[0]["type"] == "replace_text"
+        assert ops[0]["text"] == "old content"
+
+    def test_batch_id_in_snapshot_to_dict(self):
+        """Test that batch_id is included in to_dict output."""
+        manager = HistoryManager()
+        batch_id = manager.generate_batch_id()
+
+        snapshot = manager.record_operation(
+            document_id="doc_abc",
+            operation_type="insert_text",
+            operation_params={"text": "Test"},
+            start_index=0,
+            batch_id=batch_id,
+            batch_index=0,
+        )
+
+        result = snapshot.to_dict()
+
+        assert result["batch_id"] == batch_id
+        assert result["batch_index"] == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

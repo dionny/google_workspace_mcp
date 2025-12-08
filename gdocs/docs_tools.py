@@ -4718,12 +4718,14 @@ async def batch_edit_doc(
         - results: Per-operation details with position shifts
         - total_position_shift: Cumulative position change
         - document_link: Link to edited document
+        - batch_id: Unique ID for the batch (use with undo_doc_operation for atomic undo)
 
         Example response:
         {
             "success": true,
             "operations_completed": 2,
             "total_operations": 2,
+            "batch_id": "batch_20241208120000_1",
             "results": [
                 {
                     "index": 0,
@@ -4764,6 +4766,17 @@ async def batch_edit_doc(
         # result["preview"] = true
         # result["would_modify"] = true
         # result["operations"] = [detailed preview of each operation]
+        ```
+
+        Atomic batch undo - undo entire batch at once:
+        ```python
+        # Execute batch edit
+        result = batch_edit_doc(doc_id, operations)
+        batch_id = result["batch_id"]  # e.g., "batch_20241208120000_1"
+
+        # Later, if you need to undo the entire batch:
+        undo_doc_operation(doc_id, operation_id=batch_id)
+        # This undoes all operations in the batch atomically
         ```
     """
     import json
@@ -8066,10 +8079,15 @@ async def undo_doc_operation(
     operation_id: str = None,
 ) -> str:
     """
-    Undo the last operation performed on a Google Doc.
+    Undo the last operation or a specific operation/batch on a Google Doc.
 
-    Reverses the most recent undoable operation by executing a compensating
-    operation (e.g., re-inserting deleted text, deleting inserted text).
+    Reverses operations by executing compensating operations (e.g., re-inserting
+    deleted text, deleting inserted text).
+
+    BATCH UNDO SUPPORT:
+    When operation_id is a batch_id (returned from batch_edit_doc), all operations
+    in that batch are undone atomically in reverse order (LIFO). This is useful
+    for reverting complex multi-step edits as a single unit.
 
     ⚠️  CRITICAL LIMITATIONS - Undo is FRAGILE:
     • SESSION-ONLY: History is LOST on server restart. No undo available after restart.
@@ -8085,6 +8103,7 @@ async def undo_doc_operation(
     • Immediately after an MCP operation made a mistake (same session)
     • When you're confident no external edits occurred since the operation
     • For simple text operations (insert, delete, replace)
+    • To undo an entire batch using the batch_id from batch_edit_doc
 
     When NOT to use:
     • After server restart (no history exists)
@@ -8099,14 +8118,18 @@ async def undo_doc_operation(
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document
-        operation_id: Specific operation ID to undo (optional, defaults to last undoable)
+        operation_id: Specific operation ID or batch_id to undo (optional, defaults to last undoable)
+            - If starts with "batch_", undoes entire batch atomically
+            - If starts with "op_", undoes single operation
+            - If None, undoes last undoable operation
 
     Returns:
         str: JSON containing:
             - success: Whether the undo was successful
             - message: Description of what was undone
-            - operation_id: ID of the undone operation
-            - reverse_operation: Details of the reverse operation executed
+            - operation_id: ID of the undone operation or batch
+            - operations_undone: Number of operations undone (for batch undo)
+            - reverse_operation: Details of the reverse operation(s) executed
             - error: Error message if undo failed
     """
     import json
@@ -8121,7 +8144,11 @@ async def undo_doc_operation(
 
     manager = get_history_manager()
 
-    # Generate the undo operation
+    # Check if this is a batch undo request
+    if operation_id and operation_id.startswith("batch_"):
+        return await _execute_batch_undo(service, document_id, operation_id, manager)
+
+    # Generate the undo operation for single operation
     undo_result = manager.generate_undo_operation(document_id)
 
     if not undo_result.success:
@@ -8200,6 +8227,7 @@ async def undo_doc_operation(
                 "success": True,
                 "message": "Successfully undone operation",
                 "operation_id": undo_result.operation_id,
+                "operations_undone": 1,
                 "reverse_operation": {
                     "type": op_type,
                     "description": reverse_op.get("description", ""),
@@ -8216,6 +8244,145 @@ async def undo_doc_operation(
                 "success": False,
                 "message": "Failed to execute undo operation",
                 "operation_id": undo_result.operation_id,
+                "error": str(e),
+            },
+            indent=2,
+        )
+
+
+async def _execute_batch_undo(
+    service: Any,
+    document_id: str,
+    batch_id: str,
+    manager,
+) -> str:
+    """
+    Execute undo for an entire batch of operations.
+
+    Args:
+        service: Google Docs service
+        document_id: ID of the document
+        batch_id: ID of the batch to undo
+        manager: HistoryManager instance
+
+    Returns:
+        JSON string with undo result
+    """
+    import json
+
+    logger.info(f"[_execute_batch_undo] Doc={document_id}, BatchID={batch_id}")
+
+    # Generate undo operations for the batch
+    undo_result = manager.generate_batch_undo_operations(document_id, batch_id)
+
+    if not undo_result.success:
+        return json.dumps(
+            {
+                "success": False,
+                "message": undo_result.message,
+                "error": undo_result.error,
+            },
+            indent=2,
+        )
+
+    reverse_batch = undo_result.reverse_operation
+    reverse_ops = reverse_batch.get("operations", [])
+
+    if not reverse_ops:
+        return json.dumps(
+            {
+                "success": False,
+                "message": "No operations to undo in batch",
+                "error": "Batch is empty or all operations already undone",
+            },
+            indent=2,
+        )
+
+    try:
+        # Build all reverse operations into a single batch request
+        requests = []
+
+        for reverse_op in reverse_ops:
+            op_type = reverse_op.get("type")
+
+            if op_type == "insert_text":
+                requests.append(
+                    create_insert_text_request(reverse_op["index"], reverse_op["text"])
+                )
+            elif op_type == "delete_text":
+                requests.append(
+                    create_delete_range_request(
+                        reverse_op["start_index"], reverse_op["end_index"]
+                    )
+                )
+            elif op_type == "replace_text":
+                # Replace = delete + insert
+                requests.append(
+                    create_delete_range_request(
+                        reverse_op["start_index"], reverse_op["end_index"]
+                    )
+                )
+                requests.append(
+                    create_insert_text_request(
+                        reverse_op["start_index"], reverse_op["text"]
+                    )
+                )
+            elif op_type == "format_text":
+                requests.append(
+                    create_format_text_request(
+                        reverse_op["start_index"],
+                        reverse_op["end_index"],
+                        reverse_op.get("bold"),
+                        reverse_op.get("italic"),
+                        reverse_op.get("underline"),
+                        reverse_op.get("font_size"),
+                        reverse_op.get("font_family"),
+                    )
+                )
+            else:
+                logger.warning(f"Skipping unknown reverse operation type: {op_type}")
+
+        if not requests:
+            return json.dumps(
+                {
+                    "success": False,
+                    "message": "No valid operations to undo in batch",
+                    "error": "All operations in batch have unsupported types for undo",
+                },
+                indent=2,
+            )
+
+        # Execute all reverse operations in a single batch
+        await asyncio.to_thread(
+            service.documents()
+            .batchUpdate(documentId=document_id, body={"requests": requests})
+            .execute
+        )
+
+        # Mark all operations in the batch as undone
+        operations_marked = manager.mark_batch_undone(document_id, batch_id)
+
+        result = {
+            "success": True,
+            "message": f"Successfully undone {len(reverse_ops)} operation(s) in batch",
+            "batch_id": batch_id,
+            "operations_undone": len(reverse_ops),
+            "document_link": f"https://docs.google.com/document/d/{document_id}/edit",
+        }
+
+        # Include any notes about partial undo
+        if reverse_batch.get("notes"):
+            result["notes"] = reverse_batch["notes"]
+
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        logger.error(f"Failed to execute batch undo: {str(e)}")
+        return json.dumps(
+            {
+                "success": False,
+                "message": "Failed to execute batch undo",
+                "batch_id": batch_id,
                 "error": str(e),
             },
             indent=2,

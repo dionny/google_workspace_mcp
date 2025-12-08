@@ -451,6 +451,7 @@ class BatchExecutionResult:
     document_link: Optional[str] = None
     preview: bool = False
     would_modify: bool = False
+    batch_id: Optional[str] = None  # For atomic batch undo support
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON response."""
@@ -467,6 +468,9 @@ class BatchExecutionResult:
         if self.preview:
             result["preview"] = True
             result["would_modify"] = self.would_modify
+        # Include batch_id for undo support (only when operations were actually executed)
+        if self.batch_id and not self.preview:
+            result["batch_id"] = self.batch_id
         return result
 
 
@@ -1099,8 +1103,9 @@ class BatchOperationManager:
             total_shift = sum(r.position_shift for r in operation_results)
 
             # Record operations for undo history (automatic tracking)
+            batch_id = None
             try:
-                self._record_batch_operations_to_history(
+                batch_id = self._record_batch_operations_to_history(
                     document_id, resolved_ops, operation_results, doc_data
                 )
             except Exception as e:
@@ -1120,6 +1125,7 @@ class BatchOperationManager:
                 total_position_shift=total_shift,
                 message=message,
                 document_link=f"https://docs.google.com/document/d/{document_id}/edit",
+                batch_id=batch_id,
             )
 
         except Exception as e:
@@ -1928,7 +1934,8 @@ class BatchOperationManager:
         resolved_ops: List[Dict[str, Any]],
         operation_results: List['BatchOperationResult'],
         doc_data: Dict[str, Any],
-    ) -> None:
+        batch_id: Optional[str] = None,
+    ) -> str:
         """
         Record batch operations to history for undo support.
 
@@ -1937,8 +1944,16 @@ class BatchOperationManager:
             resolved_ops: List of resolved operations
             operation_results: List of BatchOperationResult with operation details
             doc_data: Document data (may be stale after operations, but useful for text context)
+            batch_id: Optional batch ID for grouping operations. If None, one will be generated.
+
+        Returns:
+            The batch_id used for recording (useful for atomic batch undo)
         """
         history_manager = get_history_manager()
+
+        # Generate batch_id if not provided
+        if batch_id is None:
+            batch_id = history_manager.generate_batch_id()
 
         # Map operation types to history operation types
         op_type_map = {
@@ -1952,6 +1967,7 @@ class BatchOperationManager:
             'format': 'format_text',
         }
 
+        recorded_count = 0
         for i, (op, result) in enumerate(zip(resolved_ops, operation_results)):
             if op is None or not result.success:
                 continue
@@ -2002,7 +2018,6 @@ class BatchOperationManager:
                         "start_index": start_index,
                         "end_index": end_index,
                         "text": text,
-                        "batch_index": i,
                     },
                     start_index=start_index,
                     end_index=end_index,
@@ -2011,7 +2026,13 @@ class BatchOperationManager:
                     original_text=original_text,
                     undo_capability=undo_capability,
                     undo_notes=undo_notes,
+                    batch_id=batch_id,
+                    batch_index=i,
                 )
-                logger.debug(f"Recorded batch operation {i} for undo: {history_op_type} at {start_index}")
+                recorded_count += 1
+                logger.debug(f"Recorded batch operation {i} for undo: {history_op_type} at {start_index} (batch={batch_id})")
             except Exception as e:
                 logger.warning(f"Failed to record batch operation {i}: {e}")
+
+        logger.info(f"Recorded {recorded_count} operations in batch {batch_id}")
+        return batch_id
