@@ -9807,19 +9807,30 @@ async def append_to_list(
     preview: bool = False,
 ) -> str:
     """
-    Append items to an existing list in a Google Doc.
+    Append multiple items to the end of an existing list in a Google Doc.
 
-    This tool adds new items to the end of an existing list without creating a new list.
-    The appended items will automatically continue the list's formatting (bullet or numbered).
+    This is the preferred tool for **bulk appending** multiple items to a list.
+    Items are always added to the END of the list. For inserting at specific
+    positions within a list, use insert_list_item instead.
+
+    WHEN TO USE THIS TOOL:
+    - Adding multiple items to a list at once
+    - Appending items to the end of a list
+    - Adding nested/hierarchical items in bulk
+
+    WHEN TO USE insert_list_item INSTEAD:
+    - Inserting a single item at a specific position (start, middle, or after/before specific text)
+    - Need precise control over where the item goes within the list
 
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document containing the list
-        items: List of strings to append as new list items
+        items: List of strings to append as new list items. Supports escape sequences
+            like \\n for newlines within items.
         list_index: Which list to append to (0-based, default 0 for first list).
             Used when not specifying search.
         search: Text to search for within a list item. If provided, appends to the
-            list containing that text.
+            list containing that text. Case-insensitive.
         nesting_levels: Optional list of integers specifying nesting level for each item (0-8).
             Must match length of 'items'. Default is 0 (top level) for all items.
             Use higher numbers for sub-items (1 = first indent, 2 = second indent, etc.)
@@ -9839,7 +9850,7 @@ async def append_to_list(
         append_to_list(document_id="abc123", items=["Follow-up task"],
                       search="existing task")
 
-        # Append nested items
+        # Append nested items (hierarchical list)
         append_to_list(document_id="abc123",
                       items=["Main point", "Sub point 1", "Sub point 2", "Another main"],
                       nesting_levels=[0, 1, 1, 0])
@@ -9848,9 +9859,11 @@ async def append_to_list(
         append_to_list(document_id="abc123", items=["Test item"], preview=True)
 
     Notes:
-        - The appended items will inherit the list type (bullet or numbered) of the target list
+        - Items inherit the list type (bullet or numbered) of the target list
+        - Works with both ordered (numbered) and unordered (bullet) lists
         - Use find_doc_elements with element_type='list' to see all lists first
         - For creating new lists, use insert_doc_elements with element_type='list'
+        - For single-item insertion at specific positions, use insert_list_item
     """
     import json
 
@@ -10085,25 +10098,37 @@ async def insert_list_item(
     preview: bool = False,
 ) -> str:
     """
-    Insert a new item at a specific position within an existing list.
+    Insert a single item at a specific position within an existing list.
 
-    This tool provides precise control over list item insertion, allowing you
-    to add items at the beginning, end, or at any position within a list.
+    This is the preferred tool for **precise single-item insertion** with control
+    over exactly where the item goes. For bulk appending multiple items to the
+    end of a list, use append_to_list instead.
+
+    WHEN TO USE THIS TOOL:
+    - Inserting a single item at the start of a list
+    - Inserting an item before or after a specific existing item
+    - Inserting an item at a specific numeric position
+    - Need precise control over item placement
+
+    WHEN TO USE append_to_list INSTEAD:
+    - Adding multiple items at once
+    - Simply appending items to the end of a list (more efficient for bulk operations)
 
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document containing the list
-        text: The text content for the new list item
+        text: The text content for the new list item. Supports escape sequences
+            like \\n for newlines.
         position: Where to insert the item. Options:
             - "start" or "0": Insert as first item in list
             - "end" or "-1": Append to end of list (default)
             - A number (e.g., "2"): Insert at that position (0-indexed)
-            - "after:Some text": Insert after the item containing that text
-            - "before:Some text": Insert before the item containing that text
+            - "after:Some text": Insert after the item containing that text (case-insensitive)
+            - "before:Some text": Insert before the item containing that text (case-insensitive)
         list_index: Which list to target (0-based, default 0 for first list).
             Used when not specifying search.
         search: Text to search for within a list item. If provided, targets the
-            list containing that text.
+            list containing that text. Case-insensitive.
         indent_level: Nesting level for the new item (0-8).
             0 = top-level item, 1 = first indent, etc.
         preview: If True, show what would be inserted without making changes.
@@ -10129,7 +10154,7 @@ async def insert_list_item(
         insert_list_item(document_id="abc123", text="New item",
                         position="before:Task to do")
 
-        # Insert nested item
+        # Insert nested item (as sub-item)
         insert_list_item(document_id="abc123", text="Sub-item detail",
                         position="after:Main point", indent_level=1)
 
@@ -10137,9 +10162,10 @@ async def insert_list_item(
         insert_list_item(document_id="abc123", text="Test item", preview=True)
 
     Notes:
-        - The inserted item will inherit the list type (bullet or numbered)
+        - Inserted items inherit the list type (bullet or numbered) of the target list
+        - Works with both ordered (numbered) and unordered (bullet) lists
         - Use find_doc_elements with element_type='list' to see all lists first
-        - For appending multiple items, use append_to_list instead
+        - For appending multiple items at once, use append_to_list instead
         - For creating new lists, use insert_doc_elements with element_type='list'
     """
     import json
