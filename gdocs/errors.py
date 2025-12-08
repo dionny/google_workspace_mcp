@@ -682,6 +682,99 @@ class DocsErrorBuilder:
             )
         )
 
+    @staticmethod
+    def not_found(
+        entity_type: str,
+        search_criteria: str,
+        available_options: Optional[List[str]] = None,
+        suggestion: Optional[str] = None
+    ) -> StructuredError:
+        """
+        Generic error when an entity is not found.
+
+        Args:
+            entity_type: Type of entity (e.g., "heading", "named range", "bookmark")
+            search_criteria: What was searched for
+            available_options: List of available options, if applicable
+            suggestion: Custom suggestion (defaults to generic message)
+        """
+        display_options = None
+        if available_options:
+            display_options = available_options[:10]
+            if len(available_options) > 10:
+                display_options.append(f"... and {len(available_options) - 10} more")
+
+        default_suggestion = f"Check the {entity_type} name and try again."
+        if available_options:
+            default_suggestion += f" Available {entity_type}s are listed in the context."
+
+        return StructuredError(
+            code=ErrorCode.OPERATION_FAILED.value,
+            message=f"{entity_type.capitalize()} '{search_criteria}' not found",
+            reason=f"No {entity_type} matching '{search_criteria}' was found in the document.",
+            suggestion=suggestion or default_suggestion,
+            context=ErrorContext(
+                received={"search": search_criteria, "entity_type": entity_type},
+                available_headings=display_options  # Reusing available_headings for generic list
+            )
+        )
+
+    @staticmethod
+    def invalid_state(
+        reason: str,
+        current_state: str,
+        required_state: str,
+        suggestion: Optional[str] = None
+    ) -> StructuredError:
+        """
+        Error when an operation cannot proceed due to invalid state.
+
+        Args:
+            reason: Why the operation cannot proceed
+            current_state: Description of the current state
+            required_state: Description of the required state
+            suggestion: How to fix the issue
+        """
+        return StructuredError(
+            code=ErrorCode.OPERATION_FAILED.value,
+            message=reason,
+            reason=f"Current state: {current_state}. Required state: {required_state}.",
+            suggestion=suggestion or f"Ensure the document is in the required state: {required_state}",
+            context=ErrorContext(
+                received={"current_state": current_state},
+                expected={"required_state": required_state}
+            )
+        )
+
+    @staticmethod
+    def out_of_range(
+        param_name: str,
+        value: Any,
+        min_val: Any,
+        max_val: Any,
+        suggestion: Optional[str] = None
+    ) -> StructuredError:
+        """
+        Error when a parameter value is outside the allowed range.
+
+        Args:
+            param_name: Name of the parameter
+            value: The provided value
+            min_val: Minimum allowed value
+            max_val: Maximum allowed value
+            suggestion: Optional custom suggestion
+        """
+        return StructuredError(
+            code=ErrorCode.INVALID_PARAM_VALUE.value,
+            message=f"'{param_name}' value {value} is out of range [{min_val}, {max_val}]",
+            reason=f"The parameter '{param_name}' must be between {min_val} and {max_val} (inclusive).",
+            suggestion=suggestion or f"Provide a value between {min_val} and {max_val} for '{param_name}'.",
+            context=ErrorContext(
+                received={param_name: value},
+                expected={param_name: f"{min_val} to {max_val}"}
+            )
+        )
+
 
 def format_error(error: StructuredError) -> str:
     """

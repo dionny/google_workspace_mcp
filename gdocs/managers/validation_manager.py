@@ -791,3 +791,134 @@ class ValidationManager:
             actual_mime_type=actual_mime_type
         )
         return format_error(error)
+
+    def validate_index_in_bounds(
+        self,
+        index: int,
+        doc_length: int,
+        index_name: str = "index"
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Validate that an index is within document bounds.
+
+        Args:
+            index: The index to validate
+            doc_length: The document length (exclusive upper bound)
+            index_name: Name of the index parameter for error messages
+
+        Returns:
+            Tuple of (is_valid, structured_error_json or None)
+        """
+        # Check type first
+        if not isinstance(index, int):
+            error = StructuredError(
+                code=ErrorCode.INVALID_INDEX_TYPE.value,
+                message=f"{index_name} must be an integer, got {type(index).__name__}",
+                suggestion="Provide an integer value for the index"
+            )
+            return False, format_error(error)
+
+        # Check negative
+        if index < 0:
+            error = StructuredError(
+                code=ErrorCode.INVALID_INDEX_RANGE.value,
+                message=f"{index_name} cannot be negative, got {index}",
+                suggestion="Use get_doc_info to find valid insertion indices"
+            )
+            return False, format_error(error)
+
+        # Check upper bound
+        if index >= doc_length:
+            error = DocsErrorBuilder.index_out_of_bounds(
+                index_name, index, doc_length
+            )
+            return False, format_error(error)
+
+        return True, None
+
+    def validate_mutually_exclusive(
+        self,
+        params: Dict[str, Any],
+        exclusive_groups: List[List[str]]
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Validate that mutually exclusive parameters are not provided together.
+
+        Args:
+            params: Dictionary of parameter names to values
+            exclusive_groups: List of groups of mutually exclusive parameter names
+                             e.g., [['start_index', 'location'], ['search', 'heading']]
+
+        Returns:
+            Tuple of (is_valid, structured_error_json or None)
+
+        Example:
+            >>> vm = ValidationManager()
+            >>> params = {'start_index': 10, 'location': 'end'}
+            >>> is_valid, error = vm.validate_mutually_exclusive(
+            ...     params,
+            ...     [['start_index', 'location', 'search', 'heading']]
+            ... )
+        """
+        for group in exclusive_groups:
+            # Find which params in this group have non-None values
+            provided = [p for p in group if params.get(p) is not None]
+
+            if len(provided) > 1:
+                error = DocsErrorBuilder.conflicting_params(
+                    params=provided,
+                    message=f"Cannot use {', '.join(repr(p) for p in provided)} together - these parameters are mutually exclusive"
+                )
+                return False, format_error(error)
+
+        return True, None
+
+    def create_not_found_error(
+        self,
+        entity_type: str,
+        search_criteria: str,
+        available_options: Optional[List[str]] = None,
+        suggestion: Optional[str] = None
+    ) -> str:
+        """Create a structured error for entity not found."""
+        error = DocsErrorBuilder.not_found(
+            entity_type=entity_type,
+            search_criteria=search_criteria,
+            available_options=available_options,
+            suggestion=suggestion
+        )
+        return format_error(error)
+
+    def create_invalid_state_error(
+        self,
+        reason: str,
+        current_state: str,
+        required_state: str,
+        suggestion: Optional[str] = None
+    ) -> str:
+        """Create a structured error for invalid state."""
+        error = DocsErrorBuilder.invalid_state(
+            reason=reason,
+            current_state=current_state,
+            required_state=required_state,
+            suggestion=suggestion
+        )
+        return format_error(error)
+
+    def create_out_of_range_error(
+        self,
+        param_name: str,
+        value: Any,
+        min_val: Any,
+        max_val: Any,
+        suggestion: Optional[str] = None
+    ) -> str:
+        """Create a structured error for value out of range."""
+        error = DocsErrorBuilder.out_of_range(
+            param_name=param_name,
+            value=value,
+            min_val=min_val,
+            max_val=max_val,
+            suggestion=suggestion
+        )
+        return format_error(error)
