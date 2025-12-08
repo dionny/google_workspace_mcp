@@ -374,6 +374,244 @@ async def create_sheet(
     return text_output
 
 
+@server.tool()
+@handle_http_errors("insert_rows", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def insert_rows(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    start_index: int,
+    count: int = 1,
+    inherit_from_before: bool = True,
+) -> str:
+    """
+    Inserts blank rows at a specific position in a sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_id (int): The ID of the sheet (not the sheet name). Required. Use get_spreadsheet_info to find sheet IDs.
+        start_index (int): The row index to insert at (0-based). Required. Rows will be inserted starting at this index.
+        count (int): Number of rows to insert. Defaults to 1.
+        inherit_from_before (bool): If True, new rows inherit formatting from the row above. Defaults to True.
+
+    Returns:
+        str: Confirmation message of the successful row insertion.
+    """
+    logger.info(f"[insert_rows] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet ID: {sheet_id}, Start: {start_index}, Count: {count}")
+
+    request_body = {
+        "requests": [
+            {
+                "insertDimension": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": start_index,
+                        "endIndex": start_index + count,
+                    },
+                    "inheritFromBefore": inherit_from_before,
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully inserted {count} row(s) at index {start_index} in sheet ID {sheet_id} "
+        f"of spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully inserted {count} row(s) for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("delete_rows", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def delete_rows(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    start_index: int,
+    end_index: int,
+) -> str:
+    """
+    Deletes rows from a sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_id (int): The ID of the sheet (not the sheet name). Required. Use get_spreadsheet_info to find sheet IDs.
+        start_index (int): The starting row index to delete (0-based, inclusive). Required.
+        end_index (int): The ending row index (0-based, exclusive). Required. Rows from start_index to end_index-1 will be deleted.
+
+    Returns:
+        str: Confirmation message of the successful row deletion.
+    """
+    logger.info(f"[delete_rows] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet ID: {sheet_id}, Start: {start_index}, End: {end_index}")
+
+    if start_index >= end_index:
+        raise Exception(f"start_index ({start_index}) must be less than end_index ({end_index})")
+
+    request_body = {
+        "requests": [
+            {
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": start_index,
+                        "endIndex": end_index,
+                    }
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    rows_deleted = end_index - start_index
+    text_output = (
+        f"Successfully deleted {rows_deleted} row(s) (index {start_index} to {end_index - 1}) "
+        f"from sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully deleted {rows_deleted} row(s) for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("insert_columns", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def insert_columns(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    start_index: int,
+    count: int = 1,
+    inherit_from_before: bool = True,
+) -> str:
+    """
+    Inserts blank columns at a specific position in a sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_id (int): The ID of the sheet (not the sheet name). Required. Use get_spreadsheet_info to find sheet IDs.
+        start_index (int): The column index to insert at (0-based, A=0, B=1, etc.). Required. Columns will be inserted starting at this index.
+        count (int): Number of columns to insert. Defaults to 1.
+        inherit_from_before (bool): If True, new columns inherit formatting from the column to the left. Defaults to True.
+
+    Returns:
+        str: Confirmation message of the successful column insertion.
+    """
+    logger.info(f"[insert_columns] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet ID: {sheet_id}, Start: {start_index}, Count: {count}")
+
+    request_body = {
+        "requests": [
+            {
+                "insertDimension": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "COLUMNS",
+                        "startIndex": start_index,
+                        "endIndex": start_index + count,
+                    },
+                    "inheritFromBefore": inherit_from_before,
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully inserted {count} column(s) at index {start_index} in sheet ID {sheet_id} "
+        f"of spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully inserted {count} column(s) for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("delete_columns", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def delete_columns(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    start_index: int,
+    end_index: int,
+) -> str:
+    """
+    Deletes columns from a sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_id (int): The ID of the sheet (not the sheet name). Required. Use get_spreadsheet_info to find sheet IDs.
+        start_index (int): The starting column index to delete (0-based, A=0, B=1, etc., inclusive). Required.
+        end_index (int): The ending column index (0-based, exclusive). Required. Columns from start_index to end_index-1 will be deleted.
+
+    Returns:
+        str: Confirmation message of the successful column deletion.
+    """
+    logger.info(f"[delete_columns] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet ID: {sheet_id}, Start: {start_index}, End: {end_index}")
+
+    if start_index >= end_index:
+        raise Exception(f"start_index ({start_index}) must be less than end_index ({end_index})")
+
+    request_body = {
+        "requests": [
+            {
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "COLUMNS",
+                        "startIndex": start_index,
+                        "endIndex": end_index,
+                    }
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    columns_deleted = end_index - start_index
+    text_output = (
+        f"Successfully deleted {columns_deleted} column(s) (index {start_index} to {end_index - 1}) "
+        f"from sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully deleted {columns_deleted} column(s) for {user_google_email}.")
+    return text_output
+
+
 # Create comment management tools for sheets
 _comment_tools = create_comment_tools("spreadsheet", "spreadsheet_id")
 
