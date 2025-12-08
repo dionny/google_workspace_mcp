@@ -48,4 +48,6 @@ skip_covered = false
 dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.8.0",
 ]
