@@ -1487,6 +1487,153 @@ async def sort_range(
     return text_output
 
 
+@server.tool()
+@handle_http_errors("merge_cells", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def merge_cells(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    range_name: str,
+    merge_type: str = "MERGE_ALL",
+) -> str:
+    """
+    Merges cells in a range of a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_id (int): The ID of the sheet (not the sheet name). Required.
+            Use get_spreadsheet_info to find sheet IDs.
+        range_name (str): The range to merge in A1 notation (e.g., 'A1:C1', 'B2:D5'). Required.
+            Do not include the sheet name prefix; use sheet_id instead.
+        merge_type (str): Type of merge to perform. Defaults to "MERGE_ALL".
+            - "MERGE_ALL": Merge all cells in the range into a single cell.
+            - "MERGE_COLUMNS": Merge cells in each column of the range separately.
+            - "MERGE_ROWS": Merge cells in each row of the range separately.
+
+    Returns:
+        str: Confirmation message of the successful merge operation.
+
+    Example:
+        # Merge cells A1:C1 into a single cell (for a header spanning multiple columns)
+        merge_cells(spreadsheet_id="abc123", sheet_id=0, range_name="A1:C1")
+
+        # Merge cells in each column separately (useful for grouped headers)
+        merge_cells(spreadsheet_id="abc123", sheet_id=0, range_name="A1:D2", merge_type="MERGE_COLUMNS")
+
+        # Merge cells in each row separately
+        merge_cells(spreadsheet_id="abc123", sheet_id=0, range_name="A1:A5", merge_type="MERGE_ROWS")
+
+    Note:
+        - When cells are merged, only the top-left cell's value is preserved. Other values are lost.
+        - Attempting to merge already-merged cells may cause an error. Use unmerge_cells first.
+    """
+    logger.info(
+        f"[merge_cells] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"Sheet ID: {sheet_id}, Range: {range_name}, Type: {merge_type}"
+    )
+
+    # Validate merge_type
+    valid_merge_types = ["MERGE_ALL", "MERGE_COLUMNS", "MERGE_ROWS"]
+    if merge_type.upper() not in valid_merge_types:
+        raise ValueError(
+            f"Invalid merge_type: {merge_type}. Must be one of: {valid_merge_types}"
+        )
+
+    # Parse the range to a GridRange
+    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
+
+    # Build the mergeCells request
+    request_body = {
+        "requests": [
+            {"mergeCells": {"range": grid_range, "mergeType": merge_type.upper()}}
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully merged cells in range '{range_name}' (type: {merge_type.upper()}) "
+        f"in sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(
+        f"Successfully merged cells in range '{range_name}' for {user_google_email}."
+    )
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("unmerge_cells", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def unmerge_cells(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    range_name: str,
+) -> str:
+    """
+    Unmerges (splits) previously merged cells in a range of a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_id (int): The ID of the sheet (not the sheet name). Required.
+            Use get_spreadsheet_info to find sheet IDs.
+        range_name (str): The range to unmerge in A1 notation (e.g., 'A1:C1', 'B2:D5'). Required.
+            Do not include the sheet name prefix; use sheet_id instead.
+            The range should cover the merged cells you want to split.
+
+    Returns:
+        str: Confirmation message of the successful unmerge operation.
+
+    Example:
+        # Unmerge a previously merged cell range
+        unmerge_cells(spreadsheet_id="abc123", sheet_id=0, range_name="A1:C1")
+
+        # Unmerge all merged cells in a region
+        unmerge_cells(spreadsheet_id="abc123", sheet_id=0, range_name="A1:Z100")
+
+    Note:
+        - After unmerging, only the top-left cell retains the original value.
+        - The other cells in the previously merged range become empty.
+        - It's safe to call unmerge on a range that doesn't contain merged cells.
+    """
+    logger.info(
+        f"[unmerge_cells] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"Sheet ID: {sheet_id}, Range: {range_name}"
+    )
+
+    # Parse the range to a GridRange
+    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
+
+    # Build the unmergeCells request
+    request_body = {"requests": [{"unmergeCells": {"range": grid_range}}]}
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully unmerged cells in range '{range_name}' "
+        f"in sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(
+        f"Successfully unmerged cells in range '{range_name}' for {user_google_email}."
+    )
+    return text_output
+
+
 # Create comment management tools for sheets
 _comment_tools = create_comment_tools("spreadsheet", "spreadsheet_id")
 
