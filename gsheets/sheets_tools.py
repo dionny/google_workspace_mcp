@@ -1246,6 +1246,146 @@ async def format_cells(
     return text_output
 
 
+@server.tool()
+@handle_http_errors("sort_range", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def sort_range(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    range_name: str,
+    sort_specs: Union[str, List[dict]],
+) -> str:
+    """
+    Sorts data in a range of cells in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_id (int): The ID of the sheet (not the sheet name). Required.
+            Use get_spreadsheet_info to find sheet IDs.
+        range_name (str): The range to sort in A1 notation (e.g., 'A1:D100', 'A2:C50'). Required.
+            Do not include the sheet name prefix; use sheet_id instead.
+        sort_specs (Union[str, List[dict]]): JSON array or Python list of sort specifications. Required.
+            Each specification must contain:
+            - column_index (int): The column index to sort by, relative to the range start (0-based).
+              For example, if range is 'B1:D10', column_index 0 refers to column B.
+            - order (str): Sort order - 'ASCENDING' or 'DESCENDING'.
+            Multiple sort specs create multi-level sorting (sort by first, then by second, etc.).
+
+    Returns:
+        str: Confirmation message of the successful sort operation.
+
+    Example:
+        # Sort by first column ascending
+        sort_range(spreadsheet_id="abc123", sheet_id=0, range_name="A1:D100",
+                   sort_specs='[{"column_index": 0, "order": "ASCENDING"}]')
+
+        # Multi-column sort: by column A ascending, then by column C descending
+        sort_range(spreadsheet_id="abc123", sheet_id=0, range_name="A1:D100",
+                   sort_specs='[{"column_index": 0, "order": "ASCENDING"}, {"column_index": 2, "order": "DESCENDING"}]')
+    """
+    logger.info(
+        f"[sort_range] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"Sheet ID: {sheet_id}, Range: {range_name}"
+    )
+
+    # Parse sort_specs if it's a JSON string
+    if isinstance(sort_specs, str):
+        try:
+            parsed_sort_specs = json.loads(sort_specs)
+            if not isinstance(parsed_sort_specs, list):
+                raise ValueError(
+                    f"sort_specs must be a list, got {type(parsed_sort_specs).__name__}"
+                )
+            sort_specs = parsed_sort_specs
+            logger.info(
+                f"[sort_range] Parsed JSON string to Python list with {len(sort_specs)} sort specs"
+            )
+        except json.JSONDecodeError as e:
+            raise Exception(f"Invalid JSON format for sort_specs: {e}")
+        except ValueError as e:
+            raise Exception(f"Invalid sort_specs structure: {e}")
+
+    if not sort_specs:
+        raise Exception("sort_specs must not be empty.")
+
+    # Validate and transform sort specs
+    valid_orders = ["ASCENDING", "DESCENDING"]
+    api_sort_specs = []
+
+    for i, spec in enumerate(sort_specs):
+        if not isinstance(spec, dict):
+            raise Exception(
+                f"sort_specs[{i}] must be a dict, got {type(spec).__name__}"
+            )
+
+        if "column_index" not in spec:
+            raise Exception(f"sort_specs[{i}] missing required 'column_index' field")
+        if "order" not in spec:
+            raise Exception(f"sort_specs[{i}] missing required 'order' field")
+
+        column_index = spec["column_index"]
+        order = spec["order"]
+
+        if not isinstance(column_index, int):
+            raise Exception(
+                f"sort_specs[{i}]['column_index'] must be an int, got {type(column_index).__name__}"
+            )
+        if column_index < 0:
+            raise Exception(
+                f"sort_specs[{i}]['column_index'] must be >= 0, got {column_index}"
+            )
+
+        if not isinstance(order, str):
+            raise Exception(
+                f"sort_specs[{i}]['order'] must be a string, got {type(order).__name__}"
+            )
+        if order.upper() not in valid_orders:
+            raise Exception(
+                f"sort_specs[{i}]['order'] must be one of {valid_orders}, got '{order}'"
+            )
+
+        api_sort_specs.append(
+            {"dimensionIndex": column_index, "sortOrder": order.upper()}
+        )
+
+    # Parse the range to a GridRange
+    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
+
+    # Build the sortRange request
+    request_body = {
+        "requests": [{"sortRange": {"range": grid_range, "sortSpecs": api_sort_specs}}]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Build description of sort operation
+    sort_descriptions = []
+    for spec in sort_specs:
+        sort_descriptions.append(
+            f"column {spec['column_index']} {spec['order'].upper()}"
+        )
+    sort_summary = ", ".join(sort_descriptions)
+
+    text_output = (
+        f"Successfully sorted range '{range_name}' in sheet ID {sheet_id} "
+        f"of spreadsheet {spreadsheet_id} for {user_google_email}. "
+        f"Sort order: {sort_summary}"
+    )
+
+    logger.info(
+        f"Successfully sorted range '{range_name}' for {user_google_email}. "
+        f"Sort order: {sort_summary}"
+    )
+    return text_output
+
+
 # Create comment management tools for sheets
 _comment_tools = create_comment_tools("spreadsheet", "spreadsheet_id")
 
