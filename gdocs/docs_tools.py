@@ -1830,6 +1830,22 @@ async def modify_doc_text(
                 service.documents().get(documentId=document_id).execute
             )
 
+    # Clean text for list conversion if needed
+    # When converting to a list, remove consecutive blank lines (multiple \n\n)
+    # because Google Docs treats each paragraph as a separate list item,
+    # and blank paragraphs become empty numbered items (ugly!)
+    original_text = text
+    if text is not None and convert_to_list is not None:
+        import re
+        # Replace multiple consecutive newlines with single newline
+        # This prevents empty list items while preserving single line breaks
+        text = re.sub(r'\n\s*\n+', '\n', text)
+        if text != original_text:
+            logger.info(
+                f"[modify_doc_text] Cleaned text for list conversion: "
+                f"removed {original_text.count(chr(10)) - text.count(chr(10))} blank lines"
+            )
+
     # Handle text insertion/replacement/deletion
     if text is not None:
         if end_index is not None and end_index > start_index:
@@ -4663,6 +4679,11 @@ async def batch_edit_doc(
           Example: {"type": "insert_table", "location": "end", "rows": 3, "columns": 4}
         - insert_page_break: Insert page break
         - find_replace: Find and replace all occurrences
+        - convert_to_list: Convert text range to bullet or numbered list
+          Requires: start_index, end_index (or search-based positioning)
+          Optional: list_type (ORDERED/UNORDERED/bullet/numbered, default: UNORDERED)
+          Example: {"type": "convert_to_list", "search": "Goals", "position": "after",
+                    "extend": "paragraph", "list_type": "ORDERED"}
 
     Location-based positioning options:
         - location: "start" (insert at document beginning) or "end" (append at document end)
@@ -4709,6 +4730,14 @@ async def batch_edit_doc(
              "extend": "paragraph", "text": "\\n\\nNew paragraph after Introduction."},
             {"type": "delete", "search": "deprecated", "position": "replace",
              "extend": "sentence"}
+        ]
+
+    Example with convert_to_list (convert text ranges to lists):
+        [
+            {"type": "insert", "search": "Goals", "position": "after",
+             "text": "\\nReduce latency\\nIncrease conversions\\nImprove relevance\\n"},
+            {"type": "convert_to_list", "search": "Reduce latency",
+             "extend": "paragraph", "list_type": "ORDERED"}
         ]
 
     Returns:

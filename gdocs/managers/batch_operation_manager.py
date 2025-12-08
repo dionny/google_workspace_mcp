@@ -24,6 +24,7 @@ from gdocs.docs_helpers import (
     create_insert_table_request,
     create_insert_page_break_request,
     create_paragraph_style_request,
+    create_bullet_list_request,
     validate_operation,
     resolve_range,
     RangeResult,
@@ -58,6 +59,20 @@ OPERATION_ALIASES = {
     'insert_table': 'insert_table',
     'insert_page_break': 'insert_page_break',
     'find_replace': 'find_replace',
+    'convert_to_list': 'convert_to_list',
+}
+
+# Valid list types for convert_to_list operation
+# Accepts common aliases for usability
+LIST_TYPE_ALIASES = {
+    "bullet": "UNORDERED",
+    "bullets": "UNORDERED",
+    "unordered": "UNORDERED",
+    "UNORDERED": "UNORDERED",
+    "numbered": "ORDERED",
+    "numbers": "ORDERED",
+    "ordered": "ORDERED",
+    "ORDERED": "ORDERED",
 }
 
 # Valid operation types (all keys in OPERATION_ALIASES)
@@ -704,6 +719,11 @@ class BatchOperationManager:
             # Return 0 as this needs document context to calculate
             return 0
 
+        elif op_type == 'convert_to_list':
+            # Converting text to list doesn't change positions
+            # (it only adds bullet/number formatting to paragraphs)
+            return 0
+
         return 0
 
     def _build_operation_request(
@@ -825,10 +845,30 @@ class BatchOperationManager:
             )
             description = f"find/replace '{op['find_text']}' → '{op['replace_text']}'"
 
+        elif op_type == 'convert_to_list':
+            # Validate required fields
+            if 'start_index' not in op or 'end_index' not in op:
+                raise KeyError(
+                    f"convert_to_list operation requires 'start_index' and 'end_index'. "
+                    f"Example: {{\"type\": \"convert_to_list\", \"start_index\": 100, \"end_index\": 200, \"list_type\": \"ORDERED\"}}"
+                )
+            # Normalize and validate list_type
+            list_type = op.get('list_type', 'UNORDERED')
+            normalized_list_type = LIST_TYPE_ALIASES.get(list_type if isinstance(list_type, str) else str(list_type))
+            if normalized_list_type is None:
+                raise ValueError(
+                    f"Invalid list_type '{list_type}'. Valid values: ORDERED, UNORDERED, bullet, numbered"
+                )
+            request = create_bullet_list_request(
+                op['start_index'], op['end_index'], normalized_list_type, tab_id=self.tab_id
+            )
+            list_type_display = "bullet" if normalized_list_type == "UNORDERED" else "numbered"
+            description = f"convert to {list_type_display} list {op['start_index']}-{op['end_index']}"
+
         else:
             supported_types = [
                 'insert_text', 'delete_text', 'replace_text', 'format_text',
-                'insert_table', 'insert_page_break', 'find_replace'
+                'insert_table', 'insert_page_break', 'find_replace', 'convert_to_list'
             ]
             raise ValueError(f"Unsupported operation type '{op_type}'. Supported: {', '.join(supported_types)}")
 
@@ -920,6 +960,12 @@ class BatchOperationManager:
                     'required': ['find_text', 'replace_text'],
                     'optional': ['match_case'],
                     'description': 'Find and replace text throughout document'
+                },
+                'convert_to_list': {
+                    'required': ['start_index', 'end_index'],
+                    'optional': ['list_type'],
+                    'description': 'Convert text range to bullet or numbered list',
+                    'list_type_values': ['ORDERED', 'UNORDERED', 'bullet', 'numbered']
                 }
             },
             'operation_aliases': {
@@ -931,7 +977,8 @@ class BatchOperationManager:
             'example_operations': [
                 {"type": "insert", "index": 1, "text": "Hello World"},
                 {"type": "format", "start_index": 1, "end_index": 12, "bold": True},
-                {"type": "insert_table", "index": 20, "rows": 2, "columns": 3}
+                {"type": "insert_table", "index": 20, "rows": 2, "columns": 3},
+                {"type": "convert_to_list", "start_index": 100, "end_index": 200, "list_type": "ORDERED"}
             ]
         }
 
@@ -1604,6 +1651,10 @@ class BatchOperationManager:
         elif op_type == 'insert_page_break':
             result['type'] = 'insert_page_break'
             result['index'] = start_idx
+        elif op_type == 'convert_to_list':
+            result['type'] = 'convert_to_list'
+            result['start_index'] = start_idx
+            result['end_index'] = end_idx
 
         return result
 
@@ -1643,6 +1694,10 @@ class BatchOperationManager:
         elif op_type == 'insert_page_break':
             result['type'] = 'insert_page_break'
             result['index'] = start_idx
+        elif op_type == 'convert_to_list':
+            result['type'] = 'convert_to_list'
+            result['start_index'] = start_idx
+            result['end_index'] = end_idx
 
         return result
 
@@ -1754,6 +1809,12 @@ class BatchOperationManager:
             start_idx = op.get('index', 0)
             return 1, {"start": start_idx, "end": start_idx + 1}
 
+        elif op_type == 'convert_to_list':
+            # Converting to list doesn't change positions (only adds formatting)
+            start_idx = op.get('start_index', 0)
+            end_idx = op.get('end_index', start_idx)
+            return 0, {"start": start_idx, "end": end_idx}
+
         return 0, {"start": 0, "end": 0}
 
     def _describe_operation(self, op: Dict[str, Any]) -> str:
@@ -1797,6 +1858,13 @@ class BatchOperationManager:
 
         elif op_type == 'find_replace':
             return f"find '{op.get('find_text', '?')}' → '{op.get('replace_text', '?')}'"
+
+        elif op_type == 'convert_to_list':
+            list_type = op.get('list_type', 'UNORDERED')
+            # Normalize to display name
+            normalized = LIST_TYPE_ALIASES.get(list_type if isinstance(list_type, str) else str(list_type), 'UNORDERED')
+            list_type_display = "bullet" if normalized == "UNORDERED" else "numbered"
+            return f"convert to {list_type_display} list {op.get('start_index', '?')}-{op.get('end_index', '?')}"
 
         return f"{op_type} operation"
 
@@ -1924,6 +1992,17 @@ class BatchOperationManager:
                 tab_ids = [self.tab_id] if self.tab_id else None
                 requests.append(create_find_replace_request(
                     op['find_text'], op['replace_text'], op.get('match_case', False), tab_ids=tab_ids
+                ))
+
+            elif op_type == 'convert_to_list':
+                # Normalize and validate list_type
+                list_type = op.get('list_type', 'UNORDERED')
+                normalized_list_type = LIST_TYPE_ALIASES.get(
+                    list_type if isinstance(list_type, str) else str(list_type),
+                    'UNORDERED'
+                )
+                requests.append(create_bullet_list_request(
+                    op['start_index'], op['end_index'], normalized_list_type, tab_id=self.tab_id
                 ))
 
         return requests
