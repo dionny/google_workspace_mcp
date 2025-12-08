@@ -909,6 +909,343 @@ async def copy_sheet(
     return text_output
 
 
+def _parse_hex_color(hex_color: str) -> dict:
+    """
+    Parse a hex color string to Google Sheets API color format.
+
+    Args:
+        hex_color: Hex color string (e.g., '#FF0000' or 'FF0000')
+
+    Returns:
+        dict with red, green, blue values as floats (0.0 to 1.0)
+    """
+    # Remove # prefix if present
+    hex_color = hex_color.lstrip("#")
+
+    if len(hex_color) != 6:
+        raise ValueError(
+            f"Invalid hex color format: {hex_color}. Expected 6 hex digits."
+        )
+
+    try:
+        r = int(hex_color[0:2], 16) / 255.0
+        g = int(hex_color[2:4], 16) / 255.0
+        b = int(hex_color[4:6], 16) / 255.0
+    except ValueError:
+        raise ValueError(
+            f"Invalid hex color format: {hex_color}. Must contain valid hex digits."
+        )
+
+    return {"red": r, "green": g, "blue": b}
+
+
+def _parse_range_to_grid_range(range_name: str, sheet_id: int) -> dict:
+    """
+    Parse an A1 notation range to a GridRange object.
+
+    Args:
+        range_name: Range in A1 notation (e.g., 'A1:C10', 'Sheet1!A1:C10')
+        sheet_id: The sheet ID to use in the GridRange
+
+    Returns:
+        dict representing a GridRange for the Sheets API
+    """
+    import re
+
+    # Remove sheet name prefix if present (e.g., "Sheet1!A1:C10" -> "A1:C10")
+    if "!" in range_name:
+        range_name = range_name.split("!")[-1]
+
+    # Parse the range (e.g., "A1:C10" or "A1" or "A:C")
+    # Pattern matches: column letters + optional row number
+    cell_pattern = r"([A-Za-z]+)(\d*)"
+
+    if ":" in range_name:
+        start, end = range_name.split(":")
+        start_match = re.match(cell_pattern, start)
+        end_match = re.match(cell_pattern, end)
+
+        if not start_match or not end_match:
+            raise ValueError(f"Invalid range format: {range_name}")
+
+        start_col = start_match.group(1).upper()
+        start_row = start_match.group(2)
+        end_col = end_match.group(1).upper()
+        end_row = end_match.group(2)
+    else:
+        # Single cell
+        match = re.match(cell_pattern, range_name)
+        if not match:
+            raise ValueError(f"Invalid range format: {range_name}")
+        start_col = end_col = match.group(1).upper()
+        start_row = end_row = match.group(2)
+
+    def col_to_index(col: str) -> int:
+        """Convert column letter(s) to 0-based index (A=0, B=1, ..., Z=25, AA=26)."""
+        result = 0
+        for char in col:
+            result = result * 26 + (ord(char) - ord("A") + 1)
+        return result - 1
+
+    grid_range = {"sheetId": sheet_id}
+
+    # Column indices (always present)
+    grid_range["startColumnIndex"] = col_to_index(start_col)
+    grid_range["endColumnIndex"] = col_to_index(end_col) + 1
+
+    # Row indices (only if row numbers are specified)
+    if start_row:
+        grid_range["startRowIndex"] = int(start_row) - 1  # Convert to 0-based
+    if end_row:
+        grid_range["endRowIndex"] = int(end_row)  # End is exclusive, so no -1
+
+    return grid_range
+
+
+@server.tool()
+@handle_http_errors("format_cells", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def format_cells(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    range_name: str,
+    bold: Optional[bool] = None,
+    italic: Optional[bool] = None,
+    underline: Optional[bool] = None,
+    strikethrough: Optional[bool] = None,
+    font_size: Optional[int] = None,
+    font_family: Optional[str] = None,
+    text_color: Optional[str] = None,
+    background_color: Optional[str] = None,
+    horizontal_alignment: Optional[str] = None,
+    vertical_alignment: Optional[str] = None,
+    number_format_type: Optional[str] = None,
+    number_format_pattern: Optional[str] = None,
+    wrap_strategy: Optional[str] = None,
+) -> str:
+    """
+    Applies formatting to a range of cells in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_id (int): The ID of the sheet (not the sheet name). Required.
+            Use get_spreadsheet_info to find sheet IDs.
+        range_name (str): The range to format in A1 notation (e.g., 'A1:C10', 'A1'). Required.
+            Do not include the sheet name prefix; use sheet_id instead.
+        bold (Optional[bool]): Make text bold.
+        italic (Optional[bool]): Make text italic.
+        underline (Optional[bool]): Underline text.
+        strikethrough (Optional[bool]): Strikethrough text.
+        font_size (Optional[int]): Font size in points (e.g., 10, 12, 14).
+        font_family (Optional[str]): Font family name (e.g., 'Arial', 'Times New Roman').
+        text_color (Optional[str]): Text color as hex string (e.g., '#FF0000' for red).
+        background_color (Optional[str]): Cell background color as hex string (e.g., '#FFFF00' for yellow).
+        horizontal_alignment (Optional[str]): Horizontal alignment: 'LEFT', 'CENTER', or 'RIGHT'.
+        vertical_alignment (Optional[str]): Vertical alignment: 'TOP', 'MIDDLE', or 'BOTTOM'.
+        number_format_type (Optional[str]): Number format type: 'TEXT', 'NUMBER', 'PERCENT',
+            'CURRENCY', 'DATE', 'TIME', 'DATE_TIME', or 'SCIENTIFIC'.
+        number_format_pattern (Optional[str]): Custom number format pattern (e.g., '#,##0.00',
+            'yyyy-mm-dd', '$#,##0.00'). Used with number_format_type.
+        wrap_strategy (Optional[str]): Text wrap strategy: 'OVERFLOW_CELL', 'LEGACY_WRAP',
+            'CLIP', or 'WRAP'.
+
+    Returns:
+        str: Confirmation message of the successful formatting operation.
+
+    Example:
+        # Bold header row with gray background
+        format_cells(spreadsheet_id="abc123", sheet_id=0, range_name="A1:Z1",
+                     bold=True, background_color="#E0E0E0")
+
+        # Currency formatting
+        format_cells(spreadsheet_id="abc123", sheet_id=0, range_name="B2:B100",
+                     number_format_type="CURRENCY", number_format_pattern="$#,##0.00")
+
+        # Date formatting with center alignment
+        format_cells(spreadsheet_id="abc123", sheet_id=0, range_name="A2:A100",
+                     number_format_type="DATE", number_format_pattern="yyyy-mm-dd",
+                     horizontal_alignment="CENTER")
+    """
+    logger.info(
+        f"[format_cells] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"Sheet ID: {sheet_id}, Range: {range_name}"
+    )
+
+    # Build the cell format object
+    cell_format = {}
+    fields = []
+
+    # Text format options
+    text_format = {}
+    if bold is not None:
+        text_format["bold"] = bold
+    if italic is not None:
+        text_format["italic"] = italic
+    if underline is not None:
+        text_format["underline"] = underline
+    if strikethrough is not None:
+        text_format["strikethrough"] = strikethrough
+    if font_size is not None:
+        text_format["fontSize"] = font_size
+    if font_family is not None:
+        text_format["fontFamily"] = font_family
+    if text_color is not None:
+        text_format["foregroundColor"] = _parse_hex_color(text_color)
+
+    if text_format:
+        cell_format["textFormat"] = text_format
+        # Build specific fields for text format
+        text_fields = []
+        if bold is not None:
+            text_fields.append("bold")
+        if italic is not None:
+            text_fields.append("italic")
+        if underline is not None:
+            text_fields.append("underline")
+        if strikethrough is not None:
+            text_fields.append("strikethrough")
+        if font_size is not None:
+            text_fields.append("fontSize")
+        if font_family is not None:
+            text_fields.append("fontFamily")
+        if text_color is not None:
+            text_fields.append("foregroundColor")
+        fields.extend([f"userEnteredFormat.textFormat.{f}" for f in text_fields])
+
+    # Background color
+    if background_color is not None:
+        cell_format["backgroundColor"] = _parse_hex_color(background_color)
+        fields.append("userEnteredFormat.backgroundColor")
+
+    # Horizontal alignment
+    if horizontal_alignment is not None:
+        valid_h_alignments = ["LEFT", "CENTER", "RIGHT"]
+        if horizontal_alignment.upper() not in valid_h_alignments:
+            raise ValueError(
+                f"Invalid horizontal_alignment: {horizontal_alignment}. "
+                f"Must be one of: {valid_h_alignments}"
+            )
+        cell_format["horizontalAlignment"] = horizontal_alignment.upper()
+        fields.append("userEnteredFormat.horizontalAlignment")
+
+    # Vertical alignment
+    if vertical_alignment is not None:
+        valid_v_alignments = ["TOP", "MIDDLE", "BOTTOM"]
+        if vertical_alignment.upper() not in valid_v_alignments:
+            raise ValueError(
+                f"Invalid vertical_alignment: {vertical_alignment}. "
+                f"Must be one of: {valid_v_alignments}"
+            )
+        cell_format["verticalAlignment"] = vertical_alignment.upper()
+        fields.append("userEnteredFormat.verticalAlignment")
+
+    # Number format
+    if number_format_type is not None or number_format_pattern is not None:
+        number_format = {}
+        if number_format_type is not None:
+            valid_types = [
+                "TEXT",
+                "NUMBER",
+                "PERCENT",
+                "CURRENCY",
+                "DATE",
+                "TIME",
+                "DATE_TIME",
+                "SCIENTIFIC",
+            ]
+            if number_format_type.upper() not in valid_types:
+                raise ValueError(
+                    f"Invalid number_format_type: {number_format_type}. "
+                    f"Must be one of: {valid_types}"
+                )
+            number_format["type"] = number_format_type.upper()
+        if number_format_pattern is not None:
+            number_format["pattern"] = number_format_pattern
+        cell_format["numberFormat"] = number_format
+        fields.append("userEnteredFormat.numberFormat")
+
+    # Wrap strategy
+    if wrap_strategy is not None:
+        valid_wrap = ["OVERFLOW_CELL", "LEGACY_WRAP", "CLIP", "WRAP"]
+        if wrap_strategy.upper() not in valid_wrap:
+            raise ValueError(
+                f"Invalid wrap_strategy: {wrap_strategy}. Must be one of: {valid_wrap}"
+            )
+        cell_format["wrapStrategy"] = wrap_strategy.upper()
+        fields.append("userEnteredFormat.wrapStrategy")
+
+    if not cell_format:
+        raise ValueError("At least one formatting option must be specified.")
+
+    # Parse the range to a GridRange
+    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
+
+    # Build the request
+    request_body = {
+        "requests": [
+            {
+                "repeatCell": {
+                    "range": grid_range,
+                    "cell": {"userEnteredFormat": cell_format},
+                    "fields": ",".join(fields),
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Build a description of applied formatting
+    format_descriptions = []
+    if bold is not None:
+        format_descriptions.append(f"bold={bold}")
+    if italic is not None:
+        format_descriptions.append(f"italic={italic}")
+    if underline is not None:
+        format_descriptions.append(f"underline={underline}")
+    if strikethrough is not None:
+        format_descriptions.append(f"strikethrough={strikethrough}")
+    if font_size is not None:
+        format_descriptions.append(f"fontSize={font_size}")
+    if font_family is not None:
+        format_descriptions.append(f"fontFamily={font_family}")
+    if text_color is not None:
+        format_descriptions.append(f"textColor={text_color}")
+    if background_color is not None:
+        format_descriptions.append(f"backgroundColor={background_color}")
+    if horizontal_alignment is not None:
+        format_descriptions.append(f"horizontalAlignment={horizontal_alignment}")
+    if vertical_alignment is not None:
+        format_descriptions.append(f"verticalAlignment={vertical_alignment}")
+    if number_format_type is not None:
+        format_descriptions.append(f"numberFormatType={number_format_type}")
+    if number_format_pattern is not None:
+        format_descriptions.append(f"numberFormatPattern={number_format_pattern}")
+    if wrap_strategy is not None:
+        format_descriptions.append(f"wrapStrategy={wrap_strategy}")
+
+    format_summary = ", ".join(format_descriptions)
+
+    text_output = (
+        f"Successfully formatted range '{range_name}' in sheet ID {sheet_id} "
+        f"of spreadsheet {spreadsheet_id} for {user_google_email}. "
+        f"Applied: {format_summary}"
+    )
+
+    logger.info(
+        f"Successfully formatted range '{range_name}' for {user_google_email}. "
+        f"Applied: {format_summary}"
+    )
+    return text_output
+
+
 # Create comment management tools for sheets
 _comment_tools = create_comment_tools("spreadsheet", "spreadsheet_id")
 
