@@ -26,6 +26,7 @@ async def list_spreadsheets(
     service,
     user_google_email: str,
     max_results: int = 25,
+    name_filter: Optional[str] = None,
 ) -> str:
     """
     Lists spreadsheets from Google Drive that the user has access to.
@@ -33,16 +34,33 @@ async def list_spreadsheets(
     Args:
         user_google_email (str): The user's Google email address. Required.
         max_results (int): Maximum number of spreadsheets to return. Defaults to 25.
+        name_filter (str): Optional filter to search for spreadsheets by name.
+            Supports partial matching (case-insensitive). Examples:
+            - "Budget" matches "Q4 Budget 2024", "budget tracker", etc.
+            - "2024" matches any spreadsheet with "2024" in the name.
 
     Returns:
         str: A formatted list of spreadsheet files (name, ID, modified time).
     """
-    logger.info(f"[list_spreadsheets] Invoked. Email: '{user_google_email}'")
+    logger.info(
+        f"[list_spreadsheets] Invoked. Email: '{user_google_email}', name_filter: '{name_filter}'"
+    )
+
+    # Build query - always filter for spreadsheets
+    query_parts = ["mimeType='application/vnd.google-apps.spreadsheet'"]
+
+    # Add name filter if provided
+    if name_filter:
+        # Escape single quotes in the filter value for the query
+        escaped_filter = name_filter.replace("'", "\\'")
+        query_parts.append(f"name contains '{escaped_filter}'")
+
+    query = " and ".join(query_parts)
 
     files_response = await asyncio.to_thread(
         service.files()
         .list(
-            q="mimeType='application/vnd.google-apps.spreadsheet'",
+            q=query,
             pageSize=max_results,
             fields="files(id,name,modifiedTime,webViewLink)",
             orderBy="modifiedTime desc",
@@ -54,20 +72,22 @@ async def list_spreadsheets(
 
     files = files_response.get("files", [])
     if not files:
-        return f"No spreadsheets found for {user_google_email}."
+        filter_msg = f" matching '{name_filter}'" if name_filter else ""
+        return f"No spreadsheets{filter_msg} found for {user_google_email}."
 
     spreadsheets_list = [
         f'- "{file["name"]}" (ID: {file["id"]}) | Modified: {file.get("modifiedTime", "Unknown")} | Link: {file.get("webViewLink", "No link")}'
         for file in files
     ]
 
+    filter_msg = f" matching '{name_filter}'" if name_filter else ""
     text_output = (
-        f"Successfully listed {len(files)} spreadsheets for {user_google_email}:\n"
+        f"Successfully listed {len(files)} spreadsheets{filter_msg} for {user_google_email}:\n"
         + "\n".join(spreadsheets_list)
     )
 
     logger.info(
-        f"Successfully listed {len(files)} spreadsheets for {user_google_email}."
+        f"Successfully listed {len(files)} spreadsheets{filter_msg} for {user_google_email}."
     )
     return text_output
 
