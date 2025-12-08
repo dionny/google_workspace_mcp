@@ -4655,6 +4655,10 @@ async def batch_edit_doc(
     - Accepts BOTH naming conventions (e.g., "insert" or "insert_text")
     - Preview mode to see what would change without modifying the document
 
+    Note: This tool can INSERT new tables but cannot MODIFY existing tables.
+    For table cell updates, row/column operations, or table formatting,
+    use the modify_table tool instead.
+
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document to update
@@ -4675,8 +4679,10 @@ async def batch_edit_doc(
         - delete / delete_text: Delete text range
         - replace / replace_text: Replace text range with new text
         - format / format_text: Apply formatting (bold, italic, underline, font_size, font_family)
-        - insert_table: Insert table at position (requires: index/location, rows, columns)
+        - insert_table: Insert NEW table at position (requires: index/location, rows, columns)
           Example: {"type": "insert_table", "location": "end", "rows": 3, "columns": 4}
+          Note: For modifying existing tables (updating cells, adding rows/columns),
+          use the modify_table tool instead.
         - insert_page_break: Insert page break
         - find_replace: Find and replace all occurrences
         - convert_to_list: Convert text range to bullet or numbered list
