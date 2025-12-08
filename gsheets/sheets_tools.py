@@ -265,7 +265,7 @@ async def create_spreadsheet(
     service,
     user_google_email: str,
     title: str,
-    sheet_names: Optional[List[str]] = None,
+    sheet_names: Optional[Union[str, List[str]]] = None,
 ) -> str:
     """
     Creates a new Google Spreadsheet.
@@ -273,12 +273,29 @@ async def create_spreadsheet(
     Args:
         user_google_email (str): The user's Google email address. Required.
         title (str): The title of the new spreadsheet. Required.
-        sheet_names (Optional[List[str]]): List of sheet names to create. If not provided, creates one sheet with default name.
+        sheet_names (Optional[Union[str, List[str]]]): List of sheet names to create. Can be a JSON string or Python list. If not provided, creates one sheet with default name.
 
     Returns:
         str: Information about the newly created spreadsheet including ID and URL.
     """
     logger.info(f"[create_spreadsheet] Invoked. Email: '{user_google_email}', Title: {title}")
+
+    # Parse sheet_names if it's a JSON string (MCP passes parameters as JSON strings)
+    if sheet_names is not None and isinstance(sheet_names, str):
+        try:
+            parsed_sheet_names = json.loads(sheet_names)
+            if not isinstance(parsed_sheet_names, list):
+                raise ValueError(f"sheet_names must be a list, got {type(parsed_sheet_names).__name__}")
+            # Validate each sheet name is a string
+            for i, name in enumerate(parsed_sheet_names):
+                if not isinstance(name, str):
+                    raise ValueError(f"Sheet name at index {i} must be a string, got {type(name).__name__}")
+            sheet_names = parsed_sheet_names
+            logger.info(f"[create_spreadsheet] Parsed JSON string to Python list with {len(sheet_names)} sheet names")
+        except json.JSONDecodeError as e:
+            raise Exception(f"Invalid JSON format for sheet_names: {e}")
+        except ValueError as e:
+            raise Exception(f"Invalid sheet_names structure: {e}")
 
     spreadsheet_body = {
         "properties": {
