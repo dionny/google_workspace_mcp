@@ -193,7 +193,7 @@ async def get_doc_content(
 
     # Validate scope-specific parameters
     if scope == "section" and not heading:
-        error = DocsErrorBuilder.invalid_param(
+        error = DocsErrorBuilder.invalid_param_value(
             param_name="heading",
             received_value="None",
             valid_values=["heading text string"],
@@ -203,7 +203,7 @@ async def get_doc_content(
 
     if scope == "range":
         if start_index is None or end_index is None:
-            error = DocsErrorBuilder.invalid_param(
+            error = DocsErrorBuilder.invalid_param_value(
                 param_name="start_index/end_index",
                 received_value=f"start={start_index}, end={end_index}",
                 valid_values=["both start_index and end_index must be provided"],
@@ -211,7 +211,7 @@ async def get_doc_content(
             )
             return format_error(error)
         if start_index < 0 or end_index <= start_index:
-            error = DocsErrorBuilder.invalid_param(
+            error = DocsErrorBuilder.invalid_param_value(
                 param_name="range",
                 received_value=f"{start_index}-{end_index}",
                 valid_values=["start_index >= 0 and end_index > start_index"],
@@ -229,7 +229,7 @@ async def get_doc_content(
             )
         except HttpError as e:
             if e.resp.status == 400:
-                return format_error(DocsErrorBuilder.invalid_param(
+                return format_error(DocsErrorBuilder.invalid_param_value(
                     param_name="document_id",
                     received_value=document_id,
                     valid_values=["native Google Doc ID"],
@@ -460,11 +460,10 @@ async def _get_doc_content_section(
         # Get available headings to help user
         all_headings = get_all_headings(doc_data)
         heading_list = [h["text"] for h in all_headings[:10]]
-        error = DocsErrorBuilder.invalid_param(
-            param_name="heading",
-            received_value=heading,
-            valid_values=heading_list if heading_list else ["(no headings found in document)"],
-            context_description="section heading not found",
+        error = DocsErrorBuilder.heading_not_found(
+            heading=heading,
+            available_headings=heading_list if heading_list else ["(no headings found in document)"],
+            match_case=match_case,
         )
         return format_error(error)
 
@@ -6390,7 +6389,7 @@ async def export_doc_as_markdown(
             .execute
         )
     except Exception as e:
-        error = DocsErrorBuilder.invalid_param(
+        error = DocsErrorBuilder.invalid_param_value(
             param_name="document_id",
             received_value=document_id,
             valid_values=["valid Google Doc ID"],
@@ -6427,7 +6426,7 @@ async def export_doc_as_markdown(
         content_size = len(markdown_content)
 
     except Exception as e:
-        error = DocsErrorBuilder.invalid_param(
+        error = DocsErrorBuilder.invalid_param_value(
             param_name="document_id",
             received_value=document_id,
             valid_values=["Google Doc with export permissions"],
@@ -6645,7 +6644,7 @@ async def get_element_context(
         return structured_error
 
     if index < 0:
-        error = DocsErrorBuilder.invalid_param(
+        error = DocsErrorBuilder.invalid_param_value(
             param_name="index",
             received_value=str(index),
             valid_values=["non-negative integer"],
