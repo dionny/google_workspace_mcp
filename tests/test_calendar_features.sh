@@ -11,8 +11,8 @@
 # - Run from project root: ./tests/test_calendar_features.sh [email]
 #
 # Usage:
-#   ./tests/test_calendar_features.sh mbradshaw@indeed.com
-#   USER_GOOGLE_EMAIL=mbradshaw@indeed.com ./tests/test_calendar_features.sh
+#   ./tests/test_calendar_features.sh user@example.com
+#   USER_GOOGLE_EMAIL=user@example.com ./tests/test_calendar_features.sh
 #
 
 set -e
