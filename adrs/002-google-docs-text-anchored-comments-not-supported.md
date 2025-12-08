@@ -39,42 +39,115 @@ We will **NOT** implement text-anchored comment creation for Google Docs because
 - **Issue Tracker**: [Issue 36763384](https://issuetracker.google.com/issues/36763384)
   - Feature request from 2016, still open with no resolution
 
-### What IS Possible
+### What IS Possible via Drive API
 
-✅ **Create file-level (unanchored) comments** - Comments appear in the document but not attached to specific text
+#### Currently Implemented ✅
 
-✅ **Read existing anchored comments** - Comments created manually in the UI can be retrieved with their `anchor` and `quotedFileContent` fields
+1. **List/Read Comments** (`read_doc_comments`)
+   - Retrieves all comments with replies
+   - Gets author, content, timestamps, resolved status
+   - Shows reply threads
+   - **Fields we request:** `id, content, author, createdTime, modifiedTime, resolved, replies`
 
-✅ **Reply to comments** - Both anchored and unanchored comments can receive replies
+2. **Create File-Level Comments** (`create_doc_comment`)
+   - Creates unanchored comments on the document
+   - Comments appear in "All Comments" view
+   - Not attached to specific text
 
-✅ **Resolve comments** - Both anchored and unanchored comments can be marked as resolved
+3. **Reply to Comments** (`reply_to_comment`)
+   - Add replies to existing comment threads
+   - Works for both anchored (UI-created) and unanchored comments
 
-### What is NOT Possible
+4. **Resolve Comments** (`resolve_comment`)
+   - Mark comments as resolved via special reply with `action: "resolve"`
+   - Works for both anchored and unanchored comments
 
-❌ **Create comments on specific text ranges** - Cannot specify start/end indices or text selection
+#### Available But NOT Yet Implemented 🔶
 
-❌ **Anchor comments programmatically** - No way to target specific paragraphs, sentences, or words
+These operations are supported by the Drive API but we haven't implemented them:
+
+1. **Update/Edit Comment Content** 
+   - API: `comments.update()` or `comments.patch()`
+   - Can modify comment content after creation
+   - Can mark comments as resolved directly (without reply)
+   - Can update other comment metadata
+
+2. **Delete Comments**
+   - API: `comments.delete()`
+   - Permanently remove comments
+   - Deleted comments are marked with `deleted: true` field
+
+3. **Update/Edit Replies**
+   - API: `replies.update()`
+   - Modify reply content after posting
+   - Change reply metadata
+
+4. **Delete Replies**
+   - API: `replies.delete()`
+   - Remove specific replies from comment threads
+
+5. **Read Additional Comment Fields**
+   - `anchor` - For UI-created anchored comments, contains position data
+   - `quotedFileContent` - The text that anchored comments reference
+   - `deleted` - Whether comment has been deleted
+   - `htmlContent` - HTML-formatted comment content
+   - Additional author fields (photo URL, email, etc.)
+
+6. **Reopen Resolved Comments**
+   - Update comment with `resolved: false`
+   - Via `comments.update()` or `comments.patch()`
+
+### What is NOT Possible ❌
+
+1. **Create Text-Anchored Comments**
+   - Cannot specify start/end indices or text selection when creating
+   - The `anchor` parameter in `comments.create()` is ignored for Google Docs
+   - Only possible manually via Google Docs UI
+
+2. **Modify Anchor Position**
+   - Cannot change where an anchored comment points
+   - Cannot convert file-level comment to anchored comment
+
+3. **Create Anchored Comments via Docs API**
+   - Docs API has no comment-related Request types
+   - No `CreateCommentRequest`, `AddCommentRequest`, or similar
 
 ## Consequences
 
 ### Current Implementation
 
-Our comment tools (`read_doc_comments`, `create_doc_comment`, `reply_to_comment`, `resolve_comment`) will continue to:
-- Create file-level comments only
+Our comment tools (`read_doc_comments`, `create_doc_comment`, `reply_to_comment`, `resolve_comment`):
+- **Implement:** List, create (file-level), reply, resolve
+- **Do NOT implement yet:** Update, delete, patch, reopen, reading anchor/quotedFileContent fields
 - Use the Drive API for all comment operations
 - Work consistently with Sheets and Slides (which have the same limitation)
+
+### Potential Enhancements
+
+We could add these tools based on available Drive API capabilities:
+
+1. **`update_doc_comment`** - Edit comment content after creation
+2. **`delete_doc_comment`** - Permanently remove comments
+3. **`reopen_doc_comment`** - Unmark resolved comments
+4. **`update_doc_reply`** - Edit reply content
+5. **`delete_doc_reply`** - Remove specific replies
+6. Enhanced `read_doc_comments` - Include `anchor` and `quotedFileContent` fields for UI-created anchored comments
+
+These would be straightforward to implement following the existing pattern in `core/comments.py`.
 
 ### User Impact
 
 Users who need text-anchored comments must:
-1. Use the Google Docs UI manually
-2. Or create file-level comments and reference specific sections in the comment text (e.g., "In paragraph 3, line 5...")
+1. Use the Google Docs UI manually to create anchored comments
+2. Or create file-level comments via API and reference specific sections in text (e.g., "In paragraph 3, line 5...")
+3. Can still read, reply to, and resolve manually-created anchored comments via our API tools
 
 ### Documentation
 
 - Document this limitation in `PROMPT.md` and tool docstrings
-- Close or mark as "blocked" any beads issues related to text-anchored comments
-- Update this ADR if Google ever adds API support for this feature
+- Close or mark as "blocked" any beads issues related to creating text-anchored comments
+- Consider creating new issues for the unimplemented-but-possible features above
+- Update this ADR if Google ever adds API support for creating anchored comments
 
 ## Alternatives Considered
 
