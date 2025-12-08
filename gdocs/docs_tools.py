@@ -10071,6 +10071,378 @@ async def append_to_list(
 
 
 @server.tool()
+@handle_http_errors("insert_list_item", service_type="docs")
+@require_google_service("docs", "docs_write")
+async def insert_list_item(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    text: str,
+    position: str = "end",
+    list_index: int = 0,
+    search: str = None,
+    indent_level: int = 0,
+    preview: bool = False,
+) -> str:
+    """
+    Insert a new item at a specific position within an existing list.
+
+    This tool provides precise control over list item insertion, allowing you
+    to add items at the beginning, end, or at any position within a list.
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document containing the list
+        text: The text content for the new list item
+        position: Where to insert the item. Options:
+            - "start" or "0": Insert as first item in list
+            - "end" or "-1": Append to end of list (default)
+            - A number (e.g., "2"): Insert at that position (0-indexed)
+            - "after:Some text": Insert after the item containing that text
+            - "before:Some text": Insert before the item containing that text
+        list_index: Which list to target (0-based, default 0 for first list).
+            Used when not specifying search.
+        search: Text to search for within a list item. If provided, targets the
+            list containing that text.
+        indent_level: Nesting level for the new item (0-8).
+            0 = top-level item, 1 = first indent, etc.
+        preview: If True, show what would be inserted without making changes.
+
+    Returns:
+        JSON string with operation result or preview information.
+
+    Examples:
+        # Insert at start of list
+        insert_list_item(document_id="abc123", text="New first item", position="start")
+
+        # Insert at end of list (default)
+        insert_list_item(document_id="abc123", text="New last item")
+
+        # Insert at specific position (0-indexed)
+        insert_list_item(document_id="abc123", text="Third item", position="2")
+
+        # Insert after item containing specific text
+        insert_list_item(document_id="abc123", text="New item",
+                        position="after:Existing item")
+
+        # Insert before item containing specific text
+        insert_list_item(document_id="abc123", text="New item",
+                        position="before:Task to do")
+
+        # Insert nested item
+        insert_list_item(document_id="abc123", text="Sub-item detail",
+                        position="after:Main point", indent_level=1)
+
+        # Preview the insertion
+        insert_list_item(document_id="abc123", text="Test item", preview=True)
+
+    Notes:
+        - The inserted item will inherit the list type (bullet or numbered)
+        - Use find_doc_elements with element_type='list' to see all lists first
+        - For appending multiple items, use append_to_list instead
+        - For creating new lists, use insert_doc_elements with element_type='list'
+    """
+    import json
+
+    logger.debug(
+        f"[insert_list_item] Doc={document_id}, text={text!r}, "
+        f"position={position}, list_index={list_index}, search={search}, "
+        f"indent_level={indent_level}"
+    )
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    # Validate text parameter
+    if not isinstance(text, str):
+        return validator.create_invalid_param_error(
+            param_name="text",
+            received=type(text).__name__,
+            valid_values=["string"],
+        )
+    if not text.strip():
+        return validator.create_invalid_param_error(
+            param_name="text",
+            received="empty string",
+            valid_values=["non-empty string"],
+        )
+
+    # Validate indent_level
+    if not isinstance(indent_level, int):
+        return validator.create_invalid_param_error(
+            param_name="indent_level",
+            received=type(indent_level).__name__,
+            valid_values=["integer (0-8)"],
+        )
+    if indent_level < 0 or indent_level > 8:
+        return validator.create_invalid_param_error(
+            param_name="indent_level",
+            received=str(indent_level),
+            valid_values=["integer from 0 to 8"],
+        )
+
+    # Process text with escape sequences
+    processed_text = interpret_escape_sequences(text)
+
+    doc_link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    # Get document content
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Find all lists in the document
+    all_lists = find_elements_by_type(doc_data, "list")
+
+    if not all_lists:
+        return json.dumps({
+            "error": True,
+            "code": "NO_LISTS_FOUND",
+            "message": "No lists found in the document",
+            "suggestion": "Use insert_doc_elements with element_type='list' to create a list first",
+            "link": doc_link,
+        }, indent=2)
+
+    # Find the target list
+    target_list = None
+
+    if search:
+        # Find list containing the search text
+        search_lower = search.lower()
+        for lst in all_lists:
+            for item in lst.get("items", []):
+                if search_lower in item.get("text", "").lower():
+                    target_list = lst
+                    break
+            if target_list:
+                break
+
+        if not target_list:
+            return json.dumps({
+                "error": True,
+                "code": "LIST_NOT_FOUND",
+                "message": f"No list containing text '{search}' found",
+                "suggestion": "Check the search text or use find_doc_elements "
+                              "with element_type='list' to see all lists",
+                "available_lists": len(all_lists),
+                "link": doc_link,
+            }, indent=2)
+
+    else:
+        # Use list_index
+        if list_index < 0 or list_index >= len(all_lists):
+            return json.dumps({
+                "error": True,
+                "code": "INVALID_LIST_INDEX",
+                "message": f"List index {list_index} is out of range. Document has {len(all_lists)} list(s).",
+                "suggestion": f"Use list_index between 0 and {len(all_lists) - 1}",
+                "available_lists": len(all_lists),
+                "link": doc_link,
+            }, indent=2)
+        target_list = all_lists[list_index]
+
+    # Determine list type for applying bullet formatting
+    list_type_raw = target_list.get("list_type", target_list.get("type", "bullet"))
+    if "bullet" in list_type_raw or "unordered" in list_type_raw.lower():
+        list_type = "UNORDERED"
+        list_type_display = "bullet"
+    else:
+        list_type = "ORDERED"
+        list_type_display = "numbered"
+
+    # Get list items for position calculation
+    list_items = target_list.get("items", [])
+    num_items = len(list_items)
+
+    # Parse position parameter and determine insertion index
+    insertion_index = None
+    position_description = ""
+    insert_item_index = None  # Which list item position we're inserting at
+
+    position_str = str(position).strip().lower()
+
+    if position_str in ("start", "0"):
+        # Insert at the start of the list
+        insertion_index = target_list["start_index"]
+        position_description = "at start of list"
+        insert_item_index = 0
+
+    elif position_str in ("end", "-1"):
+        # Insert at the end of the list
+        insertion_index = target_list["end_index"]
+        position_description = "at end of list"
+        insert_item_index = num_items
+
+    elif position_str.startswith("after:"):
+        # Insert after item containing specific text
+        search_text = position[6:].strip()  # Use original position to preserve case
+        if not search_text:
+            return validator.create_invalid_param_error(
+                param_name="position",
+                received="after: (empty)",
+                valid_values=["after:some text"],
+            )
+
+        search_text_lower = search_text.lower()
+        found_item = None
+        found_item_index = None
+        for i, item in enumerate(list_items):
+            if search_text_lower in item.get("text", "").lower():
+                found_item = item
+                found_item_index = i
+                break
+
+        if not found_item:
+            return json.dumps({
+                "error": True,
+                "code": "LIST_ITEM_NOT_FOUND",
+                "message": f"No list item containing text '{search_text}' found",
+                "suggestion": "Check the search text in position parameter",
+                "available_items": [item.get("text", "")[:50] for item in list_items],
+                "link": doc_link,
+            }, indent=2)
+
+        insertion_index = found_item["end_index"]
+        position_description = f"after item '{found_item.get('text', '')[:30]}...'" if len(found_item.get('text', '')) > 30 else f"after item '{found_item.get('text', '')}'"
+        insert_item_index = found_item_index + 1
+
+    elif position_str.startswith("before:"):
+        # Insert before item containing specific text
+        search_text = position[7:].strip()  # Use original position to preserve case
+        if not search_text:
+            return validator.create_invalid_param_error(
+                param_name="position",
+                received="before: (empty)",
+                valid_values=["before:some text"],
+            )
+
+        search_text_lower = search_text.lower()
+        found_item = None
+        found_item_index = None
+        for i, item in enumerate(list_items):
+            if search_text_lower in item.get("text", "").lower():
+                found_item = item
+                found_item_index = i
+                break
+
+        if not found_item:
+            return json.dumps({
+                "error": True,
+                "code": "LIST_ITEM_NOT_FOUND",
+                "message": f"No list item containing text '{search_text}' found",
+                "suggestion": "Check the search text in position parameter",
+                "available_items": [item.get("text", "")[:50] for item in list_items],
+                "link": doc_link,
+            }, indent=2)
+
+        insertion_index = found_item["start_index"]
+        position_description = f"before item '{found_item.get('text', '')[:30]}...'" if len(found_item.get('text', '')) > 30 else f"before item '{found_item.get('text', '')}'"
+        insert_item_index = found_item_index
+
+    else:
+        # Try to parse as numeric position
+        try:
+            item_position = int(position_str)
+            if item_position < 0:
+                # Negative index like Python lists
+                item_position = max(0, num_items + item_position + 1)
+            if item_position > num_items:
+                item_position = num_items  # Clamp to end
+
+            if item_position == 0:
+                insertion_index = target_list["start_index"]
+                position_description = "at position 0 (start)"
+            elif item_position >= num_items:
+                insertion_index = target_list["end_index"]
+                position_description = f"at position {item_position} (end)"
+            else:
+                insertion_index = list_items[item_position]["start_index"]
+                position_description = f"at position {item_position}"
+
+            insert_item_index = item_position
+
+        except ValueError:
+            return validator.create_invalid_param_error(
+                param_name="position",
+                received=position,
+                valid_values=[
+                    "'start' or '0'",
+                    "'end' or '-1'",
+                    "numeric index (e.g., '2')",
+                    "'after:search text'",
+                    "'before:search text'",
+                ],
+            )
+
+    # Build the text to insert with tab prefix for nesting level
+    prefix = "\t" * indent_level
+    insert_text = prefix + processed_text + "\n"
+    text_length = len(insert_text) - 1  # Exclude final newline from bullet range
+
+    # Build preview info
+    preview_info = {
+        "target_list": {
+            "type": list_type_display,
+            "start_index": target_list["start_index"],
+            "end_index": target_list["end_index"],
+            "current_items_count": num_items,
+        },
+        "insertion": {
+            "position": position_description,
+            "index": insertion_index,
+            "item_position": insert_item_index,
+        },
+        "new_item": {
+            "text": processed_text[:50] + ("..." if len(processed_text) > 50 else ""),
+            "indent_level": indent_level,
+        },
+    }
+
+    if preview:
+        return json.dumps({
+            "preview": True,
+            "message": f"Would insert item {position_description} in {list_type_display} list",
+            **preview_info,
+            "link": doc_link,
+        }, indent=2)
+
+    # Create the requests:
+    # 1. Insert the text at the calculated position
+    # 2. Apply bullet formatting to the new text
+    requests = [
+        create_insert_text_request(insertion_index, insert_text),
+        create_bullet_list_request(
+            insertion_index,
+            insertion_index + text_length,
+            list_type
+        ),
+    ]
+
+    # Execute the requests
+    await asyncio.to_thread(
+        service.documents()
+        .batchUpdate(documentId=document_id, body={"requests": requests})
+        .execute
+    )
+
+    return json.dumps({
+        "success": True,
+        "message": f"Inserted item {position_description} in {list_type_display} list",
+        "list_type": list_type_display,
+        "position": position_description,
+        "new_item_range": {
+            "start_index": insertion_index,
+            "end_index": insertion_index + len(insert_text),
+        },
+        "link": doc_link,
+    }, indent=2)
+
+
+@server.tool()
 @handle_http_errors("copy_doc_section", service_type="docs")
 @require_google_service("docs", "docs_write")
 async def copy_doc_section(
