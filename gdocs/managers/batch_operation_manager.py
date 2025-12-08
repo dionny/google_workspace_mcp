@@ -24,6 +24,7 @@ from gdocs.docs_helpers import (
     create_insert_table_request,
     create_insert_page_break_request,
     create_paragraph_style_request,
+    create_bullet_list_request,
     validate_operation,
     resolve_range,
     RangeResult,
@@ -58,6 +59,20 @@ OPERATION_ALIASES = {
     'insert_table': 'insert_table',
     'insert_page_break': 'insert_page_break',
     'find_replace': 'find_replace',
+    'convert_to_list': 'convert_to_list',
+}
+
+# Valid list types for convert_to_list operation
+# Accepts common aliases for usability
+LIST_TYPE_ALIASES = {
+    "bullet": "UNORDERED",
+    "bullets": "UNORDERED",
+    "unordered": "UNORDERED",
+    "UNORDERED": "UNORDERED",
+    "numbered": "ORDERED",
+    "numbers": "ORDERED",
+    "ordered": "ORDERED",
+    "ORDERED": "ORDERED",
 }
 
 # Valid operation types (all keys in OPERATION_ALIASES)
@@ -451,6 +466,7 @@ class BatchExecutionResult:
     document_link: Optional[str] = None
     preview: bool = False
     would_modify: bool = False
+    batch_id: Optional[str] = None  # For atomic batch undo support
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON response."""
@@ -467,6 +483,9 @@ class BatchExecutionResult:
         if self.preview:
             result["preview"] = True
             result["would_modify"] = self.would_modify
+        # Include batch_id for undo support (only when operations were actually executed)
+        if self.batch_id and not self.preview:
+            result["batch_id"] = self.batch_id
         return result
 
 
@@ -490,6 +509,83 @@ class BatchOperationManager:
         """
         self.service = service
         self.tab_id = tab_id
+
+    def _clean_text_for_list(self, text: str) -> str:
+        """
+        Clean text for list conversion by removing consecutive blank lines.
+        
+        When text with blank lines (\\n\\n) is converted to a list, each paragraph
+        becomes a list item, and blank paragraphs become empty list items.
+        This function removes those consecutive blank lines.
+        
+        Args:
+            text: Text to clean
+            
+        Returns:
+            Cleaned text with consecutive newlines collapsed to single newlines
+        """
+        import re
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        original_newline_count = text.count('\n')
+        # Replace multiple consecutive newlines (with optional whitespace) with single newline
+        cleaned_text = re.sub(r'\n\s*\n+', '\n', text)
+        new_newline_count = cleaned_text.count('\n')
+        
+        if cleaned_text != text:
+            removed = original_newline_count - new_newline_count
+            logger.info(
+                f"[BatchOperationManager] Cleaned text for list conversion: "
+                f"removed {removed} blank lines to prevent empty list items"
+            )
+        
+        return cleaned_text
+
+    def _mark_list_conversion_operations(self, operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """
+        Mark text insertion/replacement operations that will be converted to lists.
+        
+        This allows us to apply blank line cleaning before the text is inserted,
+        preventing empty list items.
+        
+        Args:
+            operations: List of operation dictionaries
+            
+        Returns:
+            Modified operations list with _will_convert_to_list flag added
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Look for convert_to_list operations and mark preceding text operations
+        for i, op in enumerate(operations):
+            op_type = op.get('type', '')
+            
+            # Normalize type aliases
+            if op_type in ['insert', 'replace']:
+                op_type = f"{op_type}_text"
+            
+            # Check if this is an insert/replace followed by convert_to_list
+            if op_type in ['insert_text', 'replace_text'] and 'text' in op:
+                # Look ahead for convert_to_list in subsequent operations
+                for j in range(i + 1, len(operations)):
+                    next_op = operations[j]
+                    next_type = next_op.get('type', '')
+                    
+                    if next_type == 'convert_to_list':
+                        # Mark this text operation for cleaning
+                        op['_will_convert_to_list'] = True
+                        logger.debug(
+                            f"[BatchOperationManager] Marking operation {i} for list conversion text cleaning"
+                        )
+                        break
+                    
+                    # Stop looking if we hit another text operation (likely targeting different content)
+                    if next_type in ['insert_text', 'replace_text', 'insert', 'replace']:
+                        break
+        
+        return operations
 
     async def execute_batch_operations(
         self,
@@ -614,6 +710,10 @@ class BatchOperationManager:
         Returns:
             Tuple of (requests, operation_descriptions, position_shifts)
         """
+        # Preprocess: Mark text operations that will be converted to lists
+        # so we can apply blank line cleaning
+        operations = self._mark_list_conversion_operations(operations)
+        
         requests = []
         operation_descriptions = []
         position_shifts = []
@@ -700,6 +800,11 @@ class BatchOperationManager:
             # Return 0 as this needs document context to calculate
             return 0
 
+        elif op_type == 'convert_to_list':
+            # Converting text to list doesn't change positions
+            # (it only adds bullet/number formatting to paragraphs)
+            return 0
+
         return 0
 
     def _build_operation_request(
@@ -718,7 +823,11 @@ class BatchOperationManager:
             Tuple of (request, description)
         """
         if op_type == 'insert_text':
-            request = create_insert_text_request(op['index'], op['text'], tab_id=self.tab_id)
+            # Clean text for list conversion if specified
+            text = op['text']
+            if op.get('_will_convert_to_list'):
+                text = self._clean_text_for_list(text)
+            request = create_insert_text_request(op['index'], text, tab_id=self.tab_id)
             description = f"insert text at {op['index']}"
 
         elif op_type == 'delete_text':
@@ -726,12 +835,16 @@ class BatchOperationManager:
             description = f"delete text {op['start_index']}-{op['end_index']}"
 
         elif op_type == 'replace_text':
+            # Clean text for list conversion if specified
+            text = op['text']
+            if op.get('_will_convert_to_list'):
+                text = self._clean_text_for_list(text)
             # Replace is delete + insert (must be done in this order)
             delete_request = create_delete_range_request(op['start_index'], op['end_index'], tab_id=self.tab_id)
-            insert_request = create_insert_text_request(op['start_index'], op['text'], tab_id=self.tab_id)
+            insert_request = create_insert_text_request(op['start_index'], text, tab_id=self.tab_id)
             # Return both requests as a list
             request = [delete_request, insert_request]
-            description = f"replace text {op['start_index']}-{op['end_index']} with '{op['text'][:20]}{'...' if len(op['text']) > 20 else ''}'"
+            description = f"replace text {op['start_index']}-{op['end_index']} with '{text[:20]}{'...' if len(text) > 20 else ''}'"
 
         elif op_type == 'format_text':
             # Handle text-level formatting
@@ -821,10 +934,30 @@ class BatchOperationManager:
             )
             description = f"find/replace '{op['find_text']}' → '{op['replace_text']}'"
 
+        elif op_type == 'convert_to_list':
+            # Validate required fields
+            if 'start_index' not in op or 'end_index' not in op:
+                raise KeyError(
+                    "convert_to_list operation requires 'start_index' and 'end_index'. "
+                    "Example: {\"type\": \"convert_to_list\", \"start_index\": 100, \"end_index\": 200, \"list_type\": \"ORDERED\"}"
+                )
+            # Normalize and validate list_type
+            list_type = op.get('list_type', 'UNORDERED')
+            normalized_list_type = LIST_TYPE_ALIASES.get(list_type if isinstance(list_type, str) else str(list_type))
+            if normalized_list_type is None:
+                raise ValueError(
+                    f"Invalid list_type '{list_type}'. Valid values: ORDERED, UNORDERED, bullet, numbered"
+                )
+            request = create_bullet_list_request(
+                op['start_index'], op['end_index'], normalized_list_type, tab_id=self.tab_id
+            )
+            list_type_display = "bullet" if normalized_list_type == "UNORDERED" else "numbered"
+            description = f"convert to {list_type_display} list {op['start_index']}-{op['end_index']}"
+
         else:
             supported_types = [
                 'insert_text', 'delete_text', 'replace_text', 'format_text',
-                'insert_table', 'insert_page_break', 'find_replace'
+                'insert_table', 'insert_page_break', 'find_replace', 'convert_to_list'
             ]
             raise ValueError(f"Unsupported operation type '{op_type}'. Supported: {', '.join(supported_types)}")
 
@@ -916,6 +1049,12 @@ class BatchOperationManager:
                     'required': ['find_text', 'replace_text'],
                     'optional': ['match_case'],
                     'description': 'Find and replace text throughout document'
+                },
+                'convert_to_list': {
+                    'required': ['start_index', 'end_index'],
+                    'optional': ['list_type'],
+                    'description': 'Convert text range to bullet or numbered list',
+                    'list_type_values': ['ORDERED', 'UNORDERED', 'bullet', 'numbered']
                 }
             },
             'operation_aliases': {
@@ -927,7 +1066,8 @@ class BatchOperationManager:
             'example_operations': [
                 {"type": "insert", "index": 1, "text": "Hello World"},
                 {"type": "format", "start_index": 1, "end_index": 12, "bold": True},
-                {"type": "insert_table", "index": 20, "rows": 2, "columns": 3}
+                {"type": "insert_table", "index": 20, "rows": 2, "columns": 3},
+                {"type": "convert_to_list", "start_index": 100, "end_index": 200, "list_type": "ORDERED"}
             ]
         }
 
@@ -1099,8 +1239,9 @@ class BatchOperationManager:
             total_shift = sum(r.position_shift for r in operation_results)
 
             # Record operations for undo history (automatic tracking)
+            batch_id = None
             try:
-                self._record_batch_operations_to_history(
+                batch_id = self._record_batch_operations_to_history(
                     document_id, resolved_ops, operation_results, doc_data
                 )
             except Exception as e:
@@ -1120,6 +1261,7 @@ class BatchOperationManager:
                 total_position_shift=total_shift,
                 message=message,
                 document_link=f"https://docs.google.com/document/d/{document_id}/edit",
+                batch_id=batch_id,
             )
 
         except Exception as e:
@@ -1598,6 +1740,10 @@ class BatchOperationManager:
         elif op_type == 'insert_page_break':
             result['type'] = 'insert_page_break'
             result['index'] = start_idx
+        elif op_type == 'convert_to_list':
+            result['type'] = 'convert_to_list'
+            result['start_index'] = start_idx
+            result['end_index'] = end_idx
 
         return result
 
@@ -1637,6 +1783,10 @@ class BatchOperationManager:
         elif op_type == 'insert_page_break':
             result['type'] = 'insert_page_break'
             result['index'] = start_idx
+        elif op_type == 'convert_to_list':
+            result['type'] = 'convert_to_list'
+            result['start_index'] = start_idx
+            result['end_index'] = end_idx
 
         return result
 
@@ -1748,6 +1898,12 @@ class BatchOperationManager:
             start_idx = op.get('index', 0)
             return 1, {"start": start_idx, "end": start_idx + 1}
 
+        elif op_type == 'convert_to_list':
+            # Converting to list doesn't change positions (only adds formatting)
+            start_idx = op.get('start_index', 0)
+            end_idx = op.get('end_index', start_idx)
+            return 0, {"start": start_idx, "end": end_idx}
+
         return 0, {"start": 0, "end": 0}
 
     def _describe_operation(self, op: Dict[str, Any]) -> str:
@@ -1791,6 +1947,13 @@ class BatchOperationManager:
 
         elif op_type == 'find_replace':
             return f"find '{op.get('find_text', '?')}' → '{op.get('replace_text', '?')}'"
+
+        elif op_type == 'convert_to_list':
+            list_type = op.get('list_type', 'UNORDERED')
+            # Normalize to display name
+            normalized = LIST_TYPE_ALIASES.get(list_type if isinstance(list_type, str) else str(list_type), 'UNORDERED')
+            list_type_display = "bullet" if normalized == "UNORDERED" else "numbered"
+            return f"convert to {list_type_display} list {op.get('start_index', '?')}-{op.get('end_index', '?')}"
 
         return f"{op_type} operation"
 
@@ -1920,6 +2083,17 @@ class BatchOperationManager:
                     op['find_text'], op['replace_text'], op.get('match_case', False), tab_ids=tab_ids
                 ))
 
+            elif op_type == 'convert_to_list':
+                # Normalize and validate list_type
+                list_type = op.get('list_type', 'UNORDERED')
+                normalized_list_type = LIST_TYPE_ALIASES.get(
+                    list_type if isinstance(list_type, str) else str(list_type),
+                    'UNORDERED'
+                )
+                requests.append(create_bullet_list_request(
+                    op['start_index'], op['end_index'], normalized_list_type, tab_id=self.tab_id
+                ))
+
         return requests
 
     def _record_batch_operations_to_history(
@@ -1928,7 +2102,8 @@ class BatchOperationManager:
         resolved_ops: List[Dict[str, Any]],
         operation_results: List['BatchOperationResult'],
         doc_data: Dict[str, Any],
-    ) -> None:
+        batch_id: Optional[str] = None,
+    ) -> str:
         """
         Record batch operations to history for undo support.
 
@@ -1937,8 +2112,16 @@ class BatchOperationManager:
             resolved_ops: List of resolved operations
             operation_results: List of BatchOperationResult with operation details
             doc_data: Document data (may be stale after operations, but useful for text context)
+            batch_id: Optional batch ID for grouping operations. If None, one will be generated.
+
+        Returns:
+            The batch_id used for recording (useful for atomic batch undo)
         """
         history_manager = get_history_manager()
+
+        # Generate batch_id if not provided
+        if batch_id is None:
+            batch_id = history_manager.generate_batch_id()
 
         # Map operation types to history operation types
         op_type_map = {
@@ -1952,6 +2135,7 @@ class BatchOperationManager:
             'format': 'format_text',
         }
 
+        recorded_count = 0
         for i, (op, result) in enumerate(zip(resolved_ops, operation_results)):
             if op is None or not result.success:
                 continue
@@ -2002,7 +2186,6 @@ class BatchOperationManager:
                         "start_index": start_index,
                         "end_index": end_index,
                         "text": text,
-                        "batch_index": i,
                     },
                     start_index=start_index,
                     end_index=end_index,
@@ -2011,7 +2194,13 @@ class BatchOperationManager:
                     original_text=original_text,
                     undo_capability=undo_capability,
                     undo_notes=undo_notes,
+                    batch_id=batch_id,
+                    batch_index=i,
                 )
-                logger.debug(f"Recorded batch operation {i} for undo: {history_op_type} at {start_index}")
+                recorded_count += 1
+                logger.debug(f"Recorded batch operation {i} for undo: {history_op_type} at {start_index} (batch={batch_id})")
             except Exception as e:
                 logger.warning(f"Failed to record batch operation {i}: {e}")
+
+        logger.info(f"Recorded {recorded_count} operations in batch {batch_id}")
+        return batch_id

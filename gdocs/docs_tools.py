@@ -193,7 +193,7 @@ async def get_doc_content(
 
     # Validate scope-specific parameters
     if scope == "section" and not heading:
-        error = DocsErrorBuilder.invalid_param(
+        error = DocsErrorBuilder.invalid_param_value(
             param_name="heading",
             received_value="None",
             valid_values=["heading text string"],
@@ -203,7 +203,7 @@ async def get_doc_content(
 
     if scope == "range":
         if start_index is None or end_index is None:
-            error = DocsErrorBuilder.invalid_param(
+            error = DocsErrorBuilder.invalid_param_value(
                 param_name="start_index/end_index",
                 received_value=f"start={start_index}, end={end_index}",
                 valid_values=["both start_index and end_index must be provided"],
@@ -211,7 +211,7 @@ async def get_doc_content(
             )
             return format_error(error)
         if start_index < 0 or end_index <= start_index:
-            error = DocsErrorBuilder.invalid_param(
+            error = DocsErrorBuilder.invalid_param_value(
                 param_name="range",
                 received_value=f"{start_index}-{end_index}",
                 valid_values=["start_index >= 0 and end_index > start_index"],
@@ -229,7 +229,7 @@ async def get_doc_content(
             )
         except HttpError as e:
             if e.resp.status == 400:
-                return format_error(DocsErrorBuilder.invalid_param(
+                return format_error(DocsErrorBuilder.invalid_param_value(
                     param_name="document_id",
                     received_value=document_id,
                     valid_values=["native Google Doc ID"],
@@ -460,11 +460,10 @@ async def _get_doc_content_section(
         # Get available headings to help user
         all_headings = get_all_headings(doc_data)
         heading_list = [h["text"] for h in all_headings[:10]]
-        error = DocsErrorBuilder.invalid_param(
-            param_name="heading",
-            received_value=heading,
-            valid_values=heading_list if heading_list else ["(no headings found in document)"],
-            context_description="section heading not found",
+        error = DocsErrorBuilder.heading_not_found(
+            heading=heading,
+            available_headings=heading_list if heading_list else ["(no headings found in document)"],
+            match_case=match_case,
         )
         return format_error(error)
 
@@ -1829,6 +1828,22 @@ async def modify_doc_text(
         if doc_data is None:
             doc_data = await asyncio.to_thread(
                 service.documents().get(documentId=document_id).execute
+            )
+
+    # Clean text for list conversion if needed
+    # When converting to a list, remove consecutive blank lines (multiple \n\n)
+    # because Google Docs treats each paragraph as a separate list item,
+    # and blank paragraphs become empty numbered items (ugly!)
+    original_text = text
+    if text is not None and convert_to_list is not None:
+        import re
+        # Replace multiple consecutive newlines with single newline
+        # This prevents empty list items while preserving single line breaks
+        text = re.sub(r'\n\s*\n+', '\n', text)
+        if text != original_text:
+            logger.info(
+                f"[modify_doc_text] Cleaned text for list conversion: "
+                f"removed {original_text.count(chr(10)) - text.count(chr(10))} blank lines"
             )
 
     # Handle text insertion/replacement/deletion
@@ -4640,6 +4655,10 @@ async def batch_edit_doc(
     - Accepts BOTH naming conventions (e.g., "insert" or "insert_text")
     - Preview mode to see what would change without modifying the document
 
+    Note: This tool can INSERT new tables but cannot MODIFY existing tables.
+    For table cell updates, row/column operations, or table formatting,
+    use the modify_table tool instead.
+
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document to update
@@ -4660,10 +4679,17 @@ async def batch_edit_doc(
         - delete / delete_text: Delete text range
         - replace / replace_text: Replace text range with new text
         - format / format_text: Apply formatting (bold, italic, underline, font_size, font_family)
-        - insert_table: Insert table at position (requires: index/location, rows, columns)
+        - insert_table: Insert NEW table at position (requires: index/location, rows, columns)
           Example: {"type": "insert_table", "location": "end", "rows": 3, "columns": 4}
+          Note: For modifying existing tables (updating cells, adding rows/columns),
+          use the modify_table tool instead.
         - insert_page_break: Insert page break
         - find_replace: Find and replace all occurrences
+        - convert_to_list: Convert text range to bullet or numbered list
+          Requires: start_index, end_index (or search-based positioning)
+          Optional: list_type (ORDERED/UNORDERED/bullet/numbered, default: UNORDERED)
+          Example: {"type": "convert_to_list", "search": "Goals", "position": "after",
+                    "extend": "paragraph", "list_type": "ORDERED"}
 
     Location-based positioning options:
         - location: "start" (insert at document beginning) or "end" (append at document end)
@@ -4712,6 +4738,14 @@ async def batch_edit_doc(
              "extend": "sentence"}
         ]
 
+    Example with convert_to_list (convert text ranges to lists):
+        [
+            {"type": "insert", "search": "Goals", "position": "after",
+             "text": "\\nReduce latency\\nIncrease conversions\\nImprove relevance\\n"},
+            {"type": "convert_to_list", "search": "Reduce latency",
+             "extend": "paragraph", "list_type": "ORDERED"}
+        ]
+
     Returns:
         JSON string with detailed results including:
         - success: Overall success status
@@ -4719,12 +4753,14 @@ async def batch_edit_doc(
         - results: Per-operation details with position shifts
         - total_position_shift: Cumulative position change
         - document_link: Link to edited document
+        - batch_id: Unique ID for the batch (use with undo_doc_operation for atomic undo)
 
         Example response:
         {
             "success": true,
             "operations_completed": 2,
             "total_operations": 2,
+            "batch_id": "batch_20241208120000_1",
             "results": [
                 {
                     "index": 0,
@@ -4765,6 +4801,17 @@ async def batch_edit_doc(
         # result["preview"] = true
         # result["would_modify"] = true
         # result["operations"] = [detailed preview of each operation]
+        ```
+
+        Atomic batch undo - undo entire batch at once:
+        ```python
+        # Execute batch edit
+        result = batch_edit_doc(doc_id, operations)
+        batch_id = result["batch_id"]  # e.g., "batch_20241208120000_1"
+
+        # Later, if you need to undo the entire batch:
+        undo_doc_operation(doc_id, operation_id=batch_id)
+        # This undoes all operations in the batch atomically
         ```
     """
     import json
@@ -6390,7 +6437,7 @@ async def export_doc_as_markdown(
             .execute
         )
     except Exception as e:
-        error = DocsErrorBuilder.invalid_param(
+        error = DocsErrorBuilder.invalid_param_value(
             param_name="document_id",
             received_value=document_id,
             valid_values=["valid Google Doc ID"],
@@ -6427,7 +6474,7 @@ async def export_doc_as_markdown(
         content_size = len(markdown_content)
 
     except Exception as e:
-        error = DocsErrorBuilder.invalid_param(
+        error = DocsErrorBuilder.invalid_param_value(
             param_name="document_id",
             received_value=document_id,
             valid_values=["Google Doc with export permissions"],
@@ -6645,7 +6692,7 @@ async def get_element_context(
         return structured_error
 
     if index < 0:
-        error = DocsErrorBuilder.invalid_param(
+        error = DocsErrorBuilder.invalid_param_value(
             param_name="index",
             received_value=str(index),
             valid_values=["non-negative integer"],
@@ -8067,10 +8114,15 @@ async def undo_doc_operation(
     operation_id: str = None,
 ) -> str:
     """
-    Undo the last operation performed on a Google Doc.
+    Undo the last operation or a specific operation/batch on a Google Doc.
 
-    Reverses the most recent undoable operation by executing a compensating
-    operation (e.g., re-inserting deleted text, deleting inserted text).
+    Reverses operations by executing compensating operations (e.g., re-inserting
+    deleted text, deleting inserted text).
+
+    BATCH UNDO SUPPORT:
+    When operation_id is a batch_id (returned from batch_edit_doc), all operations
+    in that batch are undone atomically in reverse order (LIFO). This is useful
+    for reverting complex multi-step edits as a single unit.
 
     ⚠️  CRITICAL LIMITATIONS - Undo is FRAGILE:
     • SESSION-ONLY: History is LOST on server restart. No undo available after restart.
@@ -8086,6 +8138,7 @@ async def undo_doc_operation(
     • Immediately after an MCP operation made a mistake (same session)
     • When you're confident no external edits occurred since the operation
     • For simple text operations (insert, delete, replace)
+    • To undo an entire batch using the batch_id from batch_edit_doc
 
     When NOT to use:
     • After server restart (no history exists)
@@ -8100,14 +8153,18 @@ async def undo_doc_operation(
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document
-        operation_id: Specific operation ID to undo (optional, defaults to last undoable)
+        operation_id: Specific operation ID or batch_id to undo (optional, defaults to last undoable)
+            - If starts with "batch_", undoes entire batch atomically
+            - If starts with "op_", undoes single operation
+            - If None, undoes last undoable operation
 
     Returns:
         str: JSON containing:
             - success: Whether the undo was successful
             - message: Description of what was undone
-            - operation_id: ID of the undone operation
-            - reverse_operation: Details of the reverse operation executed
+            - operation_id: ID of the undone operation or batch
+            - operations_undone: Number of operations undone (for batch undo)
+            - reverse_operation: Details of the reverse operation(s) executed
             - error: Error message if undo failed
     """
     import json
@@ -8122,7 +8179,11 @@ async def undo_doc_operation(
 
     manager = get_history_manager()
 
-    # Generate the undo operation
+    # Check if this is a batch undo request
+    if operation_id and operation_id.startswith("batch_"):
+        return await _execute_batch_undo(service, document_id, operation_id, manager)
+
+    # Generate the undo operation for single operation
     undo_result = manager.generate_undo_operation(document_id)
 
     if not undo_result.success:
@@ -8201,6 +8262,7 @@ async def undo_doc_operation(
                 "success": True,
                 "message": "Successfully undone operation",
                 "operation_id": undo_result.operation_id,
+                "operations_undone": 1,
                 "reverse_operation": {
                     "type": op_type,
                     "description": reverse_op.get("description", ""),
@@ -8217,6 +8279,145 @@ async def undo_doc_operation(
                 "success": False,
                 "message": "Failed to execute undo operation",
                 "operation_id": undo_result.operation_id,
+                "error": str(e),
+            },
+            indent=2,
+        )
+
+
+async def _execute_batch_undo(
+    service: Any,
+    document_id: str,
+    batch_id: str,
+    manager,
+) -> str:
+    """
+    Execute undo for an entire batch of operations.
+
+    Args:
+        service: Google Docs service
+        document_id: ID of the document
+        batch_id: ID of the batch to undo
+        manager: HistoryManager instance
+
+    Returns:
+        JSON string with undo result
+    """
+    import json
+
+    logger.info(f"[_execute_batch_undo] Doc={document_id}, BatchID={batch_id}")
+
+    # Generate undo operations for the batch
+    undo_result = manager.generate_batch_undo_operations(document_id, batch_id)
+
+    if not undo_result.success:
+        return json.dumps(
+            {
+                "success": False,
+                "message": undo_result.message,
+                "error": undo_result.error,
+            },
+            indent=2,
+        )
+
+    reverse_batch = undo_result.reverse_operation
+    reverse_ops = reverse_batch.get("operations", [])
+
+    if not reverse_ops:
+        return json.dumps(
+            {
+                "success": False,
+                "message": "No operations to undo in batch",
+                "error": "Batch is empty or all operations already undone",
+            },
+            indent=2,
+        )
+
+    try:
+        # Build all reverse operations into a single batch request
+        requests = []
+
+        for reverse_op in reverse_ops:
+            op_type = reverse_op.get("type")
+
+            if op_type == "insert_text":
+                requests.append(
+                    create_insert_text_request(reverse_op["index"], reverse_op["text"])
+                )
+            elif op_type == "delete_text":
+                requests.append(
+                    create_delete_range_request(
+                        reverse_op["start_index"], reverse_op["end_index"]
+                    )
+                )
+            elif op_type == "replace_text":
+                # Replace = delete + insert
+                requests.append(
+                    create_delete_range_request(
+                        reverse_op["start_index"], reverse_op["end_index"]
+                    )
+                )
+                requests.append(
+                    create_insert_text_request(
+                        reverse_op["start_index"], reverse_op["text"]
+                    )
+                )
+            elif op_type == "format_text":
+                requests.append(
+                    create_format_text_request(
+                        reverse_op["start_index"],
+                        reverse_op["end_index"],
+                        reverse_op.get("bold"),
+                        reverse_op.get("italic"),
+                        reverse_op.get("underline"),
+                        reverse_op.get("font_size"),
+                        reverse_op.get("font_family"),
+                    )
+                )
+            else:
+                logger.warning(f"Skipping unknown reverse operation type: {op_type}")
+
+        if not requests:
+            return json.dumps(
+                {
+                    "success": False,
+                    "message": "No valid operations to undo in batch",
+                    "error": "All operations in batch have unsupported types for undo",
+                },
+                indent=2,
+            )
+
+        # Execute all reverse operations in a single batch
+        await asyncio.to_thread(
+            service.documents()
+            .batchUpdate(documentId=document_id, body={"requests": requests})
+            .execute
+        )
+
+        # Mark all operations in the batch as undone
+        manager.mark_batch_undone(document_id, batch_id)
+
+        result = {
+            "success": True,
+            "message": f"Successfully undone {len(reverse_ops)} operation(s) in batch",
+            "batch_id": batch_id,
+            "operations_undone": len(reverse_ops),
+            "document_link": f"https://docs.google.com/document/d/{document_id}/edit",
+        }
+
+        # Include any notes about partial undo
+        if reverse_batch.get("notes"):
+            result["notes"] = reverse_batch["notes"]
+
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        logger.error(f"Failed to execute batch undo: {str(e)}")
+        return json.dumps(
+            {
+                "success": False,
+                "message": "Failed to execute batch undo",
+                "batch_id": batch_id,
                 "error": str(e),
             },
             indent=2,
@@ -9641,19 +9842,30 @@ async def append_to_list(
     preview: bool = False,
 ) -> str:
     """
-    Append items to an existing list in a Google Doc.
+    Append multiple items to the end of an existing list in a Google Doc.
 
-    This tool adds new items to the end of an existing list without creating a new list.
-    The appended items will automatically continue the list's formatting (bullet or numbered).
+    This is the preferred tool for **bulk appending** multiple items to a list.
+    Items are always added to the END of the list. For inserting at specific
+    positions within a list, use insert_list_item instead.
+
+    WHEN TO USE THIS TOOL:
+    - Adding multiple items to a list at once
+    - Appending items to the end of a list
+    - Adding nested/hierarchical items in bulk
+
+    WHEN TO USE insert_list_item INSTEAD:
+    - Inserting a single item at a specific position (start, middle, or after/before specific text)
+    - Need precise control over where the item goes within the list
 
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document containing the list
-        items: List of strings to append as new list items
+        items: List of strings to append as new list items. Supports escape sequences
+            like \\n for newlines within items.
         list_index: Which list to append to (0-based, default 0 for first list).
             Used when not specifying search.
         search: Text to search for within a list item. If provided, appends to the
-            list containing that text.
+            list containing that text. Case-insensitive.
         nesting_levels: Optional list of integers specifying nesting level for each item (0-8).
             Must match length of 'items'. Default is 0 (top level) for all items.
             Use higher numbers for sub-items (1 = first indent, 2 = second indent, etc.)
@@ -9673,7 +9885,7 @@ async def append_to_list(
         append_to_list(document_id="abc123", items=["Follow-up task"],
                       search="existing task")
 
-        # Append nested items
+        # Append nested items (hierarchical list)
         append_to_list(document_id="abc123",
                       items=["Main point", "Sub point 1", "Sub point 2", "Another main"],
                       nesting_levels=[0, 1, 1, 0])
@@ -9682,9 +9894,11 @@ async def append_to_list(
         append_to_list(document_id="abc123", items=["Test item"], preview=True)
 
     Notes:
-        - The appended items will inherit the list type (bullet or numbered) of the target list
+        - Items inherit the list type (bullet or numbered) of the target list
+        - Works with both ordered (numbered) and unordered (bullet) lists
         - Use find_doc_elements with element_type='list' to see all lists first
         - For creating new lists, use insert_doc_elements with element_type='list'
+        - For single-item insertion at specific positions, use insert_list_item
     """
     import json
 
@@ -9899,6 +10113,391 @@ async def append_to_list(
         "new_list_range": {
             "start_index": target_list["start_index"],
             "end_index": insertion_index + len(combined_text),
+        },
+        "link": doc_link,
+    }, indent=2)
+
+
+@server.tool()
+@handle_http_errors("insert_list_item", service_type="docs")
+@require_google_service("docs", "docs_write")
+async def insert_list_item(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+    text: str,
+    position: str = "end",
+    list_index: int = 0,
+    search: str = None,
+    indent_level: int = 0,
+    preview: bool = False,
+) -> str:
+    """
+    Insert a single item at a specific position within an existing list.
+
+    This is the preferred tool for **precise single-item insertion** with control
+    over exactly where the item goes. For bulk appending multiple items to the
+    end of a list, use append_to_list instead.
+
+    WHEN TO USE THIS TOOL:
+    - Inserting a single item at the start of a list
+    - Inserting an item before or after a specific existing item
+    - Inserting an item at a specific numeric position
+    - Need precise control over item placement
+
+    WHEN TO USE append_to_list INSTEAD:
+    - Adding multiple items at once
+    - Simply appending items to the end of a list (more efficient for bulk operations)
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the document containing the list
+        text: The text content for the new list item. Supports escape sequences
+            like \\n for newlines.
+        position: Where to insert the item. Options:
+            - "start" or "0": Insert as first item in list
+            - "end" or "-1": Append to end of list (default)
+            - A number (e.g., "2"): Insert at that position (0-indexed)
+            - "after:Some text": Insert after the item containing that text (case-insensitive)
+            - "before:Some text": Insert before the item containing that text (case-insensitive)
+        list_index: Which list to target (0-based, default 0 for first list).
+            Used when not specifying search.
+        search: Text to search for within a list item. If provided, targets the
+            list containing that text. Case-insensitive.
+        indent_level: Nesting level for the new item (0-8).
+            0 = top-level item, 1 = first indent, etc.
+        preview: If True, show what would be inserted without making changes.
+
+    Returns:
+        JSON string with operation result or preview information.
+
+    Examples:
+        # Insert at start of list
+        insert_list_item(document_id="abc123", text="New first item", position="start")
+
+        # Insert at end of list (default)
+        insert_list_item(document_id="abc123", text="New last item")
+
+        # Insert at specific position (0-indexed)
+        insert_list_item(document_id="abc123", text="Third item", position="2")
+
+        # Insert after item containing specific text
+        insert_list_item(document_id="abc123", text="New item",
+                        position="after:Existing item")
+
+        # Insert before item containing specific text
+        insert_list_item(document_id="abc123", text="New item",
+                        position="before:Task to do")
+
+        # Insert nested item (as sub-item)
+        insert_list_item(document_id="abc123", text="Sub-item detail",
+                        position="after:Main point", indent_level=1)
+
+        # Preview the insertion
+        insert_list_item(document_id="abc123", text="Test item", preview=True)
+
+    Notes:
+        - Inserted items inherit the list type (bullet or numbered) of the target list
+        - Works with both ordered (numbered) and unordered (bullet) lists
+        - Use find_doc_elements with element_type='list' to see all lists first
+        - For appending multiple items at once, use append_to_list instead
+        - For creating new lists, use insert_doc_elements with element_type='list'
+    """
+    import json
+
+    logger.debug(
+        f"[insert_list_item] Doc={document_id}, text={text!r}, "
+        f"position={position}, list_index={list_index}, search={search}, "
+        f"indent_level={indent_level}"
+    )
+
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    # Validate text parameter
+    if not isinstance(text, str):
+        return validator.create_invalid_param_error(
+            param_name="text",
+            received=type(text).__name__,
+            valid_values=["string"],
+        )
+    if not text.strip():
+        return validator.create_invalid_param_error(
+            param_name="text",
+            received="empty string",
+            valid_values=["non-empty string"],
+        )
+
+    # Validate indent_level
+    if not isinstance(indent_level, int):
+        return validator.create_invalid_param_error(
+            param_name="indent_level",
+            received=type(indent_level).__name__,
+            valid_values=["integer (0-8)"],
+        )
+    if indent_level < 0 or indent_level > 8:
+        return validator.create_invalid_param_error(
+            param_name="indent_level",
+            received=str(indent_level),
+            valid_values=["integer from 0 to 8"],
+        )
+
+    # Process text with escape sequences
+    processed_text = interpret_escape_sequences(text)
+
+    doc_link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+    # Get document content
+    doc_data = await asyncio.to_thread(
+        service.documents().get(documentId=document_id).execute
+    )
+
+    # Find all lists in the document
+    all_lists = find_elements_by_type(doc_data, "list")
+
+    if not all_lists:
+        return json.dumps({
+            "error": True,
+            "code": "NO_LISTS_FOUND",
+            "message": "No lists found in the document",
+            "suggestion": "Use insert_doc_elements with element_type='list' to create a list first",
+            "link": doc_link,
+        }, indent=2)
+
+    # Find the target list
+    target_list = None
+
+    if search:
+        # Find list containing the search text
+        search_lower = search.lower()
+        for lst in all_lists:
+            for item in lst.get("items", []):
+                if search_lower in item.get("text", "").lower():
+                    target_list = lst
+                    break
+            if target_list:
+                break
+
+        if not target_list:
+            return json.dumps({
+                "error": True,
+                "code": "LIST_NOT_FOUND",
+                "message": f"No list containing text '{search}' found",
+                "suggestion": "Check the search text or use find_doc_elements "
+                              "with element_type='list' to see all lists",
+                "available_lists": len(all_lists),
+                "link": doc_link,
+            }, indent=2)
+
+    else:
+        # Use list_index
+        if list_index < 0 or list_index >= len(all_lists):
+            return json.dumps({
+                "error": True,
+                "code": "INVALID_LIST_INDEX",
+                "message": f"List index {list_index} is out of range. Document has {len(all_lists)} list(s).",
+                "suggestion": f"Use list_index between 0 and {len(all_lists) - 1}",
+                "available_lists": len(all_lists),
+                "link": doc_link,
+            }, indent=2)
+        target_list = all_lists[list_index]
+
+    # Determine list type for applying bullet formatting
+    list_type_raw = target_list.get("list_type", target_list.get("type", "bullet"))
+    if "bullet" in list_type_raw or "unordered" in list_type_raw.lower():
+        list_type = "UNORDERED"
+        list_type_display = "bullet"
+    else:
+        list_type = "ORDERED"
+        list_type_display = "numbered"
+
+    # Get list items for position calculation
+    list_items = target_list.get("items", [])
+    num_items = len(list_items)
+
+    # Parse position parameter and determine insertion index
+    insertion_index = None
+    position_description = ""
+    insert_item_index = None  # Which list item position we're inserting at
+
+    position_str = str(position).strip().lower()
+
+    if position_str in ("start", "0"):
+        # Insert at the start of the list
+        insertion_index = target_list["start_index"]
+        position_description = "at start of list"
+        insert_item_index = 0
+
+    elif position_str in ("end", "-1"):
+        # Insert at the end of the list
+        insertion_index = target_list["end_index"]
+        position_description = "at end of list"
+        insert_item_index = num_items
+
+    elif position_str.startswith("after:"):
+        # Insert after item containing specific text
+        search_text = position[6:].strip()  # Use original position to preserve case
+        if not search_text:
+            return validator.create_invalid_param_error(
+                param_name="position",
+                received="after: (empty)",
+                valid_values=["after:some text"],
+            )
+
+        search_text_lower = search_text.lower()
+        found_item = None
+        found_item_index = None
+        for i, item in enumerate(list_items):
+            if search_text_lower in item.get("text", "").lower():
+                found_item = item
+                found_item_index = i
+                break
+
+        if not found_item:
+            return json.dumps({
+                "error": True,
+                "code": "LIST_ITEM_NOT_FOUND",
+                "message": f"No list item containing text '{search_text}' found",
+                "suggestion": "Check the search text in position parameter",
+                "available_items": [item.get("text", "")[:50] for item in list_items],
+                "link": doc_link,
+            }, indent=2)
+
+        insertion_index = found_item["end_index"]
+        position_description = f"after item '{found_item.get('text', '')[:30]}...'" if len(found_item.get('text', '')) > 30 else f"after item '{found_item.get('text', '')}'"
+        insert_item_index = found_item_index + 1
+
+    elif position_str.startswith("before:"):
+        # Insert before item containing specific text
+        search_text = position[7:].strip()  # Use original position to preserve case
+        if not search_text:
+            return validator.create_invalid_param_error(
+                param_name="position",
+                received="before: (empty)",
+                valid_values=["before:some text"],
+            )
+
+        search_text_lower = search_text.lower()
+        found_item = None
+        found_item_index = None
+        for i, item in enumerate(list_items):
+            if search_text_lower in item.get("text", "").lower():
+                found_item = item
+                found_item_index = i
+                break
+
+        if not found_item:
+            return json.dumps({
+                "error": True,
+                "code": "LIST_ITEM_NOT_FOUND",
+                "message": f"No list item containing text '{search_text}' found",
+                "suggestion": "Check the search text in position parameter",
+                "available_items": [item.get("text", "")[:50] for item in list_items],
+                "link": doc_link,
+            }, indent=2)
+
+        insertion_index = found_item["start_index"]
+        position_description = f"before item '{found_item.get('text', '')[:30]}...'" if len(found_item.get('text', '')) > 30 else f"before item '{found_item.get('text', '')}'"
+        insert_item_index = found_item_index
+
+    else:
+        # Try to parse as numeric position
+        try:
+            item_position = int(position_str)
+            if item_position < 0:
+                # Negative index like Python lists
+                item_position = max(0, num_items + item_position + 1)
+            if item_position > num_items:
+                item_position = num_items  # Clamp to end
+
+            if item_position == 0:
+                insertion_index = target_list["start_index"]
+                position_description = "at position 0 (start)"
+            elif item_position >= num_items:
+                insertion_index = target_list["end_index"]
+                position_description = f"at position {item_position} (end)"
+            else:
+                insertion_index = list_items[item_position]["start_index"]
+                position_description = f"at position {item_position}"
+
+            insert_item_index = item_position
+
+        except ValueError:
+            return validator.create_invalid_param_error(
+                param_name="position",
+                received=position,
+                valid_values=[
+                    "'start' or '0'",
+                    "'end' or '-1'",
+                    "numeric index (e.g., '2')",
+                    "'after:search text'",
+                    "'before:search text'",
+                ],
+            )
+
+    # Build the text to insert with tab prefix for nesting level
+    prefix = "\t" * indent_level
+    insert_text = prefix + processed_text + "\n"
+    text_length = len(insert_text) - 1  # Exclude final newline from bullet range
+
+    # Build preview info
+    preview_info = {
+        "target_list": {
+            "type": list_type_display,
+            "start_index": target_list["start_index"],
+            "end_index": target_list["end_index"],
+            "current_items_count": num_items,
+        },
+        "insertion": {
+            "position": position_description,
+            "index": insertion_index,
+            "item_position": insert_item_index,
+        },
+        "new_item": {
+            "text": processed_text[:50] + ("..." if len(processed_text) > 50 else ""),
+            "indent_level": indent_level,
+        },
+    }
+
+    if preview:
+        return json.dumps({
+            "preview": True,
+            "message": f"Would insert item {position_description} in {list_type_display} list",
+            **preview_info,
+            "link": doc_link,
+        }, indent=2)
+
+    # Create the requests:
+    # 1. Insert the text at the calculated position
+    # 2. Apply bullet formatting to the new text
+    requests = [
+        create_insert_text_request(insertion_index, insert_text),
+        create_bullet_list_request(
+            insertion_index,
+            insertion_index + text_length,
+            list_type
+        ),
+    ]
+
+    # Execute the requests
+    await asyncio.to_thread(
+        service.documents()
+        .batchUpdate(documentId=document_id, body={"requests": requests})
+        .execute
+    )
+
+    return json.dumps({
+        "success": True,
+        "message": f"Inserted item {position_description} in {list_type_display} list",
+        "list_type": list_type_display,
+        "position": position_description,
+        "new_item_range": {
+            "start_index": insertion_index,
+            "end_index": insertion_index + len(insert_text),
         },
         "link": doc_link,
     }, indent=2)

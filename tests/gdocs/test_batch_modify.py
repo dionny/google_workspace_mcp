@@ -2795,3 +2795,194 @@ class TestBatchOperationInsertValidation:
         assert result.success is False
         # API should NOT have been called (batchUpdate)
         mock_service.documents.return_value.batchUpdate.return_value.execute.assert_not_called()
+
+
+class TestConvertToListOperation:
+    """Tests for convert_to_list operation in batch_edit_doc."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.manager = BatchOperationManager(MagicMock())
+
+    def test_calculate_convert_to_list_shift(self):
+        """Test that convert_to_list doesn't change positions."""
+        op = {
+            "type": "convert_to_list",
+            "start_index": 100,
+            "end_index": 200,
+            "list_type": "ORDERED",
+        }
+        shift, affected = self.manager._calculate_op_shift(op)
+
+        assert shift == 0  # No position change
+        assert affected["start"] == 100
+        assert affected["end"] == 200
+
+    def test_describe_convert_to_list_ordered(self):
+        """Test describing ordered list conversion."""
+        op = {
+            "type": "convert_to_list",
+            "start_index": 100,
+            "end_index": 200,
+            "list_type": "ORDERED",
+        }
+        description = self.manager._describe_operation(op)
+
+        assert "numbered list" in description
+        assert "100-200" in description
+
+    def test_describe_convert_to_list_unordered(self):
+        """Test describing unordered list conversion."""
+        op = {
+            "type": "convert_to_list",
+            "start_index": 50,
+            "end_index": 150,
+            "list_type": "UNORDERED",
+        }
+        description = self.manager._describe_operation(op)
+
+        assert "bullet list" in description
+        assert "50-150" in description
+
+    def test_describe_convert_to_list_default(self):
+        """Test describing list conversion with default type."""
+        op = {
+            "type": "convert_to_list",
+            "start_index": 50,
+            "end_index": 150,
+            # No list_type - should default to UNORDERED
+        }
+        description = self.manager._describe_operation(op)
+
+        assert "bullet list" in description
+
+    def test_convert_search_to_convert_to_list(self):
+        """Test converting search-based convert_to_list to index-based."""
+        op = {
+            "type": "convert_to_list",
+            "search": "Goals",
+            "position": "replace",
+            "list_type": "ORDERED",
+        }
+        result = self.manager._convert_search_to_index_op(op, "convert_to_list", 100, 200)
+
+        assert result["type"] == "convert_to_list"
+        assert result["start_index"] == 100
+        assert result["end_index"] == 200
+        assert result["list_type"] == "ORDERED"
+        assert "search" not in result
+        assert "position" not in result
+
+    def test_convert_range_to_convert_to_list(self):
+        """Test converting range_spec-based convert_to_list to index-based."""
+        op = {
+            "type": "convert_to_list",
+            "range_spec": {"search": "Goals", "extend": "paragraph"},
+            "list_type": "UNORDERED",
+        }
+        result = self.manager._convert_range_to_index_op(op, "convert_to_list", 50, 150)
+
+        assert result["type"] == "convert_to_list"
+        assert result["start_index"] == 50
+        assert result["end_index"] == 150
+        assert result["list_type"] == "UNORDERED"
+        assert "range_spec" not in result
+
+    def test_build_operation_request_convert_to_list(self):
+        """Test building API request for convert_to_list."""
+        op = {
+            "type": "convert_to_list",
+            "start_index": 100,
+            "end_index": 200,
+            "list_type": "ORDERED",
+        }
+        request, description = self.manager._build_operation_request(op, "convert_to_list")
+
+        # Verify request structure
+        assert "createParagraphBullets" in request
+        assert request["createParagraphBullets"]["range"]["startIndex"] == 100
+        assert request["createParagraphBullets"]["range"]["endIndex"] == 200
+        assert request["createParagraphBullets"]["bulletPreset"] == "NUMBERED_DECIMAL_ALPHA_ROMAN"
+        assert "numbered list" in description
+
+    def test_build_operation_request_convert_to_list_unordered(self):
+        """Test building API request for unordered list conversion."""
+        op = {
+            "type": "convert_to_list",
+            "start_index": 50,
+            "end_index": 150,
+            "list_type": "UNORDERED",
+        }
+        request, description = self.manager._build_operation_request(op, "convert_to_list")
+
+        assert request["createParagraphBullets"]["bulletPreset"] == "BULLET_DISC_CIRCLE_SQUARE"
+        assert "bullet list" in description
+
+    def test_build_operation_request_convert_to_list_alias(self):
+        """Test building API request using list_type aliases."""
+        # Test 'bullet' alias
+        op = {
+            "type": "convert_to_list",
+            "start_index": 100,
+            "end_index": 200,
+            "list_type": "bullet",
+        }
+        request, _ = self.manager._build_operation_request(op, "convert_to_list")
+        assert request["createParagraphBullets"]["bulletPreset"] == "BULLET_DISC_CIRCLE_SQUARE"
+
+        # Test 'numbered' alias
+        op["list_type"] = "numbered"
+        request, _ = self.manager._build_operation_request(op, "convert_to_list")
+        assert request["createParagraphBullets"]["bulletPreset"] == "NUMBERED_DECIMAL_ALPHA_ROMAN"
+
+    def test_build_operation_request_convert_to_list_missing_indices(self):
+        """Test that convert_to_list raises error for missing indices."""
+        op = {
+            "type": "convert_to_list",
+            "list_type": "ORDERED",
+            # Missing start_index and end_index
+        }
+        with pytest.raises(KeyError) as exc_info:
+            self.manager._build_operation_request(op, "convert_to_list")
+
+        assert "start_index" in str(exc_info.value) or "end_index" in str(exc_info.value)
+
+    def test_build_operation_request_convert_to_list_invalid_list_type(self):
+        """Test that convert_to_list raises error for invalid list_type."""
+        op = {
+            "type": "convert_to_list",
+            "start_index": 100,
+            "end_index": 200,
+            "list_type": "INVALID_TYPE",
+        }
+        with pytest.raises(ValueError) as exc_info:
+            self.manager._build_operation_request(op, "convert_to_list")
+
+        assert "Invalid list_type" in str(exc_info.value)
+
+    def test_build_requests_from_resolved_convert_to_list(self):
+        """Test building requests from resolved convert_to_list operations."""
+        resolved_ops = [
+            {
+                "type": "convert_to_list",
+                "start_index": 100,
+                "end_index": 200,
+                "list_type": "ORDERED",
+            }
+        ]
+        requests = self.manager._build_requests_from_resolved(resolved_ops)
+
+        assert len(requests) == 1
+        assert "createParagraphBullets" in requests[0]
+        assert requests[0]["createParagraphBullets"]["range"]["startIndex"] == 100
+        assert requests[0]["createParagraphBullets"]["range"]["endIndex"] == 200
+
+    def test_get_supported_operations_includes_convert_to_list(self):
+        """Test that get_supported_operations includes convert_to_list."""
+        supported = self.manager.get_supported_operations()
+
+        assert "convert_to_list" in supported["supported_operations"]
+        op_info = supported["supported_operations"]["convert_to_list"]
+        assert "start_index" in op_info["required"]
+        assert "end_index" in op_info["required"]
+        assert "list_type" in op_info["optional"]

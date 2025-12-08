@@ -65,6 +65,10 @@ class OperationSnapshot:
     undone: bool = False
     undone_at: Optional[datetime] = None
 
+    # Batch operation support
+    batch_id: Optional[str] = None  # Links operations in a batch for atomic undo
+    batch_index: Optional[int] = None  # Order within the batch (for LIFO undo)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         result = asdict(self)
@@ -177,6 +181,12 @@ class HistoryManager:
             )
         return self._history[document_id]
 
+    def generate_batch_id(self) -> str:
+        """Generate a unique batch ID for grouping operations."""
+        self._operation_counter += 1
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        return f"batch_{timestamp}_{self._operation_counter}"
+
     def record_operation(
         self,
         document_id: str,
@@ -190,6 +200,8 @@ class HistoryManager:
         original_formatting: Optional[Dict[str, Any]] = None,
         undo_capability: UndoCapability = UndoCapability.FULL,
         undo_notes: Optional[str] = None,
+        batch_id: Optional[str] = None,
+        batch_index: Optional[int] = None,
     ) -> OperationSnapshot:
         """
         Record an operation in history.
@@ -206,6 +218,8 @@ class HistoryManager:
             original_formatting: Original formatting before format change
             undo_capability: How well this operation can be undone
             undo_notes: Notes about undo limitations
+            batch_id: ID linking operations in a batch for atomic undo
+            batch_index: Order within the batch (for LIFO undo)
 
         Returns:
             The recorded OperationSnapshot
@@ -226,10 +240,13 @@ class HistoryManager:
             original_formatting=original_formatting,
             undo_capability=undo_capability,
             undo_notes=undo_notes,
+            batch_id=batch_id,
+            batch_index=batch_index,
         )
 
         history.add_operation(snapshot)
-        logger.info(f"Recorded operation {snapshot.id}: {operation_type} on {document_id}")
+        batch_info = f" (batch={batch_id}, idx={batch_index})" if batch_id else ""
+        logger.info(f"Recorded operation {snapshot.id}: {operation_type} on {document_id}{batch_info}")
 
         return snapshot
 
@@ -451,6 +468,130 @@ class HistoryManager:
             logger.info(f"Cleared history for document {document_id}")
             return True
         return False
+
+    def get_batch_operations(
+        self,
+        document_id: str,
+        batch_id: str,
+    ) -> List[OperationSnapshot]:
+        """
+        Get all operations belonging to a batch.
+
+        Args:
+            document_id: ID of the document
+            batch_id: ID of the batch
+
+        Returns:
+            List of operations in the batch, sorted by batch_index (ascending)
+        """
+        history = self._history.get(document_id)
+        if not history:
+            return []
+
+        batch_ops = [op for op in history.operations if op.batch_id == batch_id]
+        return sorted(batch_ops, key=lambda op: op.batch_index or 0)
+
+    def generate_batch_undo_operations(
+        self,
+        document_id: str,
+        batch_id: str,
+    ) -> UndoResult:
+        """
+        Generate reverse operations to undo an entire batch.
+
+        Operations are returned in reverse order (LIFO) for proper undo sequencing.
+
+        Args:
+            document_id: ID of the document
+            batch_id: ID of the batch to undo
+
+        Returns:
+            UndoResult with list of reverse operations in 'reverse_operations' field
+        """
+        batch_ops = self.get_batch_operations(document_id, batch_id)
+
+        if not batch_ops:
+            return UndoResult(
+                success=False,
+                message=f"No batch found with ID: {batch_id}",
+                error="Batch ID not found in history"
+            )
+
+        # Check if any operation in the batch has already been undone
+        if any(op.undone for op in batch_ops):
+            return UndoResult(
+                success=False,
+                message=f"Batch {batch_id} has already been partially or fully undone",
+                error="Some operations in the batch have already been undone"
+            )
+
+        # Check undo capability for all operations
+        non_undoable = [op for op in batch_ops if op.undo_capability == UndoCapability.NONE]
+        if non_undoable:
+            return UndoResult(
+                success=False,
+                message=f"Batch contains {len(non_undoable)} operation(s) that cannot be undone",
+                error=f"Non-undoable operations: {[op.operation_type for op in non_undoable]}"
+            )
+
+        # Generate reverse operations in reverse order (LIFO)
+        reverse_ops = []
+        partial_ops = []
+        for op in reversed(batch_ops):
+            reverse_op = self._generate_reverse_operation(op)
+            if reverse_op is None:
+                return UndoResult(
+                    success=False,
+                    message=f"Could not generate undo for operation {op.id} in batch",
+                    error=f"Missing information for undo of {op.operation_type}"
+                )
+            reverse_op['original_operation_id'] = op.id
+            reverse_ops.append(reverse_op)
+            if op.undo_capability == UndoCapability.PARTIAL:
+                partial_ops.append(op.undo_notes or f"{op.operation_type} has partial undo support")
+
+        notes = []
+        if partial_ops:
+            notes.append(f"Partial undo for {len(partial_ops)} operation(s): {'; '.join(partial_ops)}")
+
+        return UndoResult(
+            success=True,
+            message=f"Generated {len(reverse_ops)} undo operation(s) for batch {batch_id}",
+            operation_id=batch_id,
+            reverse_operation={
+                'batch_undo': True,
+                'batch_id': batch_id,
+                'operations': reverse_ops,
+                'notes': notes if notes else None,
+            }
+        )
+
+    def mark_batch_undone(
+        self,
+        document_id: str,
+        batch_id: str,
+    ) -> int:
+        """
+        Mark all operations in a batch as undone.
+
+        Args:
+            document_id: ID of the document
+            batch_id: ID of the batch
+
+        Returns:
+            Number of operations marked as undone
+        """
+        batch_ops = self.get_batch_operations(document_id, batch_id)
+        now = datetime.now(timezone.utc)
+        count = 0
+        for op in batch_ops:
+            if not op.undone:
+                op.undone = True
+                op.undone_at = now
+                count += 1
+        if count > 0:
+            logger.info(f"Marked {count} operations in batch {batch_id} as undone")
+        return count
 
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics about tracked history."""
