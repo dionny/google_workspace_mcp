@@ -105,6 +105,8 @@ async def search_docs(
             q=f"name contains '{escaped_query}' and mimeType='application/vnd.google-apps.document' and trashed=false",
             pageSize=page_size,
             fields="files(id, name, createdTime, modifiedTime, webViewLink)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
         )
         .execute
     )
@@ -270,7 +272,7 @@ async def get_doc_content(
 
     file_metadata = await asyncio.to_thread(
         drive_service.files()
-        .get(fileId=document_id, fields="id, name, mimeType, webViewLink")
+        .get(fileId=document_id, fields="id, name, mimeType, webViewLink", supportsAllDrives=True)
         .execute
     )
     mime_type = file_metadata.get("mimeType", "")
@@ -290,10 +292,10 @@ async def get_doc_content(
 
     request_obj = (
         drive_service.files().export_media(
-            fileId=document_id, mimeType=effective_export_mime
+            fileId=document_id, mimeType=effective_export_mime, supportsAllDrives=True
         )
         if effective_export_mime
-        else drive_service.files().get_media(fileId=document_id)
+        else drive_service.files().get_media(fileId=document_id, supportsAllDrives=True)
     )
 
     fh = io.BytesIO()
@@ -346,6 +348,8 @@ async def list_docs_in_folder(
             q=f"'{folder_id}' in parents and mimeType='application/vnd.google-apps.document' and trashed=false",
             pageSize=page_size,
             fields="files(id, name, modifiedTime, webViewLink)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
         )
         .execute
     )
@@ -3798,7 +3802,7 @@ async def insert_doc_image(
         try:
             file_metadata = await asyncio.to_thread(
                 drive_service.files()
-                .get(fileId=image_source, fields="id, name, mimeType")
+                .get(fileId=image_source, fields="id, name, mimeType", supportsAllDrives=True)
                 .execute
             )
             mime_type = file_metadata.get("mimeType", "")
@@ -6123,7 +6127,7 @@ async def export_doc_to_pdf(
     try:
         file_metadata = await asyncio.to_thread(
             service.files()
-            .get(fileId=document_id, fields="id, name, mimeType, webViewLink")
+            .get(fileId=document_id, fields="id, name, mimeType, webViewLink", supportsAllDrives=True)
             .execute
         )
     except Exception as e:
@@ -6146,7 +6150,7 @@ async def export_doc_to_pdf(
     # Export the document as PDF
     try:
         request_obj = service.files().export_media(
-            fileId=document_id, mimeType="application/pdf"
+            fileId=document_id, mimeType="application/pdf", supportsAllDrives=True
         )
 
         fh = io.BytesIO()
