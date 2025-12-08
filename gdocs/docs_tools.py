@@ -139,19 +139,134 @@ async def get_doc_content(
     docs_service: Any,
     user_google_email: str,
     document_id: str,
+    format: Literal["plain", "formatted"] = "plain",
+    scope: Literal["full", "section", "range"] = "full",
+    heading: str = None,
+    start_index: int = None,
+    end_index: int = None,
+    include_subsections: bool = True,
+    match_case: bool = False,
 ) -> str:
     """
-    Retrieves content of a Google Doc or a Drive file (like .docx) identified by document_id.
-    - Native Google Docs: Fetches content via Docs API (tried first for consistency).
-    - Office files (.docx, etc.) stored in Drive: Downloads via Drive API and extracts text.
+    Retrieves content of a Google Doc with flexible scope and format options.
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the Google Doc to read
+        format: Output format - "plain" for text only, "formatted" for text with style info
+        scope: What to retrieve - "full" (entire doc), "section" (by heading), "range" (by indices)
+        heading: Required if scope="section" - the heading text to find
+        start_index: Required if scope="range" - starting character position
+        end_index: Required if scope="range" - ending character position
+        include_subsections: For scope="section", include subsection metadata (default: True)
+        match_case: For scope="section", match heading case exactly (default: False)
 
     Returns:
-        str: The document content with metadata header.
+        str: Document content. Format depends on parameters:
+            - plain/full: Plain text with metadata header
+            - plain/section: Plain text of section with structural metadata
+            - plain/range: Plain text of the specified range
+            - formatted/*: JSON with text and formatting spans (bold, italic, font_size, etc.)
+
+    Examples:
+        # Get full document as plain text
+        get_doc_content(document_id="abc123")
+
+        # Get a section by heading
+        get_doc_content(document_id="abc123", scope="section", heading="Introduction")
+
+        # Get a range with formatting info
+        get_doc_content(document_id="abc123", format="formatted", scope="range",
+                       start_index=100, end_index=200)
     """
     logger.info(
-        f"[get_doc_content] Invoked. Document/File ID: '{document_id}' for user '{user_google_email}'"
+        f"[get_doc_content] Invoked. Doc={document_id}, format={format}, scope={scope}, "
+        f"heading={heading}, range={start_index}-{end_index}"
     )
 
+    # Input validation
+    validator = ValidationManager()
+
+    is_valid, structured_error = validator.validate_document_id_structured(document_id)
+    if not is_valid:
+        return structured_error
+
+    # Validate scope-specific parameters
+    if scope == "section" and not heading:
+        error = DocsErrorBuilder.invalid_param(
+            param_name="heading",
+            received_value="None",
+            valid_values=["heading text string"],
+            context_description="heading is required when scope='section'",
+        )
+        return format_error(error)
+
+    if scope == "range":
+        if start_index is None or end_index is None:
+            error = DocsErrorBuilder.invalid_param(
+                param_name="start_index/end_index",
+                received_value=f"start={start_index}, end={end_index}",
+                valid_values=["both start_index and end_index must be provided"],
+                context_description="start_index and end_index are required when scope='range'",
+            )
+            return format_error(error)
+        if start_index < 0 or end_index <= start_index:
+            error = DocsErrorBuilder.invalid_param(
+                param_name="range",
+                received_value=f"{start_index}-{end_index}",
+                valid_values=["start_index >= 0 and end_index > start_index"],
+                context_description="invalid range",
+            )
+            return format_error(error)
+
+    # For section or range scope, or formatted output, we need the Docs API
+    # For full plain text, we can also handle .docx files via Drive API fallback
+    if scope != "full" or format == "formatted":
+        # Must be a native Google Doc for these operations
+        try:
+            doc_data = await asyncio.to_thread(
+                docs_service.documents().get(documentId=document_id).execute
+            )
+        except HttpError as e:
+            if e.resp.status == 400:
+                return format_error(DocsErrorBuilder.invalid_param(
+                    param_name="document_id",
+                    received_value=document_id,
+                    valid_values=["native Google Doc ID"],
+                    context_description=f"scope='{scope}' or format='formatted' requires a native Google Doc, not a .docx file",
+                ))
+            raise
+
+        file_name = doc_data.get("title", "Untitled Document")
+        web_view_link = f"https://docs.google.com/document/d/{document_id}/edit"
+
+        # Handle section scope
+        if scope == "section":
+            return await _get_doc_content_section(
+                doc_data, document_id, file_name, web_view_link,
+                heading, include_subsections, match_case, format
+            )
+
+        # Handle range scope
+        if scope == "range":
+            return await _get_doc_content_range(
+                doc_data, document_id, file_name, web_view_link,
+                start_index, end_index, format
+            )
+
+        # Handle full doc with formatted output
+        if format == "formatted":
+            # Get formatting for entire document
+            body = doc_data.get("body", {})
+            content = body.get("content", [])
+            if content:
+                doc_end = content[-1].get("endIndex", 1)
+                return await _get_doc_content_range(
+                    doc_data, document_id, file_name, web_view_link,
+                    1, doc_end, format
+                )
+
+    # Full document, plain text - original behavior with .docx fallback
     # Tab header format constant
     TAB_HEADER_FORMAT = "\n--- TAB: {tab_name} ---\n"
 
@@ -324,6 +439,113 @@ async def get_doc_content(
         f"Link: {web_view_link}\n\n--- CONTENT ---\n"
     )
     return header + body_text
+
+
+async def _get_doc_content_section(
+    doc_data: dict,
+    document_id: str,
+    file_name: str,
+    web_view_link: str,
+    heading: str,
+    include_subsections: bool,
+    match_case: bool,
+    format: str,
+) -> str:
+    """Helper to get content of a specific section by heading."""
+    import json
+
+    # Find the section by heading
+    section_info = find_section_by_heading(doc_data, heading, match_case)
+    if section_info is None:
+        # Get available headings to help user
+        all_headings = get_all_headings(doc_data)
+        heading_list = [h["text"] for h in all_headings[:10]]
+        error = DocsErrorBuilder.invalid_param(
+            param_name="heading",
+            received_value=heading,
+            valid_values=heading_list if heading_list else ["(no headings found in document)"],
+            context_description="section heading not found",
+        )
+        return format_error(error)
+
+    start_idx = section_info["start_index"]
+    end_idx = section_info["end_index"]
+    section_text = section_info["content"]
+
+    if format == "formatted":
+        # Return with formatting info
+        formatting_spans = _extract_text_formatting_from_range(doc_data, start_idx, end_idx)
+        has_mixed = _has_mixed_formatting(formatting_spans)
+
+        result = {
+            "heading": section_info["heading"],
+            "level": section_info["level"],
+            "start_index": start_idx,
+            "end_index": end_idx,
+            "text": section_text,
+            "formatting": formatting_spans,
+            "has_mixed_formatting": has_mixed,
+        }
+
+        if include_subsections:
+            result["subsections"] = section_info.get("subsections", [])
+
+        return f"Section '{heading}' with formatting:\n\n{json.dumps(result, indent=2)}\n\nLink: {web_view_link}"
+
+    # Plain text output
+    result = {
+        "heading": section_info["heading"],
+        "level": section_info["level"],
+        "start_index": start_idx,
+        "end_index": end_idx,
+        "content": section_text,
+    }
+
+    if include_subsections:
+        result["subsections"] = section_info.get("subsections", [])
+
+    return f"Section '{heading}':\n\n{json.dumps(result, indent=2)}\n\nLink: {web_view_link}"
+
+
+async def _get_doc_content_range(
+    doc_data: dict,
+    document_id: str,
+    file_name: str,
+    web_view_link: str,
+    start_index: int,
+    end_index: int,
+    format: str,
+) -> str:
+    """Helper to get content of a specific range."""
+    import json
+
+    if format == "formatted":
+        # Return with formatting info
+        formatting_spans = _extract_text_formatting_from_range(doc_data, start_index, end_index)
+        all_text = "".join(span.get("text", "") for span in formatting_spans)
+        has_mixed = _has_mixed_formatting(formatting_spans)
+
+        result = {
+            "start_index": start_index,
+            "end_index": end_index,
+            "text": all_text,
+            "formatting": formatting_spans,
+            "has_mixed_formatting": has_mixed,
+        }
+
+        summary = f"Found {len(formatting_spans)} formatting span(s) in range {start_index}-{end_index}"
+        return f"{summary}:\n\n{json.dumps(result, indent=2)}\n\nLink: {web_view_link}"
+
+    # Plain text output
+    range_text = extract_text_in_range(doc_data, start_index, end_index)
+
+    result = {
+        "start_index": start_index,
+        "end_index": end_index,
+        "text": range_text,
+    }
+
+    return f"Range {start_index}-{end_index} in document {document_id}:\n\n{json.dumps(result, indent=2)}\n\nLink: {web_view_link}"
 
 
 @server.tool()
@@ -6222,6 +6444,103 @@ async def export_doc_to_pdf(
             stage="upload",
             error_detail=f"{str(e)}. PDF was generated successfully ({pdf_size:,} bytes) but could not be saved to Drive.",
         )
+
+
+@server.tool()
+@handle_http_errors("export_doc_as_markdown", service_type="drive")
+@require_google_service("drive", "drive_read")
+async def export_doc_as_markdown(
+    service: Any,
+    user_google_email: str,
+    document_id: str,
+) -> str:
+    """
+    Exports a Google Doc to Markdown format.
+
+    This uses Google's native markdown export (available since July 2024) to convert
+    the entire document to markdown, preserving headings, lists, bold, italic, links,
+    and other formatting that can be represented in markdown.
+
+    Args:
+        user_google_email: User's Google email address
+        document_id: ID of the Google Doc to export
+
+    Returns:
+        str: The document content in markdown format with metadata header
+
+    Note:
+        This exports the ENTIRE document. For partial content, use get_doc_content
+        with scope="section" or scope="range".
+    """
+    logger.info(
+        f"[export_doc_as_markdown] Email={user_google_email}, Doc={document_id}"
+    )
+
+    # Input validation
+    validator = ValidationManager()
+
+    # Get file metadata first to validate it's a Google Doc
+    try:
+        file_metadata = await asyncio.to_thread(
+            service.files()
+            .get(fileId=document_id, fields="id, name, mimeType, webViewLink", supportsAllDrives=True)
+            .execute
+        )
+    except Exception as e:
+        error = DocsErrorBuilder.invalid_param(
+            param_name="document_id",
+            received_value=document_id,
+            valid_values=["valid Google Doc ID"],
+            context_description=f"Failed to access document: {str(e)}",
+        )
+        return format_error(error)
+
+    mime_type = file_metadata.get("mimeType", "")
+    original_name = file_metadata.get("name", "Unknown Document")
+    web_view_link = file_metadata.get("webViewLink", "#")
+
+    # Verify it's a Google Doc
+    if mime_type != "application/vnd.google-apps.document":
+        return validator.create_invalid_document_type_error(
+            document_id=document_id, file_name=original_name, actual_mime_type=mime_type
+        )
+
+    logger.info(f"[export_doc_as_markdown] Exporting '{original_name}' to Markdown")
+
+    # Export the document as Markdown
+    try:
+        request_obj = service.files().export_media(
+            fileId=document_id, mimeType="text/markdown"
+        )
+
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request_obj)
+
+        done = False
+        while not done:
+            _, done = await asyncio.to_thread(downloader.next_chunk)
+
+        markdown_content = fh.getvalue().decode("utf-8")
+        content_size = len(markdown_content)
+
+    except Exception as e:
+        error = DocsErrorBuilder.invalid_param(
+            param_name="document_id",
+            received_value=document_id,
+            valid_values=["Google Doc with export permissions"],
+            context_description=f"Failed to export to markdown: {str(e)}",
+        )
+        return format_error(error)
+
+    header = (
+        f'# Markdown Export: "{original_name}"\n'
+        f"Document ID: {document_id}\n"
+        f"Size: {content_size:,} characters\n"
+        f"Link: {web_view_link}\n\n"
+        f"---\n\n"
+    )
+
+    return header + markdown_content
 
 
 @server.tool()
