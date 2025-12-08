@@ -750,6 +750,165 @@ async def delete_columns(
     return text_output
 
 
+@server.tool()
+@handle_http_errors("delete_sheet", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def delete_sheet(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+) -> str:
+    """
+    Deletes a sheet from a spreadsheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_id (int): The ID of the sheet to delete (not the sheet name). Required.
+            Use get_spreadsheet_info to find sheet IDs.
+
+    Returns:
+        str: Confirmation message of the successful sheet deletion.
+
+    Note:
+        A spreadsheet must have at least one sheet. Attempting to delete the last
+        remaining sheet will result in an error.
+    """
+    logger.info(
+        f"[delete_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet ID: {sheet_id}"
+    )
+
+    request_body = {"requests": [{"deleteSheet": {"sheetId": sheet_id}}]}
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully deleted sheet ID {sheet_id} from spreadsheet {spreadsheet_id} "
+        f"for {user_google_email}."
+    )
+
+    logger.info(f"Successfully deleted sheet ID {sheet_id} for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("rename_sheet", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def rename_sheet(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    new_name: str,
+) -> str:
+    """
+    Renames a sheet within a spreadsheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_id (int): The ID of the sheet to rename (not the sheet name). Required.
+            Use get_spreadsheet_info to find sheet IDs.
+        new_name (str): The new name for the sheet. Required.
+
+    Returns:
+        str: Confirmation message of the successful sheet rename.
+    """
+    logger.info(
+        f"[rename_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"Sheet ID: {sheet_id}, New Name: '{new_name}'"
+    )
+
+    request_body = {
+        "requests": [
+            {
+                "updateSheetProperties": {
+                    "properties": {"sheetId": sheet_id, "title": new_name},
+                    "fields": "title",
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully renamed sheet ID {sheet_id} to '{new_name}' in spreadsheet {spreadsheet_id} "
+        f"for {user_google_email}."
+    )
+
+    logger.info(
+        f"Successfully renamed sheet ID {sheet_id} to '{new_name}' for {user_google_email}."
+    )
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("copy_sheet", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def copy_sheet(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    new_name: Optional[str] = None,
+) -> str:
+    """
+    Creates a copy of a sheet within the same spreadsheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_id (int): The ID of the sheet to copy (not the sheet name). Required.
+            Use get_spreadsheet_info to find sheet IDs.
+        new_name (Optional[str]): The name for the new sheet. If not provided,
+            Google Sheets will generate a name like "Copy of [original name]".
+
+    Returns:
+        str: Confirmation message including the new sheet's ID and name.
+    """
+    logger.info(
+        f"[copy_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"Sheet ID: {sheet_id}, New Name: {new_name or '(auto-generated)'}"
+    )
+
+    duplicate_request = {"sourceSheetId": sheet_id}
+    if new_name:
+        duplicate_request["newSheetName"] = new_name
+
+    request_body = {"requests": [{"duplicateSheet": duplicate_request}]}
+
+    response = await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Extract the new sheet info from the response
+    new_sheet_props = response["replies"][0]["duplicateSheet"]["properties"]
+    new_sheet_id = new_sheet_props["sheetId"]
+    new_sheet_title = new_sheet_props["title"]
+
+    text_output = (
+        f"Successfully copied sheet ID {sheet_id} to new sheet '{new_sheet_title}' (ID: {new_sheet_id}) "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(
+        f"Successfully copied sheet ID {sheet_id} to new sheet ID {new_sheet_id} for {user_google_email}."
+    )
+    return text_output
+
+
 # Create comment management tools for sheets
 _comment_tools = create_comment_tools("spreadsheet", "spreadsheet_id")
 
