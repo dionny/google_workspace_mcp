@@ -1,3 +1,9 @@
+[project]
+name = "google-workspace-mcp"
+version = "0.1.0"
+description = "MCP server for Google Workspace APIs"
+requires-python = ">=3.11"
+
 # Pytest configuration for Google Workspace MCP tests
 
 [tool.pytest.ini_options]
