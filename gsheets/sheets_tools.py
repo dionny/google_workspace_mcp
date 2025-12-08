@@ -1634,6 +1634,569 @@ async def unmerge_cells(
     return text_output
 
 
+@server.tool()
+@handle_http_errors("batch_update_sheet", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def batch_update_sheet(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    operations: Union[str, List[dict]],
+) -> str:
+    """
+    Performs multiple sheet operations in a single atomic API call for efficiency.
+
+    This tool allows combining multiple formatting, structural, and layout operations
+    into a single request. All operations succeed or fail together (atomic).
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        operations (Union[str, List[dict]]): JSON array or Python list of operations. Required.
+            Each operation must have a "type" field and type-specific parameters.
+
+    Supported operation types:
+
+    1. format_cells - Apply cell formatting
+        - sheet_id (int): Sheet ID. Required.
+        - range (str): Range in A1 notation (e.g., 'A1:C10'). Required.
+        - bold (bool): Make text bold.
+        - italic (bool): Make text italic.
+        - underline (bool): Underline text.
+        - strikethrough (bool): Strikethrough text.
+        - font_size (int): Font size in points.
+        - font_family (str): Font family name.
+        - text_color (str): Text color as hex (e.g., '#FF0000').
+        - background_color (str): Background color as hex.
+        - horizontal_alignment (str): 'LEFT', 'CENTER', or 'RIGHT'.
+        - vertical_alignment (str): 'TOP', 'MIDDLE', or 'BOTTOM'.
+        - number_format_type (str): 'TEXT', 'NUMBER', 'PERCENT', 'CURRENCY', 'DATE', 'TIME', 'DATE_TIME', 'SCIENTIFIC'.
+        - number_format_pattern (str): Format pattern (e.g., '$#,##0.00').
+        - wrap_strategy (str): 'OVERFLOW_CELL', 'LEGACY_WRAP', 'CLIP', 'WRAP'.
+
+    2. freeze_panes - Freeze rows/columns
+        - sheet_id (int): Sheet ID. Required.
+        - frozen_row_count (int): Rows to freeze from top. Defaults to 0.
+        - frozen_column_count (int): Columns to freeze from left. Defaults to 0.
+
+    3. set_column_width - Set column width
+        - sheet_id (int): Sheet ID. Required.
+        - start_index (int): Start column index (0-based, A=0). Required.
+        - end_index (int): End column index (exclusive). Required.
+        - width (int): Width in pixels. Required.
+
+    4. set_row_height - Set row height
+        - sheet_id (int): Sheet ID. Required.
+        - start_index (int): Start row index (0-based). Required.
+        - end_index (int): End row index (exclusive). Required.
+        - height (int): Height in pixels. Required.
+
+    5. merge_cells - Merge cells
+        - sheet_id (int): Sheet ID. Required.
+        - range (str): Range in A1 notation. Required.
+        - merge_type (str): 'MERGE_ALL', 'MERGE_COLUMNS', or 'MERGE_ROWS'. Defaults to 'MERGE_ALL'.
+
+    6. unmerge_cells - Unmerge cells
+        - sheet_id (int): Sheet ID. Required.
+        - range (str): Range in A1 notation. Required.
+
+    7. sort_range - Sort data in a range
+        - sheet_id (int): Sheet ID. Required.
+        - range (str): Range in A1 notation. Required.
+        - sort_specs (list): List of {column_index, order} dicts. Required.
+
+    Returns:
+        str: Summary of all operations performed.
+
+    Example:
+        # Format header, freeze it, and set column widths in one call
+        batch_update_sheet(
+            spreadsheet_id="abc123",
+            operations='[
+                {"type": "format_cells", "sheet_id": 0, "range": "A1:D1", "bold": true, "background_color": "#E0E0E0"},
+                {"type": "freeze_panes", "sheet_id": 0, "frozen_row_count": 1},
+                {"type": "set_column_width", "sheet_id": 0, "start_index": 0, "end_index": 4, "width": 150}
+            ]'
+        )
+    """
+    logger.info(
+        f"[batch_update_sheet] Invoked. Email: '{user_google_email}', "
+        f"Spreadsheet: {spreadsheet_id}"
+    )
+
+    # Parse operations if it's a JSON string
+    if isinstance(operations, str):
+        try:
+            parsed_operations = json.loads(operations)
+            if not isinstance(parsed_operations, list):
+                raise ValueError(
+                    f"operations must be a list, got {type(parsed_operations).__name__}"
+                )
+            operations = parsed_operations
+            logger.info(
+                f"[batch_update_sheet] Parsed JSON string to list with {len(operations)} operations"
+            )
+        except json.JSONDecodeError as e:
+            raise Exception(f"Invalid JSON format for operations: {e}")
+        except ValueError as e:
+            raise Exception(f"Invalid operations structure: {e}")
+
+    if not operations:
+        raise Exception("operations must not be empty.")
+
+    # Build the requests list
+    requests = []
+    operation_summaries = []
+
+    for i, op in enumerate(operations):
+        if not isinstance(op, dict):
+            raise Exception(f"operations[{i}] must be a dict, got {type(op).__name__}")
+
+        op_type = op.get("type")
+        if not op_type:
+            raise Exception(f"operations[{i}] missing required 'type' field")
+
+        try:
+            if op_type == "format_cells":
+                request, summary = _build_format_cells_request(op, i)
+                requests.append(request)
+                operation_summaries.append(summary)
+
+            elif op_type == "freeze_panes":
+                request, summary = _build_freeze_panes_request(op, i)
+                requests.append(request)
+                operation_summaries.append(summary)
+
+            elif op_type == "set_column_width":
+                request, summary = _build_set_column_width_request(op, i)
+                requests.append(request)
+                operation_summaries.append(summary)
+
+            elif op_type == "set_row_height":
+                request, summary = _build_set_row_height_request(op, i)
+                requests.append(request)
+                operation_summaries.append(summary)
+
+            elif op_type == "merge_cells":
+                request, summary = _build_merge_cells_request(op, i)
+                requests.append(request)
+                operation_summaries.append(summary)
+
+            elif op_type == "unmerge_cells":
+                request, summary = _build_unmerge_cells_request(op, i)
+                requests.append(request)
+                operation_summaries.append(summary)
+
+            elif op_type == "sort_range":
+                request, summary = _build_sort_range_request(op, i)
+                requests.append(request)
+                operation_summaries.append(summary)
+
+            else:
+                raise Exception(
+                    f"operations[{i}] has unknown type '{op_type}'. "
+                    f"Supported types: format_cells, freeze_panes, set_column_width, "
+                    f"set_row_height, merge_cells, unmerge_cells, sort_range"
+                )
+        except Exception as e:
+            raise Exception(f"Error in operations[{i}] ({op_type}): {e}")
+
+    # Execute the batch update
+    request_body = {"requests": requests}
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Build the summary message
+    summary_text = "\n".join(
+        f"  {i + 1}. {s}" for i, s in enumerate(operation_summaries)
+    )
+    text_output = (
+        f"Successfully executed {len(operations)} operation(s) on spreadsheet "
+        f"{spreadsheet_id} for {user_google_email}:\n{summary_text}"
+    )
+
+    logger.info(
+        f"Successfully executed {len(operations)} operations for {user_google_email}."
+    )
+    return text_output
+
+
+def _build_format_cells_request(op: dict, index: int) -> tuple:
+    """Build a repeatCell request for format_cells operation."""
+    sheet_id = op.get("sheet_id")
+    range_name = op.get("range")
+
+    if sheet_id is None:
+        raise ValueError("missing required 'sheet_id' field")
+    if not range_name:
+        raise ValueError("missing required 'range' field")
+
+    # Build the cell format object
+    cell_format = {}
+    fields = []
+    format_parts = []
+
+    # Text format options
+    text_format = {}
+    if op.get("bold") is not None:
+        text_format["bold"] = op["bold"]
+        fields.append("userEnteredFormat.textFormat.bold")
+        format_parts.append(f"bold={op['bold']}")
+    if op.get("italic") is not None:
+        text_format["italic"] = op["italic"]
+        fields.append("userEnteredFormat.textFormat.italic")
+        format_parts.append(f"italic={op['italic']}")
+    if op.get("underline") is not None:
+        text_format["underline"] = op["underline"]
+        fields.append("userEnteredFormat.textFormat.underline")
+        format_parts.append(f"underline={op['underline']}")
+    if op.get("strikethrough") is not None:
+        text_format["strikethrough"] = op["strikethrough"]
+        fields.append("userEnteredFormat.textFormat.strikethrough")
+        format_parts.append(f"strikethrough={op['strikethrough']}")
+    if op.get("font_size") is not None:
+        text_format["fontSize"] = op["font_size"]
+        fields.append("userEnteredFormat.textFormat.fontSize")
+        format_parts.append(f"fontSize={op['font_size']}")
+    if op.get("font_family") is not None:
+        text_format["fontFamily"] = op["font_family"]
+        fields.append("userEnteredFormat.textFormat.fontFamily")
+        format_parts.append(f"fontFamily={op['font_family']}")
+    if op.get("text_color") is not None:
+        text_format["foregroundColor"] = _parse_hex_color(op["text_color"])
+        fields.append("userEnteredFormat.textFormat.foregroundColor")
+        format_parts.append(f"textColor={op['text_color']}")
+
+    if text_format:
+        cell_format["textFormat"] = text_format
+
+    # Background color
+    if op.get("background_color") is not None:
+        cell_format["backgroundColor"] = _parse_hex_color(op["background_color"])
+        fields.append("userEnteredFormat.backgroundColor")
+        format_parts.append(f"backgroundColor={op['background_color']}")
+
+    # Horizontal alignment
+    if op.get("horizontal_alignment") is not None:
+        valid_h = ["LEFT", "CENTER", "RIGHT"]
+        if op["horizontal_alignment"].upper() not in valid_h:
+            raise ValueError(
+                f"horizontal_alignment must be one of {valid_h}, "
+                f"got '{op['horizontal_alignment']}'"
+            )
+        cell_format["horizontalAlignment"] = op["horizontal_alignment"].upper()
+        fields.append("userEnteredFormat.horizontalAlignment")
+        format_parts.append(f"hAlign={op['horizontal_alignment']}")
+
+    # Vertical alignment
+    if op.get("vertical_alignment") is not None:
+        valid_v = ["TOP", "MIDDLE", "BOTTOM"]
+        if op["vertical_alignment"].upper() not in valid_v:
+            raise ValueError(
+                f"vertical_alignment must be one of {valid_v}, "
+                f"got '{op['vertical_alignment']}'"
+            )
+        cell_format["verticalAlignment"] = op["vertical_alignment"].upper()
+        fields.append("userEnteredFormat.verticalAlignment")
+        format_parts.append(f"vAlign={op['vertical_alignment']}")
+
+    # Number format
+    if (
+        op.get("number_format_type") is not None
+        or op.get("number_format_pattern") is not None
+    ):
+        number_format = {}
+        if op.get("number_format_type") is not None:
+            valid_types = [
+                "TEXT",
+                "NUMBER",
+                "PERCENT",
+                "CURRENCY",
+                "DATE",
+                "TIME",
+                "DATE_TIME",
+                "SCIENTIFIC",
+            ]
+            if op["number_format_type"].upper() not in valid_types:
+                raise ValueError(
+                    f"number_format_type must be one of {valid_types}, "
+                    f"got '{op['number_format_type']}'"
+                )
+            number_format["type"] = op["number_format_type"].upper()
+            format_parts.append(f"numType={op['number_format_type']}")
+        if op.get("number_format_pattern") is not None:
+            number_format["pattern"] = op["number_format_pattern"]
+            format_parts.append(f"numPattern={op['number_format_pattern']}")
+        cell_format["numberFormat"] = number_format
+        fields.append("userEnteredFormat.numberFormat")
+
+    # Wrap strategy
+    if op.get("wrap_strategy") is not None:
+        valid_wrap = ["OVERFLOW_CELL", "LEGACY_WRAP", "CLIP", "WRAP"]
+        if op["wrap_strategy"].upper() not in valid_wrap:
+            raise ValueError(
+                f"wrap_strategy must be one of {valid_wrap}, "
+                f"got '{op['wrap_strategy']}'"
+            )
+        cell_format["wrapStrategy"] = op["wrap_strategy"].upper()
+        fields.append("userEnteredFormat.wrapStrategy")
+        format_parts.append(f"wrap={op['wrap_strategy']}")
+
+    if not cell_format:
+        raise ValueError("at least one formatting option must be specified")
+
+    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
+
+    request = {
+        "repeatCell": {
+            "range": grid_range,
+            "cell": {"userEnteredFormat": cell_format},
+            "fields": ",".join(fields),
+        }
+    }
+
+    summary = f"format_cells: {range_name} ({', '.join(format_parts)})"
+    return request, summary
+
+
+def _build_freeze_panes_request(op: dict, index: int) -> tuple:
+    """Build an updateSheetProperties request for freeze_panes operation."""
+    sheet_id = op.get("sheet_id")
+    if sheet_id is None:
+        raise ValueError("missing required 'sheet_id' field")
+
+    frozen_row_count = op.get("frozen_row_count", 0)
+    frozen_column_count = op.get("frozen_column_count", 0)
+
+    if frozen_row_count < 0:
+        raise ValueError(f"frozen_row_count must be >= 0, got {frozen_row_count}")
+    if frozen_column_count < 0:
+        raise ValueError(f"frozen_column_count must be >= 0, got {frozen_column_count}")
+
+    grid_properties = {
+        "frozenRowCount": frozen_row_count,
+        "frozenColumnCount": frozen_column_count,
+    }
+
+    request = {
+        "updateSheetProperties": {
+            "properties": {
+                "sheetId": sheet_id,
+                "gridProperties": grid_properties,
+            },
+            "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
+        }
+    }
+
+    summary = (
+        f"freeze_panes: {frozen_row_count} row(s), {frozen_column_count} column(s)"
+    )
+    return request, summary
+
+
+def _build_set_column_width_request(op: dict, index: int) -> tuple:
+    """Build an updateDimensionProperties request for set_column_width operation."""
+    sheet_id = op.get("sheet_id")
+    start_index = op.get("start_index")
+    end_index = op.get("end_index")
+    width = op.get("width")
+
+    if sheet_id is None:
+        raise ValueError("missing required 'sheet_id' field")
+    if start_index is None:
+        raise ValueError("missing required 'start_index' field")
+    if end_index is None:
+        raise ValueError("missing required 'end_index' field")
+    if width is None:
+        raise ValueError("missing required 'width' field")
+
+    if start_index < 0:
+        raise ValueError(f"start_index must be >= 0, got {start_index}")
+    if end_index <= start_index:
+        raise ValueError(
+            f"end_index ({end_index}) must be > start_index ({start_index})"
+        )
+    if width <= 0:
+        raise ValueError(f"width must be > 0, got {width}")
+
+    request = {
+        "updateDimensionProperties": {
+            "range": {
+                "sheetId": sheet_id,
+                "dimension": "COLUMNS",
+                "startIndex": start_index,
+                "endIndex": end_index,
+            },
+            "properties": {"pixelSize": width},
+            "fields": "pixelSize",
+        }
+    }
+
+    summary = f"set_column_width: columns {start_index}-{end_index - 1} to {width}px"
+    return request, summary
+
+
+def _build_set_row_height_request(op: dict, index: int) -> tuple:
+    """Build an updateDimensionProperties request for set_row_height operation."""
+    sheet_id = op.get("sheet_id")
+    start_index = op.get("start_index")
+    end_index = op.get("end_index")
+    height = op.get("height")
+
+    if sheet_id is None:
+        raise ValueError("missing required 'sheet_id' field")
+    if start_index is None:
+        raise ValueError("missing required 'start_index' field")
+    if end_index is None:
+        raise ValueError("missing required 'end_index' field")
+    if height is None:
+        raise ValueError("missing required 'height' field")
+
+    if start_index < 0:
+        raise ValueError(f"start_index must be >= 0, got {start_index}")
+    if end_index <= start_index:
+        raise ValueError(
+            f"end_index ({end_index}) must be > start_index ({start_index})"
+        )
+    if height <= 0:
+        raise ValueError(f"height must be > 0, got {height}")
+
+    request = {
+        "updateDimensionProperties": {
+            "range": {
+                "sheetId": sheet_id,
+                "dimension": "ROWS",
+                "startIndex": start_index,
+                "endIndex": end_index,
+            },
+            "properties": {"pixelSize": height},
+            "fields": "pixelSize",
+        }
+    }
+
+    summary = f"set_row_height: rows {start_index}-{end_index - 1} to {height}px"
+    return request, summary
+
+
+def _build_merge_cells_request(op: dict, index: int) -> tuple:
+    """Build a mergeCells request for merge_cells operation."""
+    sheet_id = op.get("sheet_id")
+    range_name = op.get("range")
+    merge_type = op.get("merge_type", "MERGE_ALL")
+
+    if sheet_id is None:
+        raise ValueError("missing required 'sheet_id' field")
+    if not range_name:
+        raise ValueError("missing required 'range' field")
+
+    valid_merge_types = ["MERGE_ALL", "MERGE_COLUMNS", "MERGE_ROWS"]
+    if merge_type.upper() not in valid_merge_types:
+        raise ValueError(
+            f"merge_type must be one of {valid_merge_types}, got '{merge_type}'"
+        )
+
+    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
+
+    request = {
+        "mergeCells": {
+            "range": grid_range,
+            "mergeType": merge_type.upper(),
+        }
+    }
+
+    summary = f"merge_cells: {range_name} ({merge_type.upper()})"
+    return request, summary
+
+
+def _build_unmerge_cells_request(op: dict, index: int) -> tuple:
+    """Build an unmergeCells request for unmerge_cells operation."""
+    sheet_id = op.get("sheet_id")
+    range_name = op.get("range")
+
+    if sheet_id is None:
+        raise ValueError("missing required 'sheet_id' field")
+    if not range_name:
+        raise ValueError("missing required 'range' field")
+
+    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
+
+    request = {"unmergeCells": {"range": grid_range}}
+
+    summary = f"unmerge_cells: {range_name}"
+    return request, summary
+
+
+def _build_sort_range_request(op: dict, index: int) -> tuple:
+    """Build a sortRange request for sort_range operation."""
+    sheet_id = op.get("sheet_id")
+    range_name = op.get("range")
+    sort_specs = op.get("sort_specs")
+
+    if sheet_id is None:
+        raise ValueError("missing required 'sheet_id' field")
+    if not range_name:
+        raise ValueError("missing required 'range' field")
+    if not sort_specs:
+        raise ValueError("missing required 'sort_specs' field")
+
+    if not isinstance(sort_specs, list):
+        raise ValueError(f"sort_specs must be a list, got {type(sort_specs).__name__}")
+
+    # Validate and transform sort specs
+    valid_orders = ["ASCENDING", "DESCENDING"]
+    api_sort_specs = []
+
+    for j, spec in enumerate(sort_specs):
+        if not isinstance(spec, dict):
+            raise ValueError(
+                f"sort_specs[{j}] must be a dict, got {type(spec).__name__}"
+            )
+
+        if "column_index" not in spec:
+            raise ValueError(f"sort_specs[{j}] missing 'column_index'")
+        if "order" not in spec:
+            raise ValueError(f"sort_specs[{j}] missing 'order'")
+
+        col_idx = spec["column_index"]
+        order = spec["order"]
+
+        if not isinstance(col_idx, int):
+            raise ValueError(
+                f"sort_specs[{j}]['column_index'] must be int, got {type(col_idx).__name__}"
+            )
+        if col_idx < 0:
+            raise ValueError(f"sort_specs[{j}]['column_index'] must be >= 0")
+
+        if order.upper() not in valid_orders:
+            raise ValueError(
+                f"sort_specs[{j}]['order'] must be one of {valid_orders}, got '{order}'"
+            )
+
+        api_sort_specs.append(
+            {
+                "dimensionIndex": col_idx,
+                "sortOrder": order.upper(),
+            }
+        )
+
+    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
+
+    request = {
+        "sortRange": {
+            "range": grid_range,
+            "sortSpecs": api_sort_specs,
+        }
+    }
+
+    sort_desc = ", ".join(f"col{s['column_index']} {s['order']}" for s in sort_specs)
+    summary = f"sort_range: {range_name} by {sort_desc}"
+    return request, summary
+
+
 # Create comment management tools for sheets
 _comment_tools = create_comment_tools("spreadsheet", "spreadsheet_id")
 
