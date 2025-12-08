@@ -292,7 +292,7 @@ async def get_doc_content(
 
     request_obj = (
         drive_service.files().export_media(
-            fileId=document_id, mimeType=effective_export_mime, supportsAllDrives=True
+            fileId=document_id, mimeType=effective_export_mime
         )
         if effective_export_mime
         else drive_service.files().get_media(fileId=document_id, supportsAllDrives=True)
@@ -6150,7 +6150,7 @@ async def export_doc_to_pdf(
     # Export the document as PDF
     try:
         request_obj = service.files().export_media(
-            fileId=document_id, mimeType="application/pdf", supportsAllDrives=True
+            fileId=document_id, mimeType="application/pdf"
         )
 
         fh = io.BytesIO()
