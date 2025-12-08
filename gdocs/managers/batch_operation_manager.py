@@ -510,6 +510,83 @@ class BatchOperationManager:
         self.service = service
         self.tab_id = tab_id
 
+    def _clean_text_for_list(self, text: str) -> str:
+        """
+        Clean text for list conversion by removing consecutive blank lines.
+        
+        When text with blank lines (\\n\\n) is converted to a list, each paragraph
+        becomes a list item, and blank paragraphs become empty list items.
+        This function removes those consecutive blank lines.
+        
+        Args:
+            text: Text to clean
+            
+        Returns:
+            Cleaned text with consecutive newlines collapsed to single newlines
+        """
+        import re
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        original_newline_count = text.count('\n')
+        # Replace multiple consecutive newlines (with optional whitespace) with single newline
+        cleaned_text = re.sub(r'\n\s*\n+', '\n', text)
+        new_newline_count = cleaned_text.count('\n')
+        
+        if cleaned_text != text:
+            removed = original_newline_count - new_newline_count
+            logger.info(
+                f"[BatchOperationManager] Cleaned text for list conversion: "
+                f"removed {removed} blank lines to prevent empty list items"
+            )
+        
+        return cleaned_text
+
+    def _mark_list_conversion_operations(self, operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """
+        Mark text insertion/replacement operations that will be converted to lists.
+        
+        This allows us to apply blank line cleaning before the text is inserted,
+        preventing empty list items.
+        
+        Args:
+            operations: List of operation dictionaries
+            
+        Returns:
+            Modified operations list with _will_convert_to_list flag added
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Look for convert_to_list operations and mark preceding text operations
+        for i, op in enumerate(operations):
+            op_type = op.get('type', '')
+            
+            # Normalize type aliases
+            if op_type in ['insert', 'replace']:
+                op_type = f"{op_type}_text"
+            
+            # Check if this is an insert/replace followed by convert_to_list
+            if op_type in ['insert_text', 'replace_text'] and 'text' in op:
+                # Look ahead for convert_to_list in subsequent operations
+                for j in range(i + 1, len(operations)):
+                    next_op = operations[j]
+                    next_type = next_op.get('type', '')
+                    
+                    if next_type == 'convert_to_list':
+                        # Mark this text operation for cleaning
+                        op['_will_convert_to_list'] = True
+                        logger.debug(
+                            f"[BatchOperationManager] Marking operation {i} for list conversion text cleaning"
+                        )
+                        break
+                    
+                    # Stop looking if we hit another text operation (likely targeting different content)
+                    if next_type in ['insert_text', 'replace_text', 'insert', 'replace']:
+                        break
+        
+        return operations
+
     async def execute_batch_operations(
         self,
         document_id: str,
@@ -633,6 +710,10 @@ class BatchOperationManager:
         Returns:
             Tuple of (requests, operation_descriptions, position_shifts)
         """
+        # Preprocess: Mark text operations that will be converted to lists
+        # so we can apply blank line cleaning
+        operations = self._mark_list_conversion_operations(operations)
+        
         requests = []
         operation_descriptions = []
         position_shifts = []
@@ -742,7 +823,11 @@ class BatchOperationManager:
             Tuple of (request, description)
         """
         if op_type == 'insert_text':
-            request = create_insert_text_request(op['index'], op['text'], tab_id=self.tab_id)
+            # Clean text for list conversion if specified
+            text = op['text']
+            if op.get('_will_convert_to_list'):
+                text = self._clean_text_for_list(text)
+            request = create_insert_text_request(op['index'], text, tab_id=self.tab_id)
             description = f"insert text at {op['index']}"
 
         elif op_type == 'delete_text':
@@ -750,12 +835,16 @@ class BatchOperationManager:
             description = f"delete text {op['start_index']}-{op['end_index']}"
 
         elif op_type == 'replace_text':
+            # Clean text for list conversion if specified
+            text = op['text']
+            if op.get('_will_convert_to_list'):
+                text = self._clean_text_for_list(text)
             # Replace is delete + insert (must be done in this order)
             delete_request = create_delete_range_request(op['start_index'], op['end_index'], tab_id=self.tab_id)
-            insert_request = create_insert_text_request(op['start_index'], op['text'], tab_id=self.tab_id)
+            insert_request = create_insert_text_request(op['start_index'], text, tab_id=self.tab_id)
             # Return both requests as a list
             request = [delete_request, insert_request]
-            description = f"replace text {op['start_index']}-{op['end_index']} with '{op['text'][:20]}{'...' if len(op['text']) > 20 else ''}'"
+            description = f"replace text {op['start_index']}-{op['end_index']} with '{text[:20]}{'...' if len(text) > 20 else ''}'"
 
         elif op_type == 'format_text':
             # Handle text-level formatting
