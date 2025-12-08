@@ -286,11 +286,12 @@ class TestInsertionIndexCalculation:
 
     def test_insertion_clamps_to_end(self):
         """Test that position beyond list length inserts at end."""
-        target_list = {
-            "start_index": 10,
-            "end_index": 50,
-            "items": [{"text": "Item 1"}, {"text": "Item 2"}]
-        }
+        # target_list defined for documentation purposes
+        # {
+        #     "start_index": 10,
+        #     "end_index": 50,
+        #     "items": [{"text": "Item 1"}, {"text": "Item 2"}]
+        # }
         num_items = 2
 
         item_position = 100  # Way beyond list length

@@ -15,7 +15,6 @@ from gdocs.managers.batch_operation_manager import (
     BatchOperationResult,
     BatchExecutionResult,
     VirtualTextTracker,
-    LIST_TYPE_ALIASES,
 )
 
 

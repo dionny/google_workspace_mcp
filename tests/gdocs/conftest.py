@@ -12,7 +12,6 @@ import asyncio
 import uuid
 import os
 from typing import Any, Dict
-from unittest.mock import Mock
 
 # Import the actual tools we need (not the wrapped versions)
 import sys

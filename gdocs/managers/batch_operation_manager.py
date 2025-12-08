@@ -938,8 +938,8 @@ class BatchOperationManager:
             # Validate required fields
             if 'start_index' not in op or 'end_index' not in op:
                 raise KeyError(
-                    f"convert_to_list operation requires 'start_index' and 'end_index'. "
-                    f"Example: {{\"type\": \"convert_to_list\", \"start_index\": 100, \"end_index\": 200, \"list_type\": \"ORDERED\"}}"
+                    "convert_to_list operation requires 'start_index' and 'end_index'. "
+                    "Example: {\"type\": \"convert_to_list\", \"start_index\": 100, \"end_index\": 200, \"list_type\": \"ORDERED\"}"
                 )
             # Normalize and validate list_type
             list_type = op.get('list_type', 'UNORDERED')

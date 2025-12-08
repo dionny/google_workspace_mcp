@@ -8395,7 +8395,7 @@ async def _execute_batch_undo(
         )
 
         # Mark all operations in the batch as undone
-        operations_marked = manager.mark_batch_undone(document_id, batch_id)
+        manager.mark_batch_undone(document_id, batch_id)
 
         result = {
             "success": True,
