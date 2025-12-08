@@ -13,8 +13,8 @@ load_dotenv()
 # Import after path setup
 from tools_cli import init_server, ToolTester  # noqa: E402
 
-DOC_ID = "1A-N-g_mgnDbj7TwcOO4sHUUbtgdAJ_T2VHh9-pChqCc"
-USER_EMAIL = "mbradshaw@indeed.com"
+DOC_ID = os.environ.get("TEST_DOC_ID", "YOUR_TEST_DOC_ID")
+USER_EMAIL = os.environ.get("USER_GOOGLE_EMAIL", "user@example.com")
 
 async def main():
     """Run manual tests."""

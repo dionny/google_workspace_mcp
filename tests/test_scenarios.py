@@ -8,8 +8,8 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-TEST_DOC_ID = "1A-N-g_mgnDbj7TwcOO4sHUUbtgdAJ_T2VHh9-pChqCc"
-EMAIL = "mbradshaw@indeed.com"
+TEST_DOC_ID = os.environ.get("TEST_DOC_ID", "YOUR_TEST_DOC_ID")
+EMAIL = os.environ.get("USER_GOOGLE_EMAIL", "user@example.com")
 
 
 async def main():
