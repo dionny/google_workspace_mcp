@@ -761,6 +761,7 @@ cp .env.oauth21 .env
 |------|------|-------------|
 | `read_sheet_values` | **Core** | Read cell ranges |
 | `modify_sheet_values` | **Core** | Write/update/clear cells |
+| `append_rows` | **Core** | Append data to end of sheet |
 | `create_spreadsheet` | **Core** | Create new spreadsheets |
 | `list_spreadsheets` | Extended | List accessible spreadsheets |
 | `get_spreadsheet_info` | Extended | Get spreadsheet metadata |
