@@ -17,6 +17,7 @@ from .sheets_tools import (
     delete_rows,
     delete_columns,
     sort_range,
+    copy_sheet,
 )
 
 __all__ = [
@@ -32,4 +33,5 @@ __all__ = [
     "delete_rows",
     "delete_columns",
     "sort_range",
+    "copy_sheet",
 ]
