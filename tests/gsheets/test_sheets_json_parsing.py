@@ -4,6 +4,7 @@ Tests for JSON parsing in Google Sheets tools.
 These tests verify that parameters passed as JSON strings (as MCP does)
 are correctly parsed into Python objects.
 """
+
 import pytest
 import json
 
@@ -49,7 +50,7 @@ class TestSheetNamesJsonParsing:
 
     def test_empty_list_parsing(self):
         """Test parsing empty JSON list."""
-        sheet_names = '[]'
+        sheet_names = "[]"
 
         parsed_sheet_names = json.loads(sheet_names)
         assert isinstance(parsed_sheet_names, list)
@@ -68,11 +69,15 @@ class TestCreateSpreadsheetSheetNamesLogic:
             try:
                 parsed_sheet_names = json.loads(sheet_names)
                 if not isinstance(parsed_sheet_names, list):
-                    raise ValueError(f"sheet_names must be a list, got {type(parsed_sheet_names).__name__}")
+                    raise ValueError(
+                        f"sheet_names must be a list, got {type(parsed_sheet_names).__name__}"
+                    )
                 # Validate each sheet name is a string
                 for i, name in enumerate(parsed_sheet_names):
                     if not isinstance(name, str):
-                        raise ValueError(f"Sheet name at index {i} must be a string, got {type(name).__name__}")
+                        raise ValueError(
+                            f"Sheet name at index {i} must be a string, got {type(name).__name__}"
+                        )
                 return parsed_sheet_names
             except json.JSONDecodeError as e:
                 raise Exception(f"Invalid JSON format for sheet_names: {e}")
@@ -156,7 +161,7 @@ class TestCreateSpreadsheetSheetNamesLogic:
 
     def test_whitespace_only_json_string(self):
         """Test that whitespace-only JSON string raises error."""
-        whitespace_json = '   '
+        whitespace_json = "   "
 
         with pytest.raises(Exception) as exc_info:
             self.parse_sheet_names(whitespace_json)
@@ -165,7 +170,7 @@ class TestCreateSpreadsheetSheetNamesLogic:
 
     def test_json_null_raises_exception(self):
         """Test that JSON null string raises appropriate error."""
-        null_json = 'null'
+        null_json = "null"
 
         with pytest.raises(Exception) as exc_info:
             self.parse_sheet_names(null_json)

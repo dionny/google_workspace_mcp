@@ -4,6 +4,7 @@ Google Docs Helper Functions
 This module provides utility functions for common Google Docs operations
 to simplify the implementation of document editing tools.
 """
+
 import logging
 from typing import Dict, Any, Optional, Tuple, List
 from enum import Enum
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 class OperationType(str, Enum):
     """Type of document modification operation."""
+
     INSERT = "insert"
     REPLACE = "replace"
     DELETE = "delete"
@@ -28,6 +30,7 @@ class OperationResult:
     This enables efficient follow-up edits without re-reading the document
     by providing the exact position shift caused by the operation.
     """
+
     success: bool
     operation: str  # OperationType value
     position_shift: int  # Positive = positions shifted right, negative = shifted left
@@ -79,26 +82,26 @@ def interpret_escape_sequences(text: str) -> str:
         return None
 
     # Only process if there are potential escape sequences (contains backslash)
-    if '\\' not in text:
+    if "\\" not in text:
         return text
 
     # Use a simple state machine to properly handle escape sequences
     result = []
     i = 0
     while i < len(text):
-        if text[i] == '\\' and i + 1 < len(text):
+        if text[i] == "\\" and i + 1 < len(text):
             next_char = text[i + 1]
-            if next_char == 'n':
-                result.append('\n')
+            if next_char == "n":
+                result.append("\n")
                 i += 2
-            elif next_char == 't':
-                result.append('\t')
+            elif next_char == "t":
+                result.append("\t")
                 i += 2
-            elif next_char == 'r':
-                result.append('\r')
+            elif next_char == "r":
+                result.append("\r")
                 i += 2
-            elif next_char == '\\':
-                result.append('\\')
+            elif next_char == "\\":
+                result.append("\\")
                 i += 2
             else:
                 # Unknown escape sequence - keep as-is
@@ -108,14 +111,14 @@ def interpret_escape_sequences(text: str) -> str:
             result.append(text[i])
             i += 1
 
-    return ''.join(result)
+    return "".join(result)
 
 
 def calculate_position_shift(
     operation_type: OperationType,
     start_index: int,
     end_index: Optional[int],
-    text_length: int
+    text_length: int,
 ) -> Tuple[int, Dict[str, int]]:
     """
     Calculate the position shift caused by a document operation.
@@ -167,7 +170,7 @@ def build_operation_result(
     text: Optional[str],
     document_id: str,
     extra_info: Optional[Dict[str, Any]] = None,
-    styles_applied: Optional[List[str]] = None
+    styles_applied: Optional[List[str]] = None,
 ) -> OperationResult:
     """
     Build an OperationResult with calculated position shift.
@@ -201,7 +204,7 @@ def build_operation_result(
             affected_range=affected_range,
             message=message,
             link=link,
-            inserted_length=text_length
+            inserted_length=text_length,
         )
 
     elif operation_type == OperationType.DELETE:
@@ -214,7 +217,7 @@ def build_operation_result(
             affected_range=affected_range,
             message=message,
             link=link,
-            deleted_length=deleted_length
+            deleted_length=deleted_length,
         )
 
     elif operation_type == OperationType.REPLACE:
@@ -228,7 +231,7 @@ def build_operation_result(
             message=message,
             link=link,
             original_length=original_length,
-            new_length=text_length
+            new_length=text_length,
         )
 
     elif operation_type == OperationType.FORMAT:
@@ -242,7 +245,7 @@ def build_operation_result(
             affected_range=affected_range,
             message=message,
             link=link,
-            styles_applied=styles_applied
+            styles_applied=styles_applied,
         )
 
     else:
@@ -253,15 +256,15 @@ def build_operation_result(
             position_shift=shift,
             affected_range=affected_range,
             message=message,
-            link=link
+            link=link,
         )
 
     # Add extra info to message if provided
     if extra_info:
         extra_parts = []
-        if 'search_text' in extra_info:
+        if "search_text" in extra_info:
             extra_parts.append(f"Search: '{extra_info['search_text']}'")
-        if 'heading' in extra_info:
+        if "heading" in extra_info:
             extra_parts.append(f"Section: '{extra_info['heading']}'")
         if extra_parts:
             result.message += f" ({', '.join(extra_parts)})"
@@ -271,12 +274,15 @@ def build_operation_result(
 
 class SearchPosition(str, Enum):
     """Position relative to search result for text operations."""
+
     BEFORE = "before"
     AFTER = "after"
     REPLACE = "replace"
 
 
-def extract_document_text_with_indices(doc_data: Dict[str, Any]) -> List[Tuple[str, int, int]]:
+def extract_document_text_with_indices(
+    doc_data: Dict[str, Any],
+) -> List[Tuple[str, int, int]]:
     """
     Extract all text content from a document with their start and end indices.
 
@@ -287,28 +293,28 @@ def extract_document_text_with_indices(doc_data: Dict[str, Any]) -> List[Tuple[s
         List of tuples (text_content, start_index, end_index)
     """
     text_segments = []
-    body = doc_data.get('body', {})
-    content = body.get('content', [])
+    body = doc_data.get("body", {})
+    content = body.get("content", [])
 
     def extract_from_elements(elements: List[Dict[str, Any]]) -> None:
         """Recursively extract text from document elements."""
         for element in elements:
-            if 'paragraph' in element:
-                paragraph = element['paragraph']
-                for para_element in paragraph.get('elements', []):
-                    if 'textRun' in para_element:
-                        text_run = para_element['textRun']
-                        text = text_run.get('content', '')
-                        start_idx = para_element.get('startIndex', 0)
-                        end_idx = para_element.get('endIndex', start_idx + len(text))
+            if "paragraph" in element:
+                paragraph = element["paragraph"]
+                for para_element in paragraph.get("elements", []):
+                    if "textRun" in para_element:
+                        text_run = para_element["textRun"]
+                        text = text_run.get("content", "")
+                        start_idx = para_element.get("startIndex", 0)
+                        end_idx = para_element.get("endIndex", start_idx + len(text))
                         if text:
                             text_segments.append((text, start_idx, end_idx))
-            elif 'table' in element:
+            elif "table" in element:
                 # Extract text from table cells
-                table = element['table']
-                for row in table.get('tableRows', []):
-                    for cell in row.get('tableCells', []):
-                        cell_content = cell.get('content', [])
+                table = element["table"]
+                for row in table.get("tableRows", []):
+                    for cell in row.get("tableCells", []):
+                        cell_content = cell.get("content", [])
                         extract_from_elements(cell_content)
 
     extract_from_elements(content)
@@ -316,10 +322,7 @@ def extract_document_text_with_indices(doc_data: Dict[str, Any]) -> List[Tuple[s
 
 
 def extract_text_at_range(
-    doc_data: Dict[str, Any],
-    start_index: int,
-    end_index: int,
-    context_chars: int = 50
+    doc_data: Dict[str, Any], start_index: int, end_index: int, context_chars: int = 50
 ) -> Dict[str, Any]:
     """
     Extract text at a specific index range from a document.
@@ -376,25 +379,27 @@ def extract_text_at_range(
         "context_after": "",
         "found": False,
         "start_index": start_index,
-        "end_index": end_index
+        "end_index": end_index,
     }
 
     if text_start_pos is not None:
         result["found"] = True
 
         if text_end_pos is not None and text_end_pos >= text_start_pos:
-            result["text"] = full_text[text_start_pos:text_end_pos + 1]
+            result["text"] = full_text[text_start_pos : text_end_pos + 1]
         else:
             # Just the character at start (for insert point)
             result["text"] = ""
 
         # Extract context
         context_start = max(0, text_start_pos - context_chars)
-        context_end = min(len(full_text), (text_end_pos or text_start_pos) + 1 + context_chars)
+        context_end = min(
+            len(full_text), (text_end_pos or text_start_pos) + 1 + context_chars
+        )
 
         result["context_before"] = full_text[context_start:text_start_pos]
         if text_end_pos is not None:
-            result["context_after"] = full_text[text_end_pos + 1:context_end]
+            result["context_after"] = full_text[text_end_pos + 1 : context_end]
         else:
             result["context_after"] = full_text[text_start_pos:context_end]
 
@@ -426,7 +431,7 @@ def find_text_in_document(
     doc_data: Dict[str, Any],
     search_text: str,
     occurrence: int = 1,
-    match_case: bool = True
+    match_case: bool = True,
 ) -> Optional[Tuple[int, int]]:
     """
     Find text in document and return its start and end indices.
@@ -493,9 +498,7 @@ def find_text_in_document(
 
 
 def find_all_occurrences_in_document(
-    doc_data: Dict[str, Any],
-    search_text: str,
-    match_case: bool = True
+    doc_data: Dict[str, Any], search_text: str, match_case: bool = True
 ) -> List[Tuple[int, int]]:
     """
     Find all occurrences of text in document.
@@ -550,7 +553,7 @@ def calculate_search_based_indices(
     search_text: str,
     position: str,
     occurrence: int = 1,
-    match_case: bool = True
+    match_case: bool = True,
 ) -> Tuple[bool, Optional[int], Optional[int], str]:
     """
     Calculate start and end indices based on search text and position.
@@ -573,13 +576,19 @@ def calculate_search_based_indices(
 
     if found is None:
         # Get occurrence info for error message
-        all_occurrences = find_all_occurrences_in_document(doc_data, search_text, match_case)
+        all_occurrences = find_all_occurrences_in_document(
+            doc_data, search_text, match_case
+        )
         if not all_occurrences:
             return (False, None, None, f"Text '{search_text}' not found in document")
         else:
-            return (False, None, None,
-                    f"Occurrence {occurrence} of '{search_text}' not found. "
-                    f"Document contains {len(all_occurrences)} occurrence(s).")
+            return (
+                False,
+                None,
+                None,
+                f"Occurrence {occurrence} of '{search_text}' not found. "
+                f"Document contains {len(all_occurrences)} occurrence(s).",
+            )
 
     found_start, found_end = found
 
@@ -589,56 +598,73 @@ def calculate_search_based_indices(
         return (True, found_start, found_start, f"Found at index {found_start}")
     elif position == SearchPosition.AFTER.value:
         # Insert point is right after the found text
-        return (True, found_end, found_end, f"Found at index {found_start}, inserting after index {found_end}")
+        return (
+            True,
+            found_end,
+            found_end,
+            f"Found at index {found_start}, inserting after index {found_end}",
+        )
     elif position == SearchPosition.REPLACE.value:
         # Return the full range to replace
-        return (True, found_start, found_end, f"Found at index range {found_start}-{found_end}")
+        return (
+            True,
+            found_start,
+            found_end,
+            f"Found at index range {found_start}-{found_end}",
+        )
     else:
-        return (False, None, None, f"Invalid position '{position}'. Use 'before', 'after', or 'replace'.")
+        return (
+            False,
+            None,
+            None,
+            f"Invalid position '{position}'. Use 'before', 'after', or 'replace'.",
+        )
 
 
 def _parse_color(color_str: str) -> Dict[str, Any]:
     """
     Parse a color string (hex or named) to Google Docs API color format.
-    
+
     Args:
         color_str: Color as hex (#FF0000, #F00) or CSS named color
-        
+
     Returns:
         Dictionary with rgbColor format for Google Docs API
     """
     # Handle hex colors
-    if color_str.startswith('#'):
-        hex_color = color_str.lstrip('#')
+    if color_str.startswith("#"):
+        hex_color = color_str.lstrip("#")
         # Handle short hex (#F00 -> #FF0000)
         if len(hex_color) == 3:
-            hex_color = ''.join(c*2 for c in hex_color)
+            hex_color = "".join(c * 2 for c in hex_color)
         if len(hex_color) != 6:
             raise ValueError(f"Invalid hex color: {color_str}")
         r = int(hex_color[0:2], 16) / 255.0
         g = int(hex_color[2:4], 16) / 255.0
         b = int(hex_color[4:6], 16) / 255.0
-        return {'color': {'rgbColor': {'red': r, 'green': g, 'blue': b}}}
+        return {"color": {"rgbColor": {"red": r, "green": g, "blue": b}}}
 
     # Handle common named colors
     named_colors = {
-        'red': (1.0, 0.0, 0.0),
-        'green': (0.0, 1.0, 0.0),
-        'blue': (0.0, 0.0, 1.0),
-        'yellow': (1.0, 1.0, 0.0),
-        'orange': (1.0, 0.65, 0.0),
-        'purple': (0.5, 0.0, 0.5),
-        'black': (0.0, 0.0, 0.0),
-        'white': (1.0, 1.0, 1.0),
-        'gray': (0.5, 0.5, 0.5),
-        'grey': (0.5, 0.5, 0.5),
+        "red": (1.0, 0.0, 0.0),
+        "green": (0.0, 1.0, 0.0),
+        "blue": (0.0, 0.0, 1.0),
+        "yellow": (1.0, 1.0, 0.0),
+        "orange": (1.0, 0.65, 0.0),
+        "purple": (0.5, 0.0, 0.5),
+        "black": (0.0, 0.0, 0.0),
+        "white": (1.0, 1.0, 1.0),
+        "gray": (0.5, 0.5, 0.5),
+        "grey": (0.5, 0.5, 0.5),
     }
     color_lower = color_str.lower()
     if color_lower in named_colors:
         r, g, b = named_colors[color_lower]
-        return {'color': {'rgbColor': {'red': r, 'green': g, 'blue': b}}}
+        return {"color": {"rgbColor": {"red": r, "green": g, "blue": b}}}
 
-    raise ValueError(f"Unknown color format: {color_str}. Use hex (#FF0000) or named colors.")
+    raise ValueError(
+        f"Unknown color format: {color_str}. Use hex (#FF0000) or named colors."
+    )
 
 
 def build_text_style(
@@ -679,61 +705,64 @@ def build_text_style(
     fields = []
 
     if bold is not None:
-        text_style['bold'] = bold
-        fields.append('bold')
+        text_style["bold"] = bold
+        fields.append("bold")
 
     if italic is not None:
-        text_style['italic'] = italic
-        fields.append('italic')
+        text_style["italic"] = italic
+        fields.append("italic")
 
     if underline is not None:
-        text_style['underline'] = underline
-        fields.append('underline')
+        text_style["underline"] = underline
+        fields.append("underline")
 
     if strikethrough is not None:
-        text_style['strikethrough'] = strikethrough
-        fields.append('strikethrough')
+        text_style["strikethrough"] = strikethrough
+        fields.append("strikethrough")
 
     if small_caps is not None:
-        text_style['smallCaps'] = small_caps
-        fields.append('smallCaps')
+        text_style["smallCaps"] = small_caps
+        fields.append("smallCaps")
 
     if subscript is not None or superscript is not None:
         if superscript:
-            text_style['baselineOffset'] = 'SUPERSCRIPT'
+            text_style["baselineOffset"] = "SUPERSCRIPT"
         elif subscript:
-            text_style['baselineOffset'] = 'SUBSCRIPT'
+            text_style["baselineOffset"] = "SUBSCRIPT"
         else:
-            text_style['baselineOffset'] = 'NONE'
-        fields.append('baselineOffset')
+            text_style["baselineOffset"] = "NONE"
+        fields.append("baselineOffset")
 
     if font_size is not None:
-        text_style['fontSize'] = {'magnitude': font_size, 'unit': 'PT'}
-        fields.append('fontSize')
+        text_style["fontSize"] = {"magnitude": font_size, "unit": "PT"}
+        fields.append("fontSize")
 
     if font_family is not None:
-        text_style['weightedFontFamily'] = {'fontFamily': font_family}
-        fields.append('weightedFontFamily')
+        text_style["weightedFontFamily"] = {"fontFamily": font_family}
+        fields.append("weightedFontFamily")
 
     if link is not None:
         if link == "":
             # Empty string removes the link
-            text_style['link'] = None
+            text_style["link"] = None
         else:
-            text_style['link'] = {'url': link}
-        fields.append('link')
+            text_style["link"] = {"url": link}
+        fields.append("link")
 
     if foreground_color is not None:
-        text_style['foregroundColor'] = _parse_color(foreground_color)
-        fields.append('foregroundColor')
+        text_style["foregroundColor"] = _parse_color(foreground_color)
+        fields.append("foregroundColor")
 
     if background_color is not None:
-        text_style['backgroundColor'] = _parse_color(background_color)
-        fields.append('backgroundColor')
+        text_style["backgroundColor"] = _parse_color(background_color)
+        fields.append("backgroundColor")
 
     return text_style, fields
 
-def create_insert_text_request(index: int, text: str, tab_id: str = None) -> Dict[str, Any]:
+
+def create_insert_text_request(
+    index: int, text: str, tab_id: str = None
+) -> Dict[str, Any]:
     """
     Create an insertText request for Google Docs API.
 
@@ -746,17 +775,15 @@ def create_insert_text_request(index: int, text: str, tab_id: str = None) -> Dic
     Returns:
         Dictionary representing the insertText request
     """
-    location = {'index': index}
+    location = {"index": index}
     if tab_id:
-        location['tabId'] = tab_id
-    return {
-        'insertText': {
-            'location': location,
-            'text': text
-        }
-    }
+        location["tabId"] = tab_id
+    return {"insertText": {"location": location, "text": text}}
 
-def create_insert_text_segment_request(index: int, text: str, segment_id: str, tab_id: str = None) -> Dict[str, Any]:
+
+def create_insert_text_segment_request(
+    index: int, text: str, segment_id: str, tab_id: str = None
+) -> Dict[str, Any]:
     """
     Create an insertText request for Google Docs API with segmentId (for headers/footers).
 
@@ -769,20 +796,15 @@ def create_insert_text_segment_request(index: int, text: str, segment_id: str, t
     Returns:
         Dictionary representing the insertText request with segmentId
     """
-    location = {
-        'segmentId': segment_id,
-        'index': index
-    }
+    location = {"segmentId": segment_id, "index": index}
     if tab_id:
-        location['tabId'] = tab_id
-    return {
-        'insertText': {
-            'location': location,
-            'text': text
-        }
-    }
+        location["tabId"] = tab_id
+    return {"insertText": {"location": location, "text": text}}
 
-def create_delete_range_request(start_index: int, end_index: int, tab_id: str = None) -> Dict[str, Any]:
+
+def create_delete_range_request(
+    start_index: int, end_index: int, tab_id: str = None
+) -> Dict[str, Any]:
     """
     Create a deleteContentRange request for Google Docs API.
 
@@ -794,17 +816,11 @@ def create_delete_range_request(start_index: int, end_index: int, tab_id: str = 
     Returns:
         Dictionary representing the deleteContentRange request
     """
-    range_obj = {
-        'startIndex': start_index,
-        'endIndex': end_index
-    }
+    range_obj = {"startIndex": start_index, "endIndex": end_index}
     if tab_id:
-        range_obj['tabId'] = tab_id
-    return {
-        'deleteContentRange': {
-            'range': range_obj
-        }
-    }
+        range_obj["tabId"] = tab_id
+    return {"deleteContentRange": {"range": range_obj}}
+
 
 def create_format_text_request(
     start_index: int,
@@ -847,25 +863,32 @@ def create_format_text_request(
         Dictionary representing the updateTextStyle request, or None if no styles provided
     """
     text_style, fields = build_text_style(
-        bold, italic, underline, strikethrough, small_caps, subscript, superscript, font_size, font_family, link,
-        foreground_color, background_color
+        bold,
+        italic,
+        underline,
+        strikethrough,
+        small_caps,
+        subscript,
+        superscript,
+        font_size,
+        font_family,
+        link,
+        foreground_color,
+        background_color,
     )
 
     if not text_style:
         return None
 
-    range_obj = {
-        'startIndex': start_index,
-        'endIndex': end_index
-    }
+    range_obj = {"startIndex": start_index, "endIndex": end_index}
     if tab_id:
-        range_obj['tabId'] = tab_id
+        range_obj["tabId"] = tab_id
 
     return {
-        'updateTextStyle': {
-            'range': range_obj,
-            'textStyle': text_style,
-            'fields': ','.join(fields)
+        "updateTextStyle": {
+            "range": range_obj,
+            "textStyle": text_style,
+            "fields": ",".join(fields),
         }
     }
 
@@ -899,44 +922,41 @@ def create_clear_formatting_request(
         Dictionary representing the updateTextStyle request
     """
     text_style = {
-        'bold': False,
-        'italic': False,
-        'underline': False,
-        'strikethrough': False,
-        'smallCaps': False,
-        'baselineOffset': 'NONE',
+        "bold": False,
+        "italic": False,
+        "underline": False,
+        "strikethrough": False,
+        "smallCaps": False,
+        "baselineOffset": "NONE",
         # Setting colors to empty removes them (text will inherit from paragraph style)
-        'foregroundColor': {},
-        'backgroundColor': {},
+        "foregroundColor": {},
+        "backgroundColor": {},
     }
 
     fields = [
-        'bold',
-        'italic',
-        'underline',
-        'strikethrough',
-        'smallCaps',
-        'baselineOffset',
-        'foregroundColor',
-        'backgroundColor',
+        "bold",
+        "italic",
+        "underline",
+        "strikethrough",
+        "smallCaps",
+        "baselineOffset",
+        "foregroundColor",
+        "backgroundColor",
     ]
 
     if not preserve_links:
-        text_style['link'] = None
-        fields.append('link')
+        text_style["link"] = None
+        fields.append("link")
 
-    range_obj = {
-        'startIndex': start_index,
-        'endIndex': end_index
-    }
+    range_obj = {"startIndex": start_index, "endIndex": end_index}
     if tab_id:
-        range_obj['tabId'] = tab_id
+        range_obj["tabId"] = tab_id
 
     return {
-        'updateTextStyle': {
-            'range': range_obj,
-            'textStyle': text_style,
-            'fields': ','.join(fields)
+        "updateTextStyle": {
+            "range": range_obj,
+            "textStyle": text_style,
+            "fields": ",".join(fields),
         }
     }
 
@@ -961,19 +981,19 @@ def create_find_replace_request(
         Dictionary representing the replaceAllText request
     """
     request = {
-        'replaceAllText': {
-            'containsText': {
-                'text': find_text,
-                'matchCase': match_case
-            },
-            'replaceText': replace_text
+        "replaceAllText": {
+            "containsText": {"text": find_text, "matchCase": match_case},
+            "replaceText": replace_text,
         }
     }
     if tab_ids:
-        request['replaceAllText']['tabsCriteria'] = {'tabIds': tab_ids}
+        request["replaceAllText"]["tabsCriteria"] = {"tabIds": tab_ids}
     return request
 
-def create_insert_table_request(index: int, rows: int, columns: int, tab_id: str = None) -> Dict[str, Any]:
+
+def create_insert_table_request(
+    index: int, rows: int, columns: int, tab_id: str = None
+) -> Dict[str, Any]:
     """
     Create an insertTable request for Google Docs API.
 
@@ -986,16 +1006,11 @@ def create_insert_table_request(index: int, rows: int, columns: int, tab_id: str
     Returns:
         Dictionary representing the insertTable request
     """
-    location = {'index': index}
+    location = {"index": index}
     if tab_id:
-        location['tabId'] = tab_id
-    return {
-        'insertTable': {
-            'location': location,
-            'rows': rows,
-            'columns': columns
-        }
-    }
+        location["tabId"] = tab_id
+    return {"insertTable": {"location": location, "rows": rows, "columns": columns}}
+
 
 def create_insert_page_break_request(index: int, tab_id: str = None) -> Dict[str, Any]:
     """
@@ -1008,17 +1023,15 @@ def create_insert_page_break_request(index: int, tab_id: str = None) -> Dict[str
     Returns:
         Dictionary representing the insertPageBreak request
     """
-    location = {'index': index}
+    location = {"index": index}
     if tab_id:
-        location['tabId'] = tab_id
-    return {
-        'insertPageBreak': {
-            'location': location
-        }
-    }
+        location["tabId"] = tab_id
+    return {"insertPageBreak": {"location": location}}
 
 
-def create_insert_horizontal_rule_requests(index: int, tab_id: str = None) -> List[Dict[str, Any]]:
+def create_insert_horizontal_rule_requests(
+    index: int, tab_id: str = None
+) -> List[Dict[str, Any]]:
     """
     Create requests to insert a horizontal rule in Google Docs.
 
@@ -1035,51 +1048,45 @@ def create_insert_horizontal_rule_requests(index: int, tab_id: str = None) -> Li
     """
     # Define invisible border style
     invisible_border = {
-        'color': {'color': {'rgbColor': {'red': 1, 'green': 1, 'blue': 1}}},
-        'width': {'magnitude': 0, 'unit': 'PT'},
-        'dashStyle': 'SOLID'
+        "color": {"color": {"rgbColor": {"red": 1, "green": 1, "blue": 1}}},
+        "width": {"magnitude": 0, "unit": "PT"},
+        "dashStyle": "SOLID",
     }
 
     # Define visible top border style (the horizontal line)
     visible_border = {
-        'color': {'color': {'rgbColor': {'red': 0, 'green': 0, 'blue': 0}}},
-        'width': {'magnitude': 1, 'unit': 'PT'},
-        'dashStyle': 'SOLID'
+        "color": {"color": {"rgbColor": {"red": 0, "green": 0, "blue": 0}}},
+        "width": {"magnitude": 1, "unit": "PT"},
+        "dashStyle": "SOLID",
     }
 
-    location = {'index': index}
-    table_start_location = {'index': index + 1}
+    location = {"index": index}
+    table_start_location = {"index": index + 1}
     if tab_id:
-        location['tabId'] = tab_id
-        table_start_location['tabId'] = tab_id
+        location["tabId"] = tab_id
+        table_start_location["tabId"] = tab_id
 
     return [
         # First request: Insert a 1x1 table
-        {
-            'insertTable': {
-                'location': location,
-                'rows': 1,
-                'columns': 1
-            }
-        },
+        {"insertTable": {"location": location, "rows": 1, "columns": 1}},
         # Second request: Style the table cell to look like a horizontal rule
         # Hide bottom, left, right borders and show only top border
         {
-            'updateTableCellStyle': {
-                'tableCellStyle': {
-                    'borderTop': visible_border,
-                    'borderBottom': invisible_border,
-                    'borderLeft': invisible_border,
-                    'borderRight': invisible_border,
-                    'paddingTop': {'magnitude': 0, 'unit': 'PT'},
-                    'paddingBottom': {'magnitude': 0, 'unit': 'PT'},
-                    'paddingLeft': {'magnitude': 0, 'unit': 'PT'},
-                    'paddingRight': {'magnitude': 0, 'unit': 'PT'},
+            "updateTableCellStyle": {
+                "tableCellStyle": {
+                    "borderTop": visible_border,
+                    "borderBottom": invisible_border,
+                    "borderLeft": invisible_border,
+                    "borderRight": invisible_border,
+                    "paddingTop": {"magnitude": 0, "unit": "PT"},
+                    "paddingBottom": {"magnitude": 0, "unit": "PT"},
+                    "paddingLeft": {"magnitude": 0, "unit": "PT"},
+                    "paddingRight": {"magnitude": 0, "unit": "PT"},
                 },
-                'tableStartLocation': table_start_location,
-                'fields': 'borderTop,borderBottom,borderLeft,borderRight,paddingTop,paddingBottom,paddingLeft,paddingRight'
+                "tableStartLocation": table_start_location,
+                "fields": "borderTop,borderBottom,borderLeft,borderRight,paddingTop,paddingBottom,paddingLeft,paddingRight",
             }
-        }
+        },
     ]
 
 
@@ -1103,28 +1110,24 @@ def create_insert_image_request(
     Returns:
         Dictionary representing the insertInlineImage request
     """
-    location = {'index': index}
+    location = {"index": index}
     if tab_id:
-        location['tabId'] = tab_id
+        location["tabId"] = tab_id
 
-    request = {
-        'insertInlineImage': {
-            'location': location,
-            'uri': image_uri
-        }
-    }
+    request = {"insertInlineImage": {"location": location, "uri": image_uri}}
 
     # Add size properties if specified
     object_size = {}
     if width is not None:
-        object_size['width'] = {'magnitude': width, 'unit': 'PT'}
+        object_size["width"] = {"magnitude": width, "unit": "PT"}
     if height is not None:
-        object_size['height'] = {'magnitude': height, 'unit': 'PT'}
+        object_size["height"] = {"magnitude": height, "unit": "PT"}
 
     if object_size:
-        request['insertInlineImage']['objectSize'] = object_size
+        request["insertInlineImage"]["objectSize"] = object_size
 
     return request
+
 
 def create_bullet_list_request(
     start_index: int,
@@ -1145,24 +1148,19 @@ def create_bullet_list_request(
         Dictionary representing the createParagraphBullets request
     """
     bullet_preset = (
-        'BULLET_DISC_CIRCLE_SQUARE'
+        "BULLET_DISC_CIRCLE_SQUARE"
         if list_type == "UNORDERED"
-        else 'NUMBERED_DECIMAL_ALPHA_ROMAN'
+        else "NUMBERED_DECIMAL_ALPHA_ROMAN"
     )
 
-    range_obj = {
-        'startIndex': start_index,
-        'endIndex': end_index
-    }
+    range_obj = {"startIndex": start_index, "endIndex": end_index}
     if tab_id:
-        range_obj['tabId'] = tab_id
+        range_obj["tabId"] = tab_id
 
     return {
-        'createParagraphBullets': {
-            'range': range_obj,
-            'bulletPreset': bullet_preset
-        }
+        "createParagraphBullets": {"range": range_obj, "bulletPreset": bullet_preset}
     }
+
 
 def create_paragraph_style_request(
     start_index: int,
@@ -1211,67 +1209,52 @@ def create_paragraph_style_request(
     fields = []
 
     if line_spacing is not None:
-        paragraph_style['lineSpacing'] = line_spacing
-        fields.append('lineSpacing')
+        paragraph_style["lineSpacing"] = line_spacing
+        fields.append("lineSpacing")
 
     if heading_style is not None:
-        paragraph_style['namedStyleType'] = heading_style
-        fields.append('namedStyleType')
+        paragraph_style["namedStyleType"] = heading_style
+        fields.append("namedStyleType")
 
     if alignment is not None:
-        paragraph_style['alignment'] = alignment
-        fields.append('alignment')
+        paragraph_style["alignment"] = alignment
+        fields.append("alignment")
 
     if indent_first_line is not None:
-        paragraph_style['indentFirstLine'] = {
-            'magnitude': indent_first_line,
-            'unit': 'PT'
+        paragraph_style["indentFirstLine"] = {
+            "magnitude": indent_first_line,
+            "unit": "PT",
         }
-        fields.append('indentFirstLine')
+        fields.append("indentFirstLine")
 
     if indent_start is not None:
-        paragraph_style['indentStart'] = {
-            'magnitude': indent_start,
-            'unit': 'PT'
-        }
-        fields.append('indentStart')
+        paragraph_style["indentStart"] = {"magnitude": indent_start, "unit": "PT"}
+        fields.append("indentStart")
 
     if indent_end is not None:
-        paragraph_style['indentEnd'] = {
-            'magnitude': indent_end,
-            'unit': 'PT'
-        }
-        fields.append('indentEnd')
+        paragraph_style["indentEnd"] = {"magnitude": indent_end, "unit": "PT"}
+        fields.append("indentEnd")
 
     if space_above is not None:
-        paragraph_style['spaceAbove'] = {
-            'magnitude': space_above,
-            'unit': 'PT'
-        }
-        fields.append('spaceAbove')
+        paragraph_style["spaceAbove"] = {"magnitude": space_above, "unit": "PT"}
+        fields.append("spaceAbove")
 
     if space_below is not None:
-        paragraph_style['spaceBelow'] = {
-            'magnitude': space_below,
-            'unit': 'PT'
-        }
-        fields.append('spaceBelow')
+        paragraph_style["spaceBelow"] = {"magnitude": space_below, "unit": "PT"}
+        fields.append("spaceBelow")
 
     if not paragraph_style:
         return None
 
-    range_obj = {
-        'startIndex': start_index,
-        'endIndex': end_index
-    }
+    range_obj = {"startIndex": start_index, "endIndex": end_index}
     if tab_id:
-        range_obj['tabId'] = tab_id
+        range_obj["tabId"] = tab_id
 
     return {
-        'updateParagraphStyle': {
-            'range': range_obj,
-            'paragraphStyle': paragraph_style,
-            'fields': ','.join(fields)
+        "updateParagraphStyle": {
+            "range": range_obj,
+            "paragraphStyle": paragraph_style,
+            "fields": ",".join(fields),
         }
     }
 
@@ -1283,6 +1266,7 @@ def create_paragraph_style_request(
 
 class ExtendBoundary(str, Enum):
     """Boundary type for extending search results."""
+
     PARAGRAPH = "paragraph"
     SENTENCE = "sentence"
     LINE = "line"
@@ -1297,6 +1281,7 @@ class RangeResult:
     This enables semantic text selection with clear feedback about
     what was matched and how the range was resolved.
     """
+
     success: bool
     start_index: Optional[int]
     end_index: Optional[int]
@@ -1304,9 +1289,9 @@ class RangeResult:
 
     # Detailed match information
     matched_start: Optional[str] = None  # What text matched the start
-    matched_end: Optional[str] = None    # What text matched the end
-    extend_type: Optional[str] = None    # If boundary extension was used
-    section_name: Optional[str] = None   # If section-based selection
+    matched_end: Optional[str] = None  # What text matched the end
+    extend_type: Optional[str] = None  # If boundary extension was used
+    section_name: Optional[str] = None  # If section-based selection
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary, excluding None values."""
@@ -1314,10 +1299,7 @@ class RangeResult:
         return {k: v for k, v in result.items() if v is not None}
 
 
-def find_paragraph_boundaries(
-    doc_data: Dict[str, Any],
-    index: int
-) -> Tuple[int, int]:
+def find_paragraph_boundaries(doc_data: Dict[str, Any], index: int) -> Tuple[int, int]:
     """
     Find the paragraph boundaries containing a given index.
 
@@ -1328,29 +1310,29 @@ def find_paragraph_boundaries(
     Returns:
         Tuple of (paragraph_start, paragraph_end)
     """
-    body = doc_data.get('body', {})
-    content = body.get('content', [])
+    body = doc_data.get("body", {})
+    content = body.get("content", [])
 
     for element in content:
-        start_idx = element.get('startIndex', 0)
-        end_idx = element.get('endIndex', 0)
+        start_idx = element.get("startIndex", 0)
+        end_idx = element.get("endIndex", 0)
 
         if start_idx <= index < end_idx:
-            if 'paragraph' in element:
+            if "paragraph" in element:
                 return (start_idx, end_idx)
-            elif 'table' in element:
+            elif "table" in element:
                 # For tables, find the cell containing the index
-                table = element['table']
-                for row in table.get('tableRows', []):
-                    for cell in row.get('tableCells', []):
-                        cell_start = cell.get('startIndex', 0)
-                        cell_end = cell.get('endIndex', 0)
+                table = element["table"]
+                for row in table.get("tableRows", []):
+                    for cell in row.get("tableCells", []):
+                        cell_start = cell.get("startIndex", 0)
+                        cell_end = cell.get("endIndex", 0)
                         if cell_start <= index < cell_end:
                             # Find paragraph within cell
-                            for cell_elem in cell.get('content', []):
-                                if 'paragraph' in cell_elem:
-                                    p_start = cell_elem.get('startIndex', 0)
-                                    p_end = cell_elem.get('endIndex', 0)
+                            for cell_elem in cell.get("content", []):
+                                if "paragraph" in cell_elem:
+                                    p_start = cell_elem.get("startIndex", 0)
+                                    p_end = cell_elem.get("endIndex", 0)
                                     if p_start <= index < p_end:
                                         return (p_start, p_end)
 
@@ -1358,10 +1340,7 @@ def find_paragraph_boundaries(
     return (index, index + 1)
 
 
-def find_sentence_boundaries(
-    doc_data: Dict[str, Any],
-    index: int
-) -> Tuple[int, int]:
+def find_sentence_boundaries(doc_data: Dict[str, Any], index: int) -> Tuple[int, int]:
     """
     Find the sentence boundaries containing a given index.
 
@@ -1404,11 +1383,59 @@ def find_sentence_boundaries(
     # Common abbreviations that should not end sentences
     # These have periods but are not sentence endings
     abbreviations = {
-        'mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'vs', 'etc', 'inc', 'ltd',
-        'corp', 'co', 'st', 'ave', 'blvd', 'rd', 'apt', 'no', 'vol', 'pg', 'pp',
-        'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
-        'fig', 'eg', 'ie', 'cf', 'al', 'ed', 'rev', 'gen', 'gov', 'sen', 'rep',
-        'hon', 'col', 'maj', 'capt', 'lt', 'sgt', 'pvt', 'est', 'approx'
+        "mr",
+        "mrs",
+        "ms",
+        "dr",
+        "prof",
+        "sr",
+        "jr",
+        "vs",
+        "etc",
+        "inc",
+        "ltd",
+        "corp",
+        "co",
+        "st",
+        "ave",
+        "blvd",
+        "rd",
+        "apt",
+        "no",
+        "vol",
+        "pg",
+        "pp",
+        "jan",
+        "feb",
+        "mar",
+        "apr",
+        "jun",
+        "jul",
+        "aug",
+        "sep",
+        "oct",
+        "nov",
+        "dec",
+        "fig",
+        "eg",
+        "ie",
+        "cf",
+        "al",
+        "ed",
+        "rev",
+        "gen",
+        "gov",
+        "sen",
+        "rep",
+        "hon",
+        "col",
+        "maj",
+        "capt",
+        "lt",
+        "sgt",
+        "pvt",
+        "est",
+        "approx",
     }
 
     def is_sentence_end(text: str, pos: int) -> bool:
@@ -1421,26 +1448,26 @@ def find_sentence_boundaries(
             return False
 
         char = text[pos]
-        if char not in '.!?':
+        if char not in ".!?":
             return False
 
         # Exclamation and question marks are almost always sentence ends
-        if char in '!?':
+        if char in "!?":
             # Check if followed by space/newline or end of text
             if pos + 1 >= len(text):
                 return True
             next_char = text[pos + 1]
-            return next_char in ' \t\n\r'
+            return next_char in " \t\n\r"
 
         # For periods, check if this might be an abbreviation
-        if char == '.':
+        if char == ".":
             # Check if followed by space/newline or end of text
             if pos + 1 >= len(text):
                 return True
             next_char = text[pos + 1]
 
             # If not followed by whitespace, probably not a sentence end
-            if next_char not in ' \t\n\r':
+            if next_char not in " \t\n\r":
                 return False
 
             # If followed by a lowercase letter after whitespace, probably not a sentence end
@@ -1468,11 +1495,11 @@ def find_sentence_boundaries(
                 return False
 
             # Check for ellipsis (...)
-            if pos >= 2 and text[pos - 2:pos + 1] == '...':
+            if pos >= 2 and text[pos - 2 : pos + 1] == "...":
                 # Check if this ellipsis ends a sentence
                 if pos + 1 >= len(text):
                     return True
-                return text[pos + 1] in ' \t\n\r'
+                return text[pos + 1] in " \t\n\r"
 
             return True
 
@@ -1482,10 +1509,10 @@ def find_sentence_boundaries(
         """Find all sentence end positions in text."""
         positions = []
         for i, char in enumerate(text):
-            if char in '.!?' and is_sentence_end(text, i):
+            if char in ".!?" and is_sentence_end(text, i):
                 # Include trailing whitespace as part of the sentence end
                 end_pos = i + 1
-                while end_pos < len(text) and text[end_pos] in ' \t':
+                while end_pos < len(text) and text[end_pos] in " \t":
                     end_pos += 1
                 positions.append(end_pos)
         return positions
@@ -1514,16 +1541,19 @@ def find_sentence_boundaries(
     if sentence_end_pos > len(index_map):
         sentence_end_pos = len(index_map)
 
-    doc_start = index_map[sentence_start_pos] if sentence_start_pos < len(index_map) else index
-    doc_end = index_map[sentence_end_pos - 1] + 1 if sentence_end_pos > 0 and sentence_end_pos <= len(index_map) else index + 1
+    doc_start = (
+        index_map[sentence_start_pos] if sentence_start_pos < len(index_map) else index
+    )
+    doc_end = (
+        index_map[sentence_end_pos - 1] + 1
+        if sentence_end_pos > 0 and sentence_end_pos <= len(index_map)
+        else index + 1
+    )
 
     return (doc_start, doc_end)
 
 
-def find_line_boundaries(
-    doc_data: Dict[str, Any],
-    index: int
-) -> Tuple[int, int]:
+def find_line_boundaries(doc_data: Dict[str, Any], index: int) -> Tuple[int, int]:
     """
     Find the line boundaries containing a given index.
 
@@ -1562,14 +1592,14 @@ def find_line_boundaries(
         text_pos = len(full_text) - 1
 
     # Find line start (search backward for newline or start of text)
-    line_start_pos = full_text.rfind('\n', 0, text_pos)
+    line_start_pos = full_text.rfind("\n", 0, text_pos)
     if line_start_pos == -1:
         line_start_pos = 0
     else:
         line_start_pos += 1  # Move past the newline
 
     # Find line end (search forward for newline or end of text)
-    line_end_pos = full_text.find('\n', text_pos)
+    line_end_pos = full_text.find("\n", text_pos)
     if line_end_pos == -1:
         line_end_pos = len(full_text)
     else:
@@ -1582,7 +1612,11 @@ def find_line_boundaries(
         line_end_pos = len(index_map)
 
     doc_start = index_map[line_start_pos] if line_start_pos < len(index_map) else index
-    doc_end = index_map[line_end_pos - 1] + 1 if line_end_pos > 0 and line_end_pos <= len(index_map) else index + 1
+    doc_end = (
+        index_map[line_end_pos - 1] + 1
+        if line_end_pos > 0 and line_end_pos <= len(index_map)
+        else index + 1
+    )
 
     return (doc_start, doc_end)
 
@@ -1593,7 +1627,7 @@ def resolve_range_by_search_bounds(
     end_search: str,
     start_occurrence: int = 1,
     end_occurrence: int = 1,
-    match_case: bool = True
+    match_case: bool = True,
 ) -> RangeResult:
     """
     Resolve a range defined by start and end search terms.
@@ -1613,7 +1647,9 @@ def resolve_range_by_search_bounds(
         RangeResult with resolved indices or error information
     """
     # Find start position
-    start_result = find_text_in_document(doc_data, start_search, start_occurrence, match_case)
+    start_result = find_text_in_document(
+        doc_data, start_search, start_occurrence, match_case
+    )
     if start_result is None:
         all_start = find_all_occurrences_in_document(doc_data, start_search, match_case)
         if not all_start:
@@ -1621,14 +1657,14 @@ def resolve_range_by_search_bounds(
                 success=False,
                 start_index=None,
                 end_index=None,
-                message=f"Start text '{start_search}' not found in document"
+                message=f"Start text '{start_search}' not found in document",
             )
         return RangeResult(
             success=False,
             start_index=None,
             end_index=None,
             message=f"Occurrence {start_occurrence} of start text '{start_search}' not found. "
-                    f"Document contains {len(all_start)} occurrence(s)."
+            f"Document contains {len(all_start)} occurrence(s).",
         )
 
     start_idx, _ = start_result
@@ -1642,14 +1678,14 @@ def resolve_range_by_search_bounds(
                 success=False,
                 start_index=None,
                 end_index=None,
-                message=f"End text '{end_search}' not found in document"
+                message=f"End text '{end_search}' not found in document",
             )
         return RangeResult(
             success=False,
             start_index=None,
             end_index=None,
             message=f"Occurrence {end_occurrence} of end text '{end_search}' not found. "
-                    f"Document contains {len(all_end)} occurrence(s)."
+            f"Document contains {len(all_end)} occurrence(s).",
         )
 
     _, end_idx = end_result
@@ -1661,7 +1697,7 @@ def resolve_range_by_search_bounds(
             start_index=None,
             end_index=None,
             message=f"Invalid range: end text '{end_search}' (at {end_idx}) "
-                    f"comes before or at start text '{start_search}' (at {start_idx})"
+            f"comes before or at start text '{start_search}' (at {start_idx})",
         )
 
     return RangeResult(
@@ -1670,7 +1706,7 @@ def resolve_range_by_search_bounds(
         end_index=end_idx,
         message=f"Range resolved: {start_idx}-{end_idx}",
         matched_start=start_search,
-        matched_end=end_search
+        matched_end=end_search,
     )
 
 
@@ -1679,7 +1715,7 @@ def resolve_range_by_search_with_extension(
     search: str,
     extend_to: str,
     occurrence: int = 1,
-    match_case: bool = True
+    match_case: bool = True,
 ) -> RangeResult:
     """
     Find text and extend the selection to boundary (paragraph/sentence/line).
@@ -1703,14 +1739,14 @@ def resolve_range_by_search_with_extension(
                 success=False,
                 start_index=None,
                 end_index=None,
-                message=f"Text '{search}' not found in document"
+                message=f"Text '{search}' not found in document",
             )
         return RangeResult(
             success=False,
             start_index=None,
             end_index=None,
             message=f"Occurrence {occurrence} of '{search}' not found. "
-                    f"Document contains {len(all_occurrences)} occurrence(s)."
+            f"Document contains {len(all_occurrences)} occurrence(s).",
         )
 
     found_start, found_end = result
@@ -1735,33 +1771,35 @@ def resolve_range_by_search_with_extension(
         section_start = None
         section_end = None
         current_heading = None
-        current_heading_level = float('inf')  # Default to highest level (lowest priority)
+        current_heading_level = float(
+            "inf"
+        )  # Default to highest level (lowest priority)
 
         # First pass: find the closest heading before the found text
         for elem in elements:
-            if elem['type'].startswith('heading') or elem['type'] == 'title':
-                elem_level = elem.get('level', 0)
-                if elem['end_index'] <= found_start:
+            if elem["type"].startswith("heading") or elem["type"] == "title":
+                elem_level = elem.get("level", 0)
+                if elem["end_index"] <= found_start:
                     # This heading is before our text - track it
                     current_heading = elem
                     current_heading_level = elem_level
-                    section_start = elem['start_index']
+                    section_start = elem["start_index"]
 
         # Second pass: find section end (next heading of same or higher level)
         if current_heading is not None:
             found_current = False
             for elem in elements:
-                if elem['type'].startswith('heading') or elem['type'] == 'title':
+                if elem["type"].startswith("heading") or elem["type"] == "title":
                     if elem == current_heading:
                         found_current = True
                         continue
 
                     if found_current:
-                        elem_level = elem.get('level', 0)
+                        elem_level = elem.get("level", 0)
                         # Section ends at headings of same or higher level (lower number)
                         # This properly handles nested subsections - they don't end the parent section
                         if elem_level <= current_heading_level:
-                            section_end = elem['start_index']
+                            section_end = elem["start_index"]
                             break
 
         if section_start is None:
@@ -1770,10 +1808,10 @@ def resolve_range_by_search_with_extension(
 
         if section_end is None:
             # Section goes to end of document
-            body = doc_data.get('body', {})
-            content = body.get('content', [])
+            body = doc_data.get("body", {})
+            content = body.get("content", [])
             if content:
-                section_end = content[-1].get('endIndex', found_end)
+                section_end = content[-1].get("endIndex", found_end)
             else:
                 section_end = found_end
 
@@ -1784,7 +1822,7 @@ def resolve_range_by_search_with_extension(
             start_index=None,
             end_index=None,
             message=f"Invalid extend_to value '{extend_to}'. "
-                    f"Use: paragraph, sentence, line, or section"
+            f"Use: paragraph, sentence, line, or section",
         )
 
     # Validate that extended range doesn't go backward (start > end)
@@ -1794,9 +1832,9 @@ def resolve_range_by_search_with_extension(
             start_index=None,
             end_index=None,
             message=f"Range extension error: extending to {extend_to} resulted in invalid range "
-                    f"where start ({start_idx}) > end ({end_idx}). "
-                    f"The search text '{search}' was found at index {found_start}, "
-                    f"but boundary detection failed. Try a different extend type or search term."
+            f"where start ({start_idx}) > end ({end_idx}). "
+            f"The search text '{search}' was found at index {found_start}, "
+            f"but boundary detection failed. Try a different extend type or search term.",
         )
 
     # Validate that the extended range still contains the original search result
@@ -1806,9 +1844,9 @@ def resolve_range_by_search_with_extension(
             start_index=None,
             end_index=None,
             message=f"Range extension error: the {extend_to} boundary "
-                    f"({start_idx}-{end_idx}) does not contain the search result "
-                    f"({found_start}-{found_end}). This may indicate a structural "
-                    f"issue with the document or an edge case in boundary detection."
+            f"({start_idx}-{end_idx}) does not contain the search result "
+            f"({found_start}-{found_end}). This may indicate a structural "
+            f"issue with the document or an edge case in boundary detection.",
         )
 
     return RangeResult(
@@ -1817,7 +1855,7 @@ def resolve_range_by_search_with_extension(
         end_index=end_idx,
         message=f"Range extended to {extend_to}: {start_idx}-{end_idx}",
         matched_start=search,
-        extend_type=extend_to
+        extend_type=extend_to,
     )
 
 
@@ -1827,7 +1865,7 @@ def resolve_range_by_search_with_offsets(
     before_chars: int = 0,
     after_chars: int = 0,
     occurrence: int = 1,
-    match_case: bool = True
+    match_case: bool = True,
 ) -> RangeResult:
     """
     Find text and expand the selection by character offsets.
@@ -1850,7 +1888,7 @@ def resolve_range_by_search_with_offsets(
             start_index=None,
             end_index=None,
             message=f"Invalid before_chars value ({before_chars}): must be non-negative. "
-                    f"Use a positive value to include characters before the match."
+            f"Use a positive value to include characters before the match.",
         )
 
     if after_chars < 0:
@@ -1859,7 +1897,7 @@ def resolve_range_by_search_with_offsets(
             start_index=None,
             end_index=None,
             message=f"Invalid after_chars value ({after_chars}): must be non-negative. "
-                    f"Use a positive value to include characters after the match."
+            f"Use a positive value to include characters after the match.",
         )
 
     # Find the search text
@@ -1871,22 +1909,22 @@ def resolve_range_by_search_with_offsets(
                 success=False,
                 start_index=None,
                 end_index=None,
-                message=f"Text '{search}' not found in document"
+                message=f"Text '{search}' not found in document",
             )
         return RangeResult(
             success=False,
             start_index=None,
             end_index=None,
             message=f"Occurrence {occurrence} of '{search}' not found. "
-                    f"Document contains {len(all_occurrences)} occurrence(s)."
+            f"Document contains {len(all_occurrences)} occurrence(s).",
         )
 
     found_start, found_end = result
 
     # Get document bounds
-    body = doc_data.get('body', {})
-    content = body.get('content', [])
-    doc_end = content[-1].get('endIndex', found_end) if content else found_end
+    body = doc_data.get("body", {})
+    content = body.get("content", [])
+    doc_end = content[-1].get("endIndex", found_end) if content else found_end
     doc_start = 1  # Google Docs starts at index 1 (0 is reserved)
 
     # Apply offsets with safe clamping to document bounds
@@ -1919,14 +1957,16 @@ def resolve_range_by_search_with_offsets(
             clamp_notes.append(f"start clamped from {requested_start} to {start_idx}")
         if end_clamped:
             clamp_notes.append(f"end clamped from {requested_end} to {end_idx}")
-        message_parts.append(f"Note: {', '.join(clamp_notes)} (document bounds: {doc_start}-{doc_end})")
+        message_parts.append(
+            f"Note: {', '.join(clamp_notes)} (document bounds: {doc_start}-{doc_end})"
+        )
 
     return RangeResult(
         success=True,
         start_index=start_idx,
         end_index=end_idx,
         message=" ".join(message_parts),
-        matched_start=search
+        matched_start=search,
     )
 
 
@@ -1935,7 +1975,7 @@ def resolve_range_by_section(
     section_heading: str,
     include_heading: bool = False,
     include_subsections: bool = True,
-    match_case: bool = False
+    match_case: bool = False,
 ) -> RangeResult:
     """
     Select a complete section by its heading.
@@ -1957,53 +1997,50 @@ def resolve_range_by_section(
 
     if section is None:
         all_headings = get_all_headings(doc_data)
-        heading_list = [h['text'] for h in all_headings[:10]]
+        heading_list = [h["text"] for h in all_headings[:10]]
         return RangeResult(
             success=False,
             start_index=None,
             end_index=None,
             message=f"Section '{section_heading}' not found. "
-                    f"Available headings: {heading_list}" +
-                    ("..." if len(all_headings) > 10 else "")
+            f"Available headings: {heading_list}"
+            + ("..." if len(all_headings) > 10 else ""),
         )
 
-    start_idx = section['start_index']
-    end_idx = section['end_index']
+    start_idx = section["start_index"]
+    end_idx = section["end_index"]
 
     # Adjust start if we don't want the heading
     if not include_heading:
         # Find the end of the heading (first newline after heading start)
-        heading_end = section['start_index'] + len(section['heading']) + 1
+        heading_end = section["start_index"] + len(section["heading"]) + 1
         # Look for actual end in elements
-        if section.get('elements'):
-            first_elem = section['elements'][0] if section['elements'] else None
+        if section.get("elements"):
+            first_elem = section["elements"][0] if section["elements"] else None
             if first_elem:
-                start_idx = first_elem['start_index']
+                start_idx = first_elem["start_index"]
             else:
                 start_idx = heading_end
         else:
             start_idx = heading_end
 
     # Adjust end if we don't want subsections
-    if not include_subsections and section.get('subsections'):
+    if not include_subsections and section.get("subsections"):
         # End at the first subsection
-        first_sub = section['subsections'][0]
-        end_idx = first_sub['start_index']
+        first_sub = section["subsections"][0]
+        end_idx = first_sub["start_index"]
 
     return RangeResult(
         success=True,
         start_index=start_idx,
         end_index=end_idx,
         message=f"Section '{section_heading}' selected: {start_idx}-{end_idx}",
-        section_name=section['heading'],
-        matched_start=section['heading']
+        section_name=section["heading"],
+        matched_start=section["heading"],
     )
 
 
-def resolve_range(
-    doc_data: Dict[str, Any],
-    range_spec: Dict[str, Any]
-) -> RangeResult:
+def resolve_range(doc_data: Dict[str, Any], range_spec: Dict[str, Any]) -> RangeResult:
     """
     Resolve a range specification to start/end indices.
 
@@ -2030,71 +2067,77 @@ def resolve_range(
     Returns:
         RangeResult with resolved indices or error information
     """
-    match_case = range_spec.get('match_case', True)
+    match_case = range_spec.get("match_case", True)
 
     # Option 1: Search-based bounds (start/end)
-    if 'start' in range_spec and 'end' in range_spec:
-        start_spec = range_spec['start']
-        end_spec = range_spec['end']
+    if "start" in range_spec and "end" in range_spec:
+        start_spec = range_spec["start"]
+        end_spec = range_spec["end"]
 
-        if isinstance(start_spec, dict) and 'search' in start_spec:
-            start_search = start_spec['search']
-            start_occurrence = start_spec.get('occurrence', 1)
+        if isinstance(start_spec, dict) and "search" in start_spec:
+            start_search = start_spec["search"]
+            start_occurrence = start_spec.get("occurrence", 1)
         else:
             return RangeResult(
                 success=False,
                 start_index=None,
                 end_index=None,
                 message="Invalid range start specification. "
-                        "Expected {'search': 'text', 'occurrence': N}"
+                "Expected {'search': 'text', 'occurrence': N}",
             )
 
-        if isinstance(end_spec, dict) and 'search' in end_spec:
-            end_search = end_spec['search']
-            end_occurrence = end_spec.get('occurrence', 1)
+        if isinstance(end_spec, dict) and "search" in end_spec:
+            end_search = end_spec["search"]
+            end_occurrence = end_spec.get("occurrence", 1)
         else:
             return RangeResult(
                 success=False,
                 start_index=None,
                 end_index=None,
                 message="Invalid range end specification. "
-                        "Expected {'search': 'text', 'occurrence': N}"
+                "Expected {'search': 'text', 'occurrence': N}",
             )
 
         return resolve_range_by_search_bounds(
-            doc_data, start_search, end_search,
-            start_occurrence, end_occurrence, match_case
+            doc_data,
+            start_search,
+            end_search,
+            start_occurrence,
+            end_occurrence,
+            match_case,
         )
 
     # Option 2: Search with extension to boundary
-    if 'search' in range_spec and 'extend' in range_spec:
+    if "search" in range_spec and "extend" in range_spec:
         return resolve_range_by_search_with_extension(
             doc_data,
-            range_spec['search'],
-            range_spec['extend'],
-            range_spec.get('occurrence', 1),
-            match_case
+            range_spec["search"],
+            range_spec["extend"],
+            range_spec.get("occurrence", 1),
+            match_case,
         )
 
     # Option 3: Search with character offsets
-    if 'search' in range_spec and ('before_chars' in range_spec or 'after_chars' in range_spec):
+    if "search" in range_spec and (
+        "before_chars" in range_spec or "after_chars" in range_spec
+    ):
         return resolve_range_by_search_with_offsets(
             doc_data,
-            range_spec['search'],
-            range_spec.get('before_chars', 0),
-            range_spec.get('after_chars', 0),
-            range_spec.get('occurrence', 1),
-            match_case
+            range_spec["search"],
+            range_spec.get("before_chars", 0),
+            range_spec.get("after_chars", 0),
+            range_spec.get("occurrence", 1),
+            match_case,
         )
 
     # Option 4: Section reference
-    if 'section' in range_spec:
+    if "section" in range_spec:
         return resolve_range_by_section(
             doc_data,
-            range_spec['section'],
-            range_spec.get('include_heading', False),
-            range_spec.get('include_subsections', True),
-            match_case
+            range_spec["section"],
+            range_spec.get("include_heading", False),
+            range_spec.get("include_subsections", True),
+            match_case,
         )
 
     return RangeResult(
@@ -2102,36 +2145,36 @@ def resolve_range(
         start_index=None,
         end_index=None,
         message="Invalid range specification. Supported formats:\n"
-                "1. {start: {search: 'text'}, end: {search: 'text'}}\n"
-                "2. {search: 'text', extend: 'paragraph'}\n"
-                "3. {search: 'text', before_chars: N, after_chars: N}\n"
-                "4. {section: 'Heading Name'}"
+        "1. {start: {search: 'text'}, end: {search: 'text'}}\n"
+        "2. {search: 'text', extend: 'paragraph'}\n"
+        "3. {search: 'text', before_chars: N, after_chars: N}\n"
+        "4. {section: 'Heading Name'}",
     )
 
 
 def validate_operation(operation: Dict[str, Any]) -> Tuple[bool, str]:
     """
     Validate a batch operation dictionary.
-    
+
     Args:
         operation: Operation dictionary to validate
-    
+
     Returns:
         Tuple of (is_valid, error_message)
     """
-    op_type = operation.get('type')
+    op_type = operation.get("type")
     if not op_type:
         return False, "Missing 'type' field"
 
     # Validate required fields for each operation type
     required_fields = {
-        'insert_text': ['index', 'text'],
-        'delete_text': ['start_index', 'end_index'],
-        'replace_text': ['start_index', 'end_index', 'text'],
-        'format_text': ['start_index', 'end_index'],
-        'insert_table': ['index', 'rows', 'columns'],
-        'insert_page_break': ['index'],
-        'find_replace': ['find_text', 'replace_text']
+        "insert_text": ["index", "text"],
+        "delete_text": ["start_index", "end_index"],
+        "replace_text": ["start_index", "end_index", "text"],
+        "format_text": ["start_index", "end_index"],
+        "insert_table": ["index", "rows", "columns"],
+        "insert_page_break": ["index"],
+        "find_replace": ["find_text", "replace_text"],
     }
 
     if op_type not in required_fields:
@@ -2153,7 +2196,7 @@ def create_insert_table_row_request(
     table_start_index: int,
     row_index: int,
     insert_below: bool = True,
-    column_index: int = 0
+    column_index: int = 0,
 ) -> Dict[str, Any]:
     """
     Create an insertTableRow request for Google Docs API.
@@ -2168,23 +2211,19 @@ def create_insert_table_row_request(
         Dictionary representing the insertTableRow request
     """
     return {
-        'insertTableRow': {
-            'tableCellLocation': {
-                'tableStartLocation': {
-                    'index': table_start_index
-                },
-                'rowIndex': row_index,
-                'columnIndex': column_index
+        "insertTableRow": {
+            "tableCellLocation": {
+                "tableStartLocation": {"index": table_start_index},
+                "rowIndex": row_index,
+                "columnIndex": column_index,
             },
-            'insertBelow': insert_below
+            "insertBelow": insert_below,
         }
     }
 
 
 def create_delete_table_row_request(
-    table_start_index: int,
-    row_index: int,
-    column_index: int = 0
+    table_start_index: int, row_index: int, column_index: int = 0
 ) -> Dict[str, Any]:
     """
     Create a deleteTableRow request for Google Docs API.
@@ -2198,23 +2237,18 @@ def create_delete_table_row_request(
         Dictionary representing the deleteTableRow request
     """
     return {
-        'deleteTableRow': {
-            'tableCellLocation': {
-                'tableStartLocation': {
-                    'index': table_start_index
-                },
-                'rowIndex': row_index,
-                'columnIndex': column_index
+        "deleteTableRow": {
+            "tableCellLocation": {
+                "tableStartLocation": {"index": table_start_index},
+                "rowIndex": row_index,
+                "columnIndex": column_index,
             }
         }
     }
 
 
 def create_insert_table_column_request(
-    table_start_index: int,
-    row_index: int,
-    column_index: int,
-    insert_right: bool = True
+    table_start_index: int, row_index: int, column_index: int, insert_right: bool = True
 ) -> Dict[str, Any]:
     """
     Create an insertTableColumn request for Google Docs API.
@@ -2229,23 +2263,19 @@ def create_insert_table_column_request(
         Dictionary representing the insertTableColumn request
     """
     return {
-        'insertTableColumn': {
-            'tableCellLocation': {
-                'tableStartLocation': {
-                    'index': table_start_index
-                },
-                'rowIndex': row_index,
-                'columnIndex': column_index
+        "insertTableColumn": {
+            "tableCellLocation": {
+                "tableStartLocation": {"index": table_start_index},
+                "rowIndex": row_index,
+                "columnIndex": column_index,
             },
-            'insertRight': insert_right
+            "insertRight": insert_right,
         }
     }
 
 
 def create_delete_table_column_request(
-    table_start_index: int,
-    row_index: int,
-    column_index: int
+    table_start_index: int, row_index: int, column_index: int
 ) -> Dict[str, Any]:
     """
     Create a deleteTableColumn request for Google Docs API.
@@ -2259,13 +2289,11 @@ def create_delete_table_column_request(
         Dictionary representing the deleteTableColumn request
     """
     return {
-        'deleteTableColumn': {
-            'tableCellLocation': {
-                'tableStartLocation': {
-                    'index': table_start_index
-                },
-                'rowIndex': row_index,
-                'columnIndex': column_index
+        "deleteTableColumn": {
+            "tableCellLocation": {
+                "tableStartLocation": {"index": table_start_index},
+                "rowIndex": row_index,
+                "columnIndex": column_index,
             }
         }
     }
@@ -2276,7 +2304,7 @@ def create_merge_table_cells_request(
     row_index: int,
     column_index: int,
     row_span: int,
-    column_span: int
+    column_span: int,
 ) -> Dict[str, Any]:
     """
     Create a mergeTableCells request for Google Docs API.
@@ -2296,17 +2324,15 @@ def create_merge_table_cells_request(
         Dictionary representing the mergeTableCells request
     """
     return {
-        'mergeTableCells': {
-            'tableRange': {
-                'tableCellLocation': {
-                    'tableStartLocation': {
-                        'index': table_start_index
-                    },
-                    'rowIndex': row_index,
-                    'columnIndex': column_index
+        "mergeTableCells": {
+            "tableRange": {
+                "tableCellLocation": {
+                    "tableStartLocation": {"index": table_start_index},
+                    "rowIndex": row_index,
+                    "columnIndex": column_index,
                 },
-                'rowSpan': row_span,
-                'columnSpan': column_span
+                "rowSpan": row_span,
+                "columnSpan": column_span,
             }
         }
     }
@@ -2317,7 +2343,7 @@ def create_unmerge_table_cells_request(
     row_index: int,
     column_index: int,
     row_span: int,
-    column_span: int
+    column_span: int,
 ) -> Dict[str, Any]:
     """
     Create an unmergeTableCells request for Google Docs API.
@@ -2336,17 +2362,15 @@ def create_unmerge_table_cells_request(
         Dictionary representing the unmergeTableCells request
     """
     return {
-        'unmergeTableCells': {
-            'tableRange': {
-                'tableCellLocation': {
-                    'tableStartLocation': {
-                        'index': table_start_index
-                    },
-                    'rowIndex': row_index,
-                    'columnIndex': column_index
+        "unmergeTableCells": {
+            "tableRange": {
+                "tableCellLocation": {
+                    "tableStartLocation": {"index": table_start_index},
+                    "rowIndex": row_index,
+                    "columnIndex": column_index,
                 },
-                'rowSpan': row_span,
-                'columnSpan': column_span
+                "rowSpan": row_span,
+                "columnSpan": column_span,
             }
         }
     }
@@ -2356,7 +2380,7 @@ def create_update_table_column_properties_request(
     table_start_index: int,
     column_indices: List[int],
     width: float,
-    width_type: str = "FIXED_WIDTH"
+    width_type: str = "FIXED_WIDTH",
 ) -> Dict[str, Any]:
     """
     Create an updateTableColumnProperties request for Google Docs API.
@@ -2380,19 +2404,14 @@ def create_update_table_column_properties_request(
         return a 400 bad request error.
     """
     return {
-        'updateTableColumnProperties': {
-            'tableStartLocation': {
-                'index': table_start_index
+        "updateTableColumnProperties": {
+            "tableStartLocation": {"index": table_start_index},
+            "columnIndices": column_indices,
+            "tableColumnProperties": {
+                "widthType": width_type,
+                "width": {"magnitude": width, "unit": "PT"},
             },
-            'columnIndices': column_indices,
-            'tableColumnProperties': {
-                'widthType': width_type,
-                'width': {
-                    'magnitude': width,
-                    'unit': 'PT'
-                }
-            },
-            'fields': '*'
+            "fields": "*",
         }
     }
 
@@ -2451,36 +2470,36 @@ def create_update_table_cell_style_request(
     # Handle background color
     if background_color:
         color_dict = _parse_color(background_color)
-        table_cell_style['backgroundColor'] = color_dict
-        fields.append('backgroundColor')
+        table_cell_style["backgroundColor"] = color_dict
+        fields.append("backgroundColor")
 
     # Build default border style from common parameters
     default_border = {}
     if border_color:
-        default_border['color'] = _parse_color(border_color)
+        default_border["color"] = _parse_color(border_color)
     if border_width is not None:
-        default_border['width'] = {'magnitude': border_width, 'unit': 'PT'}
+        default_border["width"] = {"magnitude": border_width, "unit": "PT"}
     if border_dash_style:
-        default_border['dashStyle'] = border_dash_style
+        default_border["dashStyle"] = border_dash_style
 
     # Helper function to build individual border style
     def _build_border_style(override: Dict[str, Any] = None) -> Dict[str, Any]:
         border = dict(default_border)  # Copy defaults
         if override:
-            if 'color' in override:
-                border['color'] = _parse_color(override['color'])
-            if 'width' in override:
-                border['width'] = {'magnitude': override['width'], 'unit': 'PT'}
-            if 'dash_style' in override:
-                border['dashStyle'] = override['dash_style']
+            if "color" in override:
+                border["color"] = _parse_color(override["color"])
+            if "width" in override:
+                border["width"] = {"magnitude": override["width"], "unit": "PT"}
+            if "dash_style" in override:
+                border["dashStyle"] = override["dash_style"]
         return border if border else None
 
     # Apply borders (either from defaults or specific overrides)
     for border_name, border_override in [
-        ('borderTop', border_top),
-        ('borderBottom', border_bottom),
-        ('borderLeft', border_left),
-        ('borderRight', border_right),
+        ("borderTop", border_top),
+        ("borderBottom", border_bottom),
+        ("borderLeft", border_left),
+        ("borderRight", border_right),
     ]:
         border_style = _build_border_style(border_override)
         if border_style or border_override is not None:
@@ -2490,48 +2509,48 @@ def create_update_table_cell_style_request(
                 fields.append(border_name)
 
     # If we have default border styles but no specific overrides, apply to all borders
-    if default_border and not any([border_top, border_bottom, border_left, border_right]):
-        for border_name in ['borderTop', 'borderBottom', 'borderLeft', 'borderRight']:
+    if default_border and not any(
+        [border_top, border_bottom, border_left, border_right]
+    ):
+        for border_name in ["borderTop", "borderBottom", "borderLeft", "borderRight"]:
             table_cell_style[border_name] = default_border
             fields.append(border_name)
 
     # Handle padding
     if padding_top is not None:
-        table_cell_style['paddingTop'] = {'magnitude': padding_top, 'unit': 'PT'}
-        fields.append('paddingTop')
+        table_cell_style["paddingTop"] = {"magnitude": padding_top, "unit": "PT"}
+        fields.append("paddingTop")
     if padding_bottom is not None:
-        table_cell_style['paddingBottom'] = {'magnitude': padding_bottom, 'unit': 'PT'}
-        fields.append('paddingBottom')
+        table_cell_style["paddingBottom"] = {"magnitude": padding_bottom, "unit": "PT"}
+        fields.append("paddingBottom")
     if padding_left is not None:
-        table_cell_style['paddingLeft'] = {'magnitude': padding_left, 'unit': 'PT'}
-        fields.append('paddingLeft')
+        table_cell_style["paddingLeft"] = {"magnitude": padding_left, "unit": "PT"}
+        fields.append("paddingLeft")
     if padding_right is not None:
-        table_cell_style['paddingRight'] = {'magnitude': padding_right, 'unit': 'PT'}
-        fields.append('paddingRight')
+        table_cell_style["paddingRight"] = {"magnitude": padding_right, "unit": "PT"}
+        fields.append("paddingRight")
 
     # Handle content alignment
     if content_alignment:
-        table_cell_style['contentAlignment'] = content_alignment
-        fields.append('contentAlignment')
+        table_cell_style["contentAlignment"] = content_alignment
+        fields.append("contentAlignment")
 
     # Remove duplicates while preserving order
     fields = list(dict.fromkeys(fields))
 
     return {
-        'updateTableCellStyle': {
-            'tableCellStyle': table_cell_style,
-            'tableRange': {
-                'tableCellLocation': {
-                    'tableStartLocation': {
-                        'index': table_start_index
-                    },
-                    'rowIndex': row_index,
-                    'columnIndex': column_index
+        "updateTableCellStyle": {
+            "tableCellStyle": table_cell_style,
+            "tableRange": {
+                "tableCellLocation": {
+                    "tableStartLocation": {"index": table_start_index},
+                    "rowIndex": row_index,
+                    "columnIndex": column_index,
                 },
-                'rowSpan': row_span,
-                'columnSpan': column_span
+                "rowSpan": row_span,
+                "columnSpan": column_span,
             },
-            'fields': ','.join(fields)
+            "fields": ",".join(fields),
         }
     }
 
@@ -2554,15 +2573,10 @@ def create_insert_section_break_request(
     Returns:
         Dictionary representing the insertSectionBreak request
     """
-    location = {'index': index}
+    location = {"index": index}
     if tab_id:
-        location['tabId'] = tab_id
-    return {
-        'insertSectionBreak': {
-            'location': location,
-            'sectionType': section_type
-        }
-    }
+        location["tabId"] = tab_id
+    return {"insertSectionBreak": {"location": location, "sectionType": section_type}}
 
 
 def create_insert_footnote_request(index: int, tab_id: str = None) -> Dict[str, Any]:
@@ -2583,20 +2597,14 @@ def create_insert_footnote_request(index: int, tab_id: str = None) -> Dict[str, 
     Returns:
         Dictionary representing the createFootnote request
     """
-    location = {'index': index}
+    location = {"index": index}
     if tab_id:
-        location['tabId'] = tab_id
-    return {
-        'createFootnote': {
-            'location': location
-        }
-    }
+        location["tabId"] = tab_id
+    return {"createFootnote": {"location": location}}
 
 
 def create_insert_text_in_footnote_request(
-    footnote_id: str,
-    index: int,
-    text: str
+    footnote_id: str, index: int, text: str
 ) -> Dict[str, Any]:
     """
     Create an insertText request to add text to a footnote.
@@ -2610,12 +2618,9 @@ def create_insert_text_in_footnote_request(
         Dictionary representing the insertText request with footnote segmentId
     """
     return {
-        'insertText': {
-            'location': {
-                'segmentId': footnote_id,
-                'index': index
-            },
-            'text': text
+        "insertText": {
+            "location": {"segmentId": footnote_id, "index": index},
+            "text": text,
         }
     }
 
@@ -2630,7 +2635,7 @@ def create_named_range_request(
     start_index: int,
     end_index: int,
     segment_id: str = None,
-    tab_id: str = None
+    tab_id: str = None,
 ) -> Dict[str, Any]:
     """
     Create a createNamedRange request for Google Docs API.
@@ -2648,29 +2653,19 @@ def create_named_range_request(
     Returns:
         Dictionary representing the createNamedRange request
     """
-    range_obj = {
-        'startIndex': start_index,
-        'endIndex': end_index
-    }
+    range_obj = {"startIndex": start_index, "endIndex": end_index}
 
     if segment_id:
-        range_obj['segmentId'] = segment_id
+        range_obj["segmentId"] = segment_id
 
     if tab_id:
-        range_obj['tabId'] = tab_id
+        range_obj["tabId"] = tab_id
 
-    return {
-        'createNamedRange': {
-            'name': name,
-            'range': range_obj
-        }
-    }
+    return {"createNamedRange": {"name": name, "range": range_obj}}
 
 
 def create_delete_named_range_request(
-    named_range_id: str = None,
-    name: str = None,
-    tabs_criteria: Dict[str, Any] = None
+    named_range_id: str = None, name: str = None, tabs_criteria: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
     Create a deleteNamedRange request for Google Docs API.
@@ -2694,13 +2689,11 @@ def create_delete_named_range_request(
     request = {}
 
     if named_range_id:
-        request['namedRangeId'] = named_range_id
+        request["namedRangeId"] = named_range_id
     else:
-        request['name'] = name
+        request["name"] = name
 
     if tabs_criteria:
-        request['tabsCriteria'] = tabs_criteria
+        request["tabsCriteria"] = tabs_criteria
 
-    return {
-        'deleteNamedRange': request
-    }
+    return {"deleteNamedRange": request}

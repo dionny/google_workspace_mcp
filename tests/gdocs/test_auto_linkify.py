@@ -13,6 +13,7 @@ Note: The auto_linkify_doc tool is decorated with @server.tool() and
 focus on testing the underlying logic through helper functions and
 simulated document data.
 """
+
 import re
 import pytest
 
@@ -27,9 +28,9 @@ class TestURLDetectionPattern:
 
     # Default URL pattern used by auto_linkify_doc
     DEFAULT_URL_PATTERN = (
-        r'(?:https?://|www\.)'  # Protocol or www.
-        r'[a-zA-Z0-9]'  # Must start with alphanumeric
-        r'(?:[a-zA-Z0-9\-._~:/?#\[\]@!$&\'()*+,;=%]*[a-zA-Z0-9/])?'  # URL chars
+        r"(?:https?://|www\.)"  # Protocol or www.
+        r"[a-zA-Z0-9]"  # Must start with alphanumeric
+        r"(?:[a-zA-Z0-9\-._~:/?#\[\]@!$&\'()*+,;=%]*[a-zA-Z0-9/])?"  # URL chars
     )
 
     def test_detect_https_url(self):
@@ -174,13 +175,15 @@ class TestDocumentTextExtraction:
                         "paragraph": {
                             "elements": [
                                 {
-                                    "textRun": {"content": "Second paragraph with https://test.com link.\n"},
+                                    "textRun": {
+                                        "content": "Second paragraph with https://test.com link.\n"
+                                    },
                                     "startIndex": 18,
                                     "endIndex": 63,
                                 }
                             ]
                         }
-                    }
+                    },
                 ]
             }
         }
@@ -198,8 +201,8 @@ class TestURLNormalization:
         """Test that www. URLs are normalized to https://."""
         url_text = "www.example.com"
         normalized = url_text
-        if url_text.lower().startswith('www.'):
-            normalized = 'https://' + url_text
+        if url_text.lower().startswith("www."):
+            normalized = "https://" + url_text
 
         assert normalized == "https://www.example.com"
 
@@ -207,8 +210,8 @@ class TestURLNormalization:
         """Test that https:// URLs are not modified."""
         url_text = "https://example.com"
         normalized = url_text
-        if url_text.lower().startswith('www.'):
-            normalized = 'https://' + url_text
+        if url_text.lower().startswith("www."):
+            normalized = "https://" + url_text
 
         assert normalized == "https://example.com"
 
@@ -216,8 +219,8 @@ class TestURLNormalization:
         """Test that http:// URLs are not modified."""
         url_text = "http://example.com"
         normalized = url_text
-        if url_text.lower().startswith('www.'):
-            normalized = 'https://' + url_text
+        if url_text.lower().startswith("www."):
+            normalized = "https://" + url_text
 
         assert normalized == "http://example.com"
 
@@ -234,11 +237,13 @@ class TestCreateLinkRequest:
         )
 
         assert request is not None
-        assert 'updateTextStyle' in request
-        assert request['updateTextStyle']['textStyle']['link'] == {'url': 'https://example.com'}
-        assert request['updateTextStyle']['range']['startIndex'] == 10
-        assert request['updateTextStyle']['range']['endIndex'] == 30
-        assert 'link' in request['updateTextStyle']['fields']
+        assert "updateTextStyle" in request
+        assert request["updateTextStyle"]["textStyle"]["link"] == {
+            "url": "https://example.com"
+        }
+        assert request["updateTextStyle"]["range"]["startIndex"] == 10
+        assert request["updateTextStyle"]["range"]["endIndex"] == 30
+        assert "link" in request["updateTextStyle"]["fields"]
 
     def test_create_link_only_request(self):
         """Test that link-only request doesn't include other formatting."""
@@ -249,12 +254,12 @@ class TestCreateLinkRequest:
         )
 
         assert request is not None
-        style = request['updateTextStyle']['textStyle']
+        style = request["updateTextStyle"]["textStyle"]
         # Should only have 'link' key
-        assert 'link' in style
+        assert "link" in style
         # Should not have other formatting
-        assert 'bold' not in style
-        assert 'italic' not in style
+        assert "bold" not in style
+        assert "italic" not in style
 
 
 class TestExistingLinkDetection:
@@ -269,10 +274,7 @@ class TestExistingLinkDetection:
                         "paragraph": {
                             "elements": [
                                 {
-                                    "textRun": {
-                                        "content": "Visit ",
-                                        "textStyle": {}
-                                    },
+                                    "textRun": {"content": "Visit ", "textStyle": {}},
                                     "startIndex": 1,
                                     "endIndex": 7,
                                 },
@@ -281,19 +283,16 @@ class TestExistingLinkDetection:
                                         "content": "https://example.com",
                                         "textStyle": {
                                             "link": {"url": "https://example.com"}
-                                        }
+                                        },
                                     },
                                     "startIndex": 7,
                                     "endIndex": 26,
                                 },
                                 {
-                                    "textRun": {
-                                        "content": " today.",
-                                        "textStyle": {}
-                                    },
+                                    "textRun": {"content": " today.", "textStyle": {}},
                                     "startIndex": 26,
                                     "endIndex": 33,
-                                }
+                                },
                             ]
                         }
                     }
@@ -303,19 +302,19 @@ class TestExistingLinkDetection:
 
         # Simulate the extraction logic from auto_linkify_doc
         existing_links = set()
-        body = doc_data.get('body', {})
-        content = body.get('content', [])
+        body = doc_data.get("body", {})
+        content = body.get("content", [])
 
         for element in content:
-            if 'paragraph' in element:
-                paragraph = element['paragraph']
-                for para_element in paragraph.get('elements', []):
-                    if 'textRun' in para_element:
-                        text_run = para_element['textRun']
-                        text_style = text_run.get('textStyle', {})
-                        if 'link' in text_style:
-                            start_idx = para_element.get('startIndex', 0)
-                            end_idx = para_element.get('endIndex', 0)
+            if "paragraph" in element:
+                paragraph = element["paragraph"]
+                for para_element in paragraph.get("elements", []):
+                    if "textRun" in para_element:
+                        text_run = para_element["textRun"]
+                        text_style = text_run.get("textStyle", {})
+                        if "link" in text_style:
+                            start_idx = para_element.get("startIndex", 0)
+                            end_idx = para_element.get("endIndex", 0)
                             existing_links.add((start_idx, end_idx))
 
         assert len(existing_links) == 1
@@ -357,7 +356,7 @@ class TestCustomURLPattern:
 
     def test_github_url_pattern(self):
         """Test custom pattern for GitHub URLs."""
-        custom_pattern = r'https://github\.com/[\w-]+/[\w-]+'
+        custom_pattern = r"https://github\.com/[\w-]+/[\w-]+"
         pattern = re.compile(custom_pattern)
         text = "Check https://github.com/user-name/repo-name for the code."
 
@@ -368,9 +367,11 @@ class TestCustomURLPattern:
 
     def test_jira_url_pattern(self):
         """Test custom pattern for JIRA URLs."""
-        custom_pattern = r'https://[\w-]+\.atlassian\.net/browse/[\w]+-\d+'
+        custom_pattern = r"https://[\w-]+\.atlassian\.net/browse/[\w]+-\d+"
         pattern = re.compile(custom_pattern)
-        text = "See ticket at https://mycompany.atlassian.net/browse/PROJ-123 for details."
+        text = (
+            "See ticket at https://mycompany.atlassian.net/browse/PROJ-123 for details."
+        )
 
         matches = list(pattern.finditer(text))
 
@@ -379,7 +380,7 @@ class TestCustomURLPattern:
 
     def test_invalid_regex_detection(self):
         """Test that invalid regex can be detected."""
-        invalid_pattern = r'[invalid(regex'
+        invalid_pattern = r"[invalid(regex"
 
         with pytest.raises(re.error):
             re.compile(invalid_pattern)
@@ -397,9 +398,21 @@ class TestAutoLinkifyResponseStructure:
             "urls_found": 3,
             "urls_skipped": 0,
             "affected_ranges": [
-                {"url": "https://example.com", "original_text": "https://example.com", "range": {"start": 10, "end": 29}},
-                {"url": "https://www.test.org", "original_text": "www.test.org", "range": {"start": 50, "end": 62}},
-                {"url": "http://demo.net", "original_text": "http://demo.net", "range": {"start": 80, "end": 95}},
+                {
+                    "url": "https://example.com",
+                    "original_text": "https://example.com",
+                    "range": {"start": 10, "end": 29},
+                },
+                {
+                    "url": "https://www.test.org",
+                    "original_text": "www.test.org",
+                    "range": {"start": 50, "end": 62},
+                },
+                {
+                    "url": "http://demo.net",
+                    "original_text": "http://demo.net",
+                    "range": {"start": 80, "end": 95},
+                },
             ],
             "message": "Linked 3 URL(s) in document",
             "link": "https://docs.google.com/document/d/doc-123/edit",
@@ -417,7 +430,11 @@ class TestAutoLinkifyResponseStructure:
             "would_modify": True,
             "urls_found": 5,
             "urls_to_link": [
-                {"url": "https://example.com", "original_text": "https://example.com", "range": {"start": 10, "end": 29}},
+                {
+                    "url": "https://example.com",
+                    "original_text": "https://example.com",
+                    "range": {"start": 10, "end": 29},
+                },
             ],
             "urls_already_linked": 2,
             "message": "Would link 3 URL(s) (2 already linked, will be skipped)",
@@ -505,7 +522,7 @@ class TestIndexMapping:
                 full_text += char
 
         # Find URL in full text
-        pattern = re.compile(r'https://example\.com')
+        pattern = re.compile(r"https://example\.com")
         match = pattern.search(full_text)
 
         assert match is not None

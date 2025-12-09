@@ -3,6 +3,7 @@ Unit tests for insert_doc_footnote functionality.
 
 Tests verify proper handling of footnote creation requests and text insertion.
 """
+
 from gdocs.docs_helpers import (
     create_insert_footnote_request,
     create_insert_text_in_footnote_request,
@@ -46,9 +47,7 @@ class TestCreateInsertTextInFootnoteRequest:
     def test_basic_text_insertion(self):
         """Text insertion request for footnote should have correct structure."""
         request = create_insert_text_in_footnote_request(
-            footnote_id="kix.abc123",
-            index=1,
-            text="This is footnote content."
+            footnote_id="kix.abc123", index=1, text="This is footnote content."
         )
 
         assert "insertText" in request
@@ -59,11 +58,9 @@ class TestCreateInsertTextInFootnoteRequest:
 
     def test_text_insertion_with_special_characters(self):
         """Text with special characters should be preserved."""
-        text = "Citation: Author (2024). \"Title\" p.42"
+        text = 'Citation: Author (2024). "Title" p.42'
         request = create_insert_text_in_footnote_request(
-            footnote_id="kix.def456",
-            index=1,
-            text=text
+            footnote_id="kix.def456", index=1, text=text
         )
 
         assert request["insertText"]["text"] == text
@@ -72,9 +69,7 @@ class TestCreateInsertTextInFootnoteRequest:
         """Unicode characters should be preserved."""
         text = "Reference: \u00a9 2024 \u2013 M\u00fcller et al."
         request = create_insert_text_in_footnote_request(
-            footnote_id="kix.unicode",
-            index=1,
-            text=text
+            footnote_id="kix.unicode", index=1, text=text
         )
 
         assert request["insertText"]["text"] == text
@@ -83,9 +78,7 @@ class TestCreateInsertTextInFootnoteRequest:
         """Multiline text should be preserved."""
         text = "Line 1\nLine 2\nLine 3"
         request = create_insert_text_in_footnote_request(
-            footnote_id="kix.multiline",
-            index=1,
-            text=text
+            footnote_id="kix.multiline", index=1, text=text
         )
 
         assert request["insertText"]["text"] == text
@@ -94,9 +87,7 @@ class TestCreateInsertTextInFootnoteRequest:
     def test_segment_id_is_included(self):
         """Verify segment ID is properly set for footnote targeting."""
         request = create_insert_text_in_footnote_request(
-            footnote_id="kix.footnote123",
-            index=0,
-            text="test"
+            footnote_id="kix.footnote123", index=0, text="test"
         )
 
         # The segmentId tells the API to insert into the footnote, not the body

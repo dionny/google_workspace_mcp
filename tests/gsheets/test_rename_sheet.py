@@ -324,9 +324,7 @@ class TestRenameSheetErrorMessages:
         """Test error message when name conflicts with existing sheet."""
         new_name = "Existing Sheet"
         spreadsheet_id = "abc123"
-        error_msg = (
-            f"A sheet named '{new_name}' already exists in spreadsheet {spreadsheet_id}."
-        )
+        error_msg = f"A sheet named '{new_name}' already exists in spreadsheet {spreadsheet_id}."
 
         assert f"A sheet named '{new_name}'" in error_msg
         assert "already exists" in error_msg

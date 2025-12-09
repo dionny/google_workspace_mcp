@@ -738,7 +738,9 @@ class ScenarioTester:
                     name="Find and replace with formatting",
                     category="find_replace",
                     passed=has_formatting_info,
-                    message="Replaced and formatted" if has_formatting_info else "Missing formatting info",
+                    message="Replaced and formatted"
+                    if has_formatting_info
+                    else "Missing formatting info",
                     details={"response": result_dict},
                 )
             )
@@ -773,7 +775,9 @@ class ScenarioTester:
                     name="Find and replace formatting preview",
                     category="find_replace",
                     passed=has_formatting_preview,
-                    message="Preview shows formatting" if has_formatting_preview else "Missing formatting in preview",
+                    message="Preview shows formatting"
+                    if has_formatting_preview
+                    else "Missing formatting in preview",
                     details={"response": result_dict},
                 )
             )
@@ -807,7 +811,9 @@ class ScenarioTester:
                     name="Reject empty find_text",
                     category="find_replace",
                     passed=is_validation_error,
-                    message="Validation caught empty find_text" if is_validation_error else "Missing validation",
+                    message="Validation caught empty find_text"
+                    if is_validation_error
+                    else "Missing validation",
                     details={"response": result_dict},
                 )
             )
@@ -865,8 +871,8 @@ class ScenarioTester:
                 # Parse the structure to find an actual heading
                 try:
                     # Try to parse as JSON and find headings
-                    start_idx = structure_str.find('{')
-                    end_idx = structure_str.rfind('}') + 1
+                    start_idx = structure_str.find("{")
+                    end_idx = structure_str.rfind("}") + 1
                     if start_idx >= 0 and end_idx > start_idx:
                         structure_dict = json.loads(structure_str[start_idx:end_idx])
                         # Look for headings in the structure
@@ -874,7 +880,9 @@ class ScenarioTester:
                         if headings:
                             # Get first non-empty heading
                             for h in headings:
-                                h_text = h.get("text", "") if isinstance(h, dict) else str(h)
+                                h_text = (
+                                    h.get("text", "") if isinstance(h, dict) else str(h)
+                                )
                                 if h_text and len(h_text) > 2 and h_text.strip():
                                     heading_name = h_text.strip()
                                     break
@@ -929,13 +937,17 @@ class ScenarioTester:
                 )
                 result_dict = json.loads(result) if isinstance(result, str) else result
                 # Check if the operation would succeed (either would_modify or success)
-                would_work = result_dict.get("would_modify", False) or result_dict.get("success", False)
+                would_work = result_dict.get("would_modify", False) or result_dict.get(
+                    "success", False
+                )
                 self.record(
                     TestResult(
                         name="Insert at section end (preview)",
                         category="section",
                         passed=would_work,
-                        message="Section positioning works" if would_work else "Section not found",
+                        message="Section positioning works"
+                        if would_work
+                        else "Section not found",
                         details=result_dict,
                     )
                 )
@@ -1244,7 +1256,11 @@ class ScenarioTester:
         # Test 13b: Extract document summary/outline
         try:
             result = await self.call_tool("extract_document_summary")
-            passed = "outline" in str(result).lower() or "summary" in str(result).lower() or "heading" in str(result).lower()
+            passed = (
+                "outline" in str(result).lower()
+                or "summary" in str(result).lower()
+                or "heading" in str(result).lower()
+            )
             self.record(
                 TestResult(
                     name="Extract document summary/outline",
@@ -1295,7 +1311,11 @@ class ScenarioTester:
         # Test 14a: Read comments (should work even if no comments)
         try:
             result = await self.call_tool("read_document_comments")
-            passed = "comments" in str(result).lower() or "[]" in str(result) or "no comments" in str(result).lower()
+            passed = (
+                "comments" in str(result).lower()
+                or "[]" in str(result)
+                or "no comments" in str(result).lower()
+            )
             self.record(
                 TestResult(
                     name="Read document comments",
@@ -1321,7 +1341,9 @@ class ScenarioTester:
                 "create_document_comment",
                 comment_content=f"{self.test_marker} Test comment",
             )
-            passed = "comment" in str(result).lower() or "created" in str(result).lower()
+            passed = (
+                "comment" in str(result).lower() or "created" in str(result).lower()
+            )
             self.record(
                 TestResult(
                     name="Create document comment",
@@ -1352,7 +1374,11 @@ class ScenarioTester:
                 "find_doc_elements",
                 element_type="heading",
             )
-            passed = "heading" in str(result).lower() or "element" in str(result).lower() or "[]" in str(result)
+            passed = (
+                "heading" in str(result).lower()
+                or "element" in str(result).lower()
+                or "[]" in str(result)
+            )
             self.record(
                 TestResult(
                     name="Find all headings",
@@ -1726,13 +1752,18 @@ class ScenarioTester:
             result = await self.call_tool("get_doc_info", detail="summary")
             # Extract JSON from response (may have text prefix and suffix)
             result_str = str(result)
-            json_start = result_str.find('{')
-            json_end = result_str.rfind('}') + 1
+            json_start = result_str.find("{")
+            json_end = result_str.rfind("}") + 1
             if json_start >= 0 and json_end > json_start:
                 info = json.loads(result_str[json_start:json_end])
             else:
                 info = {}
-            end_index = info.get("total_length", info.get("statistics", {}).get("total_length", 200)) - 1
+            end_index = (
+                info.get(
+                    "total_length", info.get("statistics", {}).get("total_length", 200)
+                )
+                - 1
+            )
             # Convert the last few lines to a bullet list
             result = await self.call_tool(
                 "modify_doc_text",
@@ -1740,7 +1771,11 @@ class ScenarioTester:
                 end_index=end_index,
                 convert_to_list="UNORDERED",
             )
-            passed = "success" in str(result).lower() or "list" in str(result).lower() or "bullet" in str(result).lower()
+            passed = (
+                "success" in str(result).lower()
+                or "list" in str(result).lower()
+                or "bullet" in str(result).lower()
+            )
             self.record(
                 TestResult(
                     name="Convert text to bullet list",
@@ -1768,7 +1803,11 @@ class ScenarioTester:
                 text=f"\n{self.test_marker} Step 1\n{self.test_marker} Step 2\n{self.test_marker} Step 3\n",
                 convert_to_list="ORDERED",
             )
-            passed = "success" in str(result).lower() or "numbered" in str(result).lower() or "list" in str(result).lower()
+            passed = (
+                "success" in str(result).lower()
+                or "numbered" in str(result).lower()
+                or "list" in str(result).lower()
+            )
             self.record(
                 TestResult(
                     name="Insert and convert to numbered list",
@@ -1851,7 +1890,12 @@ class ScenarioTester:
                 "navigate_heading_siblings",
                 heading="The Problem",
             )
-            passed = "heading" in str(result).lower() or "sibling" in str(result).lower() or "next" in str(result).lower() or "previous" in str(result).lower()
+            passed = (
+                "heading" in str(result).lower()
+                or "sibling" in str(result).lower()
+                or "next" in str(result).lower()
+                or "previous" in str(result).lower()
+            )
             self.record(
                 TestResult(
                     name="Get heading siblings",
@@ -1878,7 +1922,11 @@ class ScenarioTester:
         # Test 22a: Export to PDF (may fail without Drive permissions)
         try:
             result = await self.call_tool("export_doc_to_pdf")
-            passed = "pdf" in str(result).lower() or "export" in str(result).lower() or "drive" in str(result).lower()
+            passed = (
+                "pdf" in str(result).lower()
+                or "export" in str(result).lower()
+                or "drive" in str(result).lower()
+            )
             self.record(
                 TestResult(
                     name="Export document to PDF",
@@ -1970,7 +2018,9 @@ class ScenarioTester:
             )
         except Exception as e:
             error_str = str(e)
-            if "color" in error_str.lower() and ("hex" in error_str.lower() or "named" in error_str.lower()):
+            if "color" in error_str.lower() and (
+                "hex" in error_str.lower() or "named" in error_str.lower()
+            ):
                 self.record(
                     TestResult(
                         name="Reject invalid color format",
@@ -2218,7 +2268,9 @@ class ScenarioTester:
                 bold=True,
             )
             result_str = str(result)
-            if "error" in result_str.lower() and ("start" in result_str.lower() or "end" in result_str.lower()):
+            if "error" in result_str.lower() and (
+                "start" in result_str.lower() or "end" in result_str.lower()
+            ):
                 self.record(
                     TestResult(
                         name="Reject end_index < start_index",
@@ -2268,7 +2320,9 @@ class ScenarioTester:
                 bold=True,
             )
             result_str = str(result)
-            if "error" in result_str.lower() and ("bounds" in result_str.lower() or "length" in result_str.lower()):
+            if "error" in result_str.lower() and (
+                "bounds" in result_str.lower() or "length" in result_str.lower()
+            ):
                 self.record(
                     TestResult(
                         name="Reject index beyond document",

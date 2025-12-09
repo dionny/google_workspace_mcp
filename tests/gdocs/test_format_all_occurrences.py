@@ -12,6 +12,7 @@ Note: The format_all_occurrences tool is decorated with @server.tool() and
 focus on testing the underlying logic through the helper functions and
 integration patterns used by the tool.
 """
+
 import json
 
 from gdocs.docs_helpers import (
@@ -46,7 +47,9 @@ class TestFindAllOccurrencesForFormatting:
             }
         }
 
-        occurrences = find_all_occurrences_in_document(doc_data, "TODO", match_case=True)
+        occurrences = find_all_occurrences_in_document(
+            doc_data, "TODO", match_case=True
+        )
 
         assert len(occurrences) == 3
         # Each occurrence should be a (start, end) tuple
@@ -75,7 +78,9 @@ class TestFindAllOccurrencesForFormatting:
             }
         }
 
-        occurrences = find_all_occurrences_in_document(doc_data, "TODO", match_case=False)
+        occurrences = find_all_occurrences_in_document(
+            doc_data, "TODO", match_case=False
+        )
 
         assert len(occurrences) == 3
 
@@ -101,7 +106,9 @@ class TestFindAllOccurrencesForFormatting:
             }
         }
 
-        occurrences = find_all_occurrences_in_document(doc_data, "TODO", match_case=True)
+        occurrences = find_all_occurrences_in_document(
+            doc_data, "TODO", match_case=True
+        )
 
         assert len(occurrences) == 1
 
@@ -127,7 +134,9 @@ class TestFindAllOccurrencesForFormatting:
             }
         }
 
-        occurrences = find_all_occurrences_in_document(doc_data, "NONEXISTENT", match_case=True)
+        occurrences = find_all_occurrences_in_document(
+            doc_data, "NONEXISTENT", match_case=True
+        )
 
         assert len(occurrences) == 0
 
@@ -170,10 +179,10 @@ class TestCreateFormatTextRequestForBulk:
         )
 
         assert request is not None
-        assert 'updateTextStyle' in request
-        assert request['updateTextStyle']['textStyle']['bold'] is True
-        assert request['updateTextStyle']['range']['startIndex'] == 10
-        assert request['updateTextStyle']['range']['endIndex'] == 14
+        assert "updateTextStyle" in request
+        assert request["updateTextStyle"]["textStyle"]["bold"] is True
+        assert request["updateTextStyle"]["range"]["startIndex"] == 10
+        assert request["updateTextStyle"]["range"]["endIndex"] == 14
 
     def test_create_multiple_formatting_request(self):
         """Test creating a request with multiple formatting options."""
@@ -187,11 +196,11 @@ class TestCreateFormatTextRequestForBulk:
         )
 
         assert request is not None
-        style = request['updateTextStyle']['textStyle']
-        assert style['bold'] is True
-        assert style['italic'] is True
-        assert 'foregroundColor' in style
-        assert style['fontSize']['magnitude'] == 14
+        style = request["updateTextStyle"]["textStyle"]
+        assert style["bold"] is True
+        assert style["italic"] is True
+        assert "foregroundColor" in style
+        assert style["fontSize"]["magnitude"] == 14
 
     def test_create_link_request(self):
         """Test creating a hyperlink formatting request."""
@@ -202,7 +211,7 @@ class TestCreateFormatTextRequestForBulk:
         )
 
         assert request is not None
-        assert 'link' in request['updateTextStyle']['textStyle']
+        assert "link" in request["updateTextStyle"]["textStyle"]
 
     def test_create_background_color_request(self):
         """Test creating a background color formatting request."""
@@ -213,8 +222,8 @@ class TestCreateFormatTextRequestForBulk:
         )
 
         assert request is not None
-        style = request['updateTextStyle']['textStyle']
-        assert 'backgroundColor' in style
+        style = request["updateTextStyle"]["textStyle"]
+        assert "backgroundColor" in style
 
     def test_create_no_formatting_returns_none(self):
         """Test that no formatting options returns None."""
@@ -234,7 +243,7 @@ class TestCreateFormatTextRequestForBulk:
         )
 
         assert request is not None
-        assert request['updateTextStyle']['textStyle']['smallCaps'] is True
+        assert request["updateTextStyle"]["textStyle"]["smallCaps"] is True
 
     def test_create_subscript_request(self):
         """Test creating subscript formatting request."""
@@ -245,7 +254,7 @@ class TestCreateFormatTextRequestForBulk:
         )
 
         assert request is not None
-        assert request['updateTextStyle']['textStyle']['baselineOffset'] == 'SUBSCRIPT'
+        assert request["updateTextStyle"]["textStyle"]["baselineOffset"] == "SUBSCRIPT"
 
     def test_create_superscript_request(self):
         """Test creating superscript formatting request."""
@@ -256,7 +265,9 @@ class TestCreateFormatTextRequestForBulk:
         )
 
         assert request is not None
-        assert request['updateTextStyle']['textStyle']['baselineOffset'] == 'SUPERSCRIPT'
+        assert (
+            request["updateTextStyle"]["textStyle"]["baselineOffset"] == "SUPERSCRIPT"
+        )
 
 
 class TestValidationForFormatAll:
@@ -267,7 +278,9 @@ class TestValidationForFormatAll:
         validator = ValidationManager()
 
         # Valid document ID (must be at least 20 chars)
-        is_valid, _ = validator.validate_document_id_structured("1abc123DEF_xyz-A1B2C3D4E5")
+        is_valid, _ = validator.validate_document_id_structured(
+            "1abc123DEF_xyz-A1B2C3D4E5"
+        )
         assert is_valid is True
 
         # Empty document ID
@@ -288,7 +301,7 @@ class TestValidationForFormatAll:
         error = validator.create_invalid_param_error(
             param_name="font_size",
             received=0,
-            valid_values=["positive integer (e.g., 10, 12, 14)"]
+            valid_values=["positive integer (e.g., 10, 12, 14)"],
         )
         result = json.loads(error)
         assert result["error"] is True
@@ -297,7 +310,7 @@ class TestValidationForFormatAll:
         error = validator.create_invalid_param_error(
             param_name="font_size",
             received=-5,
-            valid_values=["positive integer (e.g., 10, 12, 14)"]
+            valid_values=["positive integer (e.g., 10, 12, 14)"],
         )
         result = json.loads(error)
         assert result["error"] is True
@@ -327,8 +340,8 @@ class TestBulkFormatBatchBuilding:
 
         assert len(requests) == 3
         for request in requests:
-            assert 'updateTextStyle' in request
-            assert request['updateTextStyle']['textStyle']['bold'] is True
+            assert "updateTextStyle" in request
+            assert request["updateTextStyle"]["textStyle"]["bold"] is True
 
     def test_empty_occurrences_produces_no_requests(self):
         """Test that empty occurrences list produces no requests."""
@@ -390,7 +403,7 @@ class TestFormatAllResponseStructure:
                     "index": 1,
                     "range": {"start": 10, "end": 14},
                     "text": "TODO",
-                    "context": {"before": "text ", "after": " item"}
+                    "context": {"before": "text ", "after": " item"},
                 },
             ],
             "formatting_to_apply": ["bold", "foreground_color"],

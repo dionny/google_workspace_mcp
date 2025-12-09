@@ -5,6 +5,7 @@ Tests verify proper creation of horizontal rule requests using the table-based w
 NOTE: Google Docs API does not have a native insertHorizontalRule request, so we use
 a 1x1 table with styled borders to simulate a horizontal line.
 """
+
 from gdocs.docs_helpers import create_insert_horizontal_rule_requests
 
 
@@ -88,7 +89,12 @@ class TestCreateInsertHorizontalRuleRequests:
 
         cell_style = requests[1]["updateTableCellStyle"]["tableCellStyle"]
 
-        for padding_name in ["paddingTop", "paddingBottom", "paddingLeft", "paddingRight"]:
+        for padding_name in [
+            "paddingTop",
+            "paddingBottom",
+            "paddingLeft",
+            "paddingRight",
+        ]:
             assert cell_style[padding_name]["magnitude"] == 0
             assert cell_style[padding_name]["unit"] == "PT"
 
@@ -99,8 +105,14 @@ class TestCreateInsertHorizontalRuleRequests:
         fields = requests[1]["updateTableCellStyle"]["fields"]
 
         expected_fields = [
-            "borderTop", "borderBottom", "borderLeft", "borderRight",
-            "paddingTop", "paddingBottom", "paddingLeft", "paddingRight"
+            "borderTop",
+            "borderBottom",
+            "borderLeft",
+            "borderRight",
+            "paddingTop",
+            "paddingBottom",
+            "paddingLeft",
+            "paddingRight",
         ]
         for field in expected_fields:
             assert field in fields

@@ -10,6 +10,7 @@ Features:
 - Automatic position adjustment for sequential operations
 - Per-operation results with position shift tracking
 """
+
 import logging
 import asyncio
 from typing import Any, Union, Dict, List, Tuple, Optional
@@ -46,20 +47,20 @@ logger = logging.getLogger(__name__)
 # Maps both short forms and _text suffix forms to canonical _text suffix
 OPERATION_ALIASES = {
     # Short forms -> canonical
-    'insert': 'insert_text',
-    'delete': 'delete_text',
-    'format': 'format_text',
-    'replace': 'replace_text',
+    "insert": "insert_text",
+    "delete": "delete_text",
+    "format": "format_text",
+    "replace": "replace_text",
     # Canonical forms (identity mapping)
-    'insert_text': 'insert_text',
-    'delete_text': 'delete_text',
-    'format_text': 'format_text',
-    'replace_text': 'replace_text',
+    "insert_text": "insert_text",
+    "delete_text": "delete_text",
+    "format_text": "format_text",
+    "replace_text": "replace_text",
     # Non-aliased operations (identity mapping)
-    'insert_table': 'insert_table',
-    'insert_page_break': 'insert_page_break',
-    'find_replace': 'find_replace',
-    'convert_to_list': 'convert_to_list',
+    "insert_table": "insert_table",
+    "insert_page_break": "insert_page_break",
+    "find_replace": "find_replace",
+    "convert_to_list": "convert_to_list",
 }
 
 # Valid list types for convert_to_list operation
@@ -142,7 +143,7 @@ class VirtualTextTracker:
         position: str,
         occurrence: int = 1,
         match_case: bool = True,
-        prefer_recent_insert: bool = True
+        prefer_recent_insert: bool = True,
     ) -> Tuple[bool, Optional[int], Optional[int], str]:
         """
         Search for text in the virtual document state.
@@ -173,11 +174,26 @@ class VirtualTextTracker:
                 )
                 # Calculate indices based on position
                 if position == SearchPosition.BEFORE.value:
-                    return (True, doc_start, doc_start, f"Found in recently inserted text at index {doc_start}")
+                    return (
+                        True,
+                        doc_start,
+                        doc_start,
+                        f"Found in recently inserted text at index {doc_start}",
+                    )
                 elif position == SearchPosition.AFTER.value:
-                    return (True, doc_end, doc_end, f"Found in recently inserted text at {doc_start}, inserting after index {doc_end}")
+                    return (
+                        True,
+                        doc_end,
+                        doc_end,
+                        f"Found in recently inserted text at {doc_start}, inserting after index {doc_end}",
+                    )
                 elif position == SearchPosition.REPLACE.value:
-                    return (True, doc_start, doc_end, f"Found in recently inserted text at index range {doc_start}-{doc_end}")
+                    return (
+                        True,
+                        doc_start,
+                        doc_end,
+                        f"Found in recently inserted text at index range {doc_start}-{doc_end}",
+                    )
 
         # Find occurrences in virtual text
         search_in = self.text if match_case else self.text.lower()
@@ -199,17 +215,21 @@ class VirtualTextTracker:
         if occurrence > 0:
             if occurrence > len(occurrences):
                 return (
-                    False, None, None,
+                    False,
+                    None,
+                    None,
                     f"Occurrence {occurrence} of '{search_text}' not found. "
-                    f"Document contains {len(occurrences)} occurrence(s)."
+                    f"Document contains {len(occurrences)} occurrence(s).",
                 )
             target_idx = occurrences[occurrence - 1]
         else:  # Negative = from end
             if abs(occurrence) > len(occurrences):
                 return (
-                    False, None, None,
+                    False,
+                    None,
+                    None,
                     f"Occurrence {occurrence} of '{search_text}' not found. "
-                    f"Document contains {len(occurrences)} occurrence(s)."
+                    f"Document contains {len(occurrences)} occurrence(s).",
                 )
             target_idx = occurrences[occurrence]
 
@@ -238,16 +258,29 @@ class VirtualTextTracker:
         if position == SearchPosition.BEFORE.value:
             return (True, doc_start, doc_start, f"Found at index {doc_start}")
         elif position == SearchPosition.AFTER.value:
-            return (True, doc_end, doc_end, f"Found at index {doc_start}, inserting after index {doc_end}")
+            return (
+                True,
+                doc_end,
+                doc_end,
+                f"Found at index {doc_start}, inserting after index {doc_end}",
+            )
         elif position == SearchPosition.REPLACE.value:
-            return (True, doc_start, doc_end, f"Found at index range {doc_start}-{doc_end}")
+            return (
+                True,
+                doc_start,
+                doc_end,
+                f"Found at index range {doc_start}-{doc_end}",
+            )
         else:
-            return (False, None, None, f"Invalid position '{position}'. Use 'before', 'after', or 'replace'.")
+            return (
+                False,
+                None,
+                None,
+                f"Invalid position '{position}'. Use 'before', 'after', or 'replace'.",
+            )
 
     def _find_in_recent_inserts(
-        self,
-        search_text: str,
-        match_case: bool = True
+        self, search_text: str, match_case: bool = True
     ) -> Optional[Tuple[int, int]]:
         """
         Check if search text appears in any recently inserted text.
@@ -284,22 +317,22 @@ class VirtualTextTracker:
         Args:
             op: Resolved operation dictionary with indices
         """
-        op_type = op.get('type', '')
+        op_type = op.get("type", "")
 
-        if op_type == 'insert_text':
-            index = op.get('index', 0)
-            text = op.get('text', '')
+        if op_type == "insert_text":
+            index = op.get("index", 0)
+            text = op.get("text", "")
             self._apply_insert(index, text)
 
-        elif op_type == 'delete_text':
-            start = op.get('start_index', 0)
-            end = op.get('end_index', start)
+        elif op_type == "delete_text":
+            start = op.get("start_index", 0)
+            end = op.get("end_index", start)
             self._apply_delete(start, end)
 
-        elif op_type == 'replace_text':
-            start = op.get('start_index', 0)
-            end = op.get('end_index', start)
-            text = op.get('text', '')
+        elif op_type == "replace_text":
+            start = op.get("start_index", 0)
+            end = op.get("end_index", start)
+            text = op.get("text", "")
             # Replace = delete + insert
             self._apply_delete(start, end)
             self._apply_insert(start, text)
@@ -321,7 +354,9 @@ class VirtualTextTracker:
 
         # Update index map - insert new indices for the inserted text
         new_indices = [doc_index + i for i in range(len(text))]
-        self.index_map = self.index_map[:virtual_pos] + new_indices + self.index_map[virtual_pos:]
+        self.index_map = (
+            self.index_map[:virtual_pos] + new_indices + self.index_map[virtual_pos:]
+        )
 
         # Shift indices after the insertion point
         for i in range(virtual_pos + len(text), len(self.index_map)):
@@ -410,17 +445,19 @@ def normalize_operation(operation: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Copy of operation with normalized type and interpreted escape sequences
     """
-    if 'type' not in operation:
+    if "type" not in operation:
         return operation
 
     normalized = operation.copy()
-    normalized['type'] = normalize_operation_type(operation['type'])
+    normalized["type"] = normalize_operation_type(operation["type"])
 
     # Interpret escape sequences in text fields
-    if 'text' in normalized and normalized['text'] is not None:
-        normalized['text'] = interpret_escape_sequences(normalized['text'])
-    if 'replace_text' in normalized and normalized['replace_text'] is not None:
-        normalized['replace_text'] = interpret_escape_sequences(normalized['replace_text'])
+    if "text" in normalized and normalized["text"] is not None:
+        normalized["text"] = interpret_escape_sequences(normalized["text"])
+    if "replace_text" in normalized and normalized["replace_text"] is not None:
+        normalized["replace_text"] = interpret_escape_sequences(
+            normalized["replace_text"]
+        )
 
     return normalized
 
@@ -437,6 +474,7 @@ class BatchOperationResult:
     failed during resolution). The 'success' field indicates overall success - True only
     if the operation was both resolved AND executed successfully.
     """
+
     index: int  # Operation index in the batch
     type: str  # Operation type
     success: bool  # True only if operation was both resolved AND executed
@@ -445,7 +483,9 @@ class BatchOperationResult:
     affected_range: Optional[Dict[str, int]] = None  # {"start": x, "end": y}
     resolved_index: Optional[int] = None  # Index after search resolution
     error: Optional[str] = None
-    resolved: bool = False  # True if operation was successfully resolved (indices computed)
+    resolved: bool = (
+        False  # True if operation was successfully resolved (indices computed)
+    )
     executed: bool = False  # True if operation was actually applied to document
 
     def to_dict(self) -> Dict[str, Any]:
@@ -457,6 +497,7 @@ class BatchOperationResult:
 @dataclass
 class BatchExecutionResult:
     """Complete result of batch execution."""
+
     success: bool
     operations_completed: int
     total_operations: int
@@ -513,84 +554,91 @@ class BatchOperationManager:
     def _clean_text_for_list(self, text: str) -> str:
         """
         Clean text for list conversion by removing consecutive blank lines.
-        
+
         When text with blank lines (\\n\\n) is converted to a list, each paragraph
         becomes a list item, and blank paragraphs become empty list items.
         This function removes those consecutive blank lines.
-        
+
         Args:
             text: Text to clean
-            
+
         Returns:
             Cleaned text with consecutive newlines collapsed to single newlines
         """
         import re
         import logging
+
         logger = logging.getLogger(__name__)
-        
-        original_newline_count = text.count('\n')
+
+        original_newline_count = text.count("\n")
         # Replace multiple consecutive newlines (with optional whitespace) with single newline
-        cleaned_text = re.sub(r'\n\s*\n+', '\n', text)
-        new_newline_count = cleaned_text.count('\n')
-        
+        cleaned_text = re.sub(r"\n\s*\n+", "\n", text)
+        new_newline_count = cleaned_text.count("\n")
+
         if cleaned_text != text:
             removed = original_newline_count - new_newline_count
             logger.info(
                 f"[BatchOperationManager] Cleaned text for list conversion: "
                 f"removed {removed} blank lines to prevent empty list items"
             )
-        
+
         return cleaned_text
 
-    def _mark_list_conversion_operations(self, operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _mark_list_conversion_operations(
+        self, operations: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """
         Mark text insertion/replacement operations that will be converted to lists.
-        
+
         This allows us to apply blank line cleaning before the text is inserted,
         preventing empty list items.
-        
+
         Args:
             operations: List of operation dictionaries
-            
+
         Returns:
             Modified operations list with _will_convert_to_list flag added
         """
         import logging
+
         logger = logging.getLogger(__name__)
-        
+
         # Look for convert_to_list operations and mark preceding text operations
         for i, op in enumerate(operations):
-            op_type = op.get('type', '')
-            
+            op_type = op.get("type", "")
+
             # Normalize type aliases
-            if op_type in ['insert', 'replace']:
+            if op_type in ["insert", "replace"]:
                 op_type = f"{op_type}_text"
-            
+
             # Check if this is an insert/replace followed by convert_to_list
-            if op_type in ['insert_text', 'replace_text'] and 'text' in op:
+            if op_type in ["insert_text", "replace_text"] and "text" in op:
                 # Look ahead for convert_to_list in subsequent operations
                 for j in range(i + 1, len(operations)):
                     next_op = operations[j]
-                    next_type = next_op.get('type', '')
-                    
-                    if next_type == 'convert_to_list':
+                    next_type = next_op.get("type", "")
+
+                    if next_type == "convert_to_list":
                         # Mark this text operation for cleaning
-                        op['_will_convert_to_list'] = True
+                        op["_will_convert_to_list"] = True
                         logger.debug(
                             f"[BatchOperationManager] Marking operation {i} for list conversion text cleaning"
                         )
                         break
-                    
+
                     # Stop looking if we hit another text operation (likely targeting different content)
-                    if next_type in ['insert_text', 'replace_text', 'insert', 'replace']:
+                    if next_type in [
+                        "insert_text",
+                        "replace_text",
+                        "insert",
+                        "replace",
+                    ]:
                         break
-        
+
         return operations
 
     async def execute_batch_operations(
-        self,
-        document_id: str,
-        operations: list[dict[str, Any]]
+        self, document_id: str, operations: list[dict[str, Any]]
     ) -> tuple[bool, str, dict[str, Any]]:
         """
         Execute multiple document operations in a single atomic batch.
@@ -614,11 +662,19 @@ class BatchOperationManager:
         logger.info(f"Operations count: {len(operations)}")
 
         if not operations:
-            return False, "No operations provided. Please provide at least one operation.", {}
+            return (
+                False,
+                "No operations provided. Please provide at least one operation.",
+                {},
+            )
 
         try:
             # Validate and build requests, tracking position shifts
-            requests, operation_descriptions, position_shifts = await self._validate_and_build_requests_with_shifts(operations)
+            (
+                requests,
+                operation_descriptions,
+                position_shifts,
+            ) = await self._validate_and_build_requests_with_shifts(operations)
 
             if not requests:
                 return False, "No valid requests could be built from operations", {}
@@ -631,26 +687,29 @@ class BatchOperationManager:
 
             # Process results
             metadata = {
-                'operations_count': len(operations),
-                'requests_count': len(requests),
-                'replies_count': len(result.get('replies', [])),
-                'operation_summary': operation_descriptions[:5],  # First 5 operations
-                'total_position_shift': total_position_shift,
-                'per_operation_shifts': position_shifts,
-                'document_link': f"https://docs.google.com/document/d/{document_id}/edit"
+                "operations_count": len(operations),
+                "requests_count": len(requests),
+                "replies_count": len(result.get("replies", [])),
+                "operation_summary": operation_descriptions[:5],  # First 5 operations
+                "total_position_shift": total_position_shift,
+                "per_operation_shifts": position_shifts,
+                "document_link": f"https://docs.google.com/document/d/{document_id}/edit",
             }
 
             summary = self._build_operation_summary(operation_descriptions)
 
-            return True, f"Successfully executed {len(operations)} operations ({summary})", metadata
+            return (
+                True,
+                f"Successfully executed {len(operations)} operations ({summary})",
+                metadata,
+            )
 
         except Exception as e:
             logger.error(f"Failed to execute batch operations: {str(e)}")
             return False, f"Batch operation failed: {str(e)}", {}
 
     async def _validate_and_build_requests(
-        self,
-        operations: list[dict[str, Any]]
+        self, operations: list[dict[str, Any]]
     ) -> tuple[list[dict[str, Any]], list[str]]:
         """
         Validate operations and build API requests.
@@ -671,9 +730,9 @@ class BatchOperationManager:
             # Validate operation structure
             is_valid, error_msg = validate_operation(op)
             if not is_valid:
-                raise ValueError(f"Operation {i+1}: {error_msg}")
+                raise ValueError(f"Operation {i + 1}: {error_msg}")
 
-            op_type = op.get('type')
+            op_type = op.get("type")
 
             try:
                 # Build request based on operation type
@@ -691,15 +750,18 @@ class BatchOperationManager:
                     operation_descriptions.append(result[1])
 
             except KeyError as e:
-                raise ValueError(f"Operation {i+1} ({op_type}) missing required field: {e}")
+                raise ValueError(
+                    f"Operation {i + 1} ({op_type}) missing required field: {e}"
+                )
             except Exception as e:
-                raise ValueError(f"Operation {i+1} ({op_type}) failed validation: {str(e)}")
+                raise ValueError(
+                    f"Operation {i + 1} ({op_type}) failed validation: {str(e)}"
+                )
 
         return requests, operation_descriptions
 
     async def _validate_and_build_requests_with_shifts(
-        self,
-        operations: list[dict[str, Any]]
+        self, operations: list[dict[str, Any]]
     ) -> tuple[list[dict[str, Any]], list[str], list[int]]:
         """
         Validate operations and build API requests, tracking position shifts.
@@ -713,7 +775,7 @@ class BatchOperationManager:
         # Preprocess: Mark text operations that will be converted to lists
         # so we can apply blank line cleaning
         operations = self._mark_list_conversion_operations(operations)
-        
+
         requests = []
         operation_descriptions = []
         position_shifts = []
@@ -725,9 +787,9 @@ class BatchOperationManager:
             # Validate operation structure
             is_valid, error_msg = validate_operation(op)
             if not is_valid:
-                raise ValueError(f"Operation {i+1}: {error_msg}")
+                raise ValueError(f"Operation {i + 1}: {error_msg}")
 
-            op_type = op.get('type')
+            op_type = op.get("type")
 
             try:
                 # Build request based on operation type
@@ -749,9 +811,13 @@ class BatchOperationManager:
                 position_shifts.append(shift)
 
             except KeyError as e:
-                raise ValueError(f"Operation {i+1} ({op_type}) missing required field: {e}")
+                raise ValueError(
+                    f"Operation {i + 1} ({op_type}) missing required field: {e}"
+                )
             except Exception as e:
-                raise ValueError(f"Operation {i+1} ({op_type}) failed validation: {str(e)}")
+                raise ValueError(
+                    f"Operation {i + 1} ({op_type}) failed validation: {str(e)}"
+                )
 
         return requests, operation_descriptions, position_shifts
 
@@ -766,41 +832,41 @@ class BatchOperationManager:
         Returns:
             Position shift (positive = content added, negative = content removed)
         """
-        if op_type == 'insert_text':
-            return len(op.get('text', ''))
+        if op_type == "insert_text":
+            return len(op.get("text", ""))
 
-        elif op_type == 'delete_text':
-            start = op.get('start_index', 0)
-            end = op.get('end_index', start)
+        elif op_type == "delete_text":
+            start = op.get("start_index", 0)
+            end = op.get("end_index", start)
             return -(end - start)
 
-        elif op_type == 'replace_text':
-            start = op.get('start_index', 0)
-            end = op.get('end_index', start)
+        elif op_type == "replace_text":
+            start = op.get("start_index", 0)
+            end = op.get("end_index", start)
             old_len = end - start
-            new_len = len(op.get('text', ''))
+            new_len = len(op.get("text", ""))
             return new_len - old_len
 
-        elif op_type == 'format_text':
+        elif op_type == "format_text":
             # Formatting doesn't change positions
             return 0
 
-        elif op_type == 'insert_table':
+        elif op_type == "insert_table":
             # Tables add structure - this is complex but we return 0
             # as an approximation since table structure shift is hard to calculate
             return 0
 
-        elif op_type == 'insert_page_break':
+        elif op_type == "insert_page_break":
             # Page break adds 1 character
             return 1
 
-        elif op_type == 'find_replace':
+        elif op_type == "find_replace":
             # Find/replace position shift is unpredictable
             # (depends on number of occurrences and length difference)
             # Return 0 as this needs document context to calculate
             return 0
 
-        elif op_type == 'convert_to_list':
+        elif op_type == "convert_to_list":
             # Converting text to list doesn't change positions
             # (it only adds bullet/number formatting to paragraphs)
             return 0
@@ -808,9 +874,7 @@ class BatchOperationManager:
         return 0
 
     def _build_operation_request(
-        self,
-        op: dict[str, Any],
-        op_type: str
+        self, op: dict[str, Any], op_type: str
     ) -> Tuple[Union[Dict[str, Any], List[Dict[str, Any]]], str]:
         """
         Build a single operation request.
@@ -822,52 +886,68 @@ class BatchOperationManager:
         Returns:
             Tuple of (request, description)
         """
-        if op_type == 'insert_text':
+        if op_type == "insert_text":
             # Clean text for list conversion if specified
-            text = op['text']
-            if op.get('_will_convert_to_list'):
+            text = op["text"]
+            if op.get("_will_convert_to_list"):
                 text = self._clean_text_for_list(text)
-            request = create_insert_text_request(op['index'], text, tab_id=self.tab_id)
+            request = create_insert_text_request(op["index"], text, tab_id=self.tab_id)
             description = f"insert text at {op['index']}"
 
-        elif op_type == 'delete_text':
-            request = create_delete_range_request(op['start_index'], op['end_index'], tab_id=self.tab_id)
+        elif op_type == "delete_text":
+            request = create_delete_range_request(
+                op["start_index"], op["end_index"], tab_id=self.tab_id
+            )
             description = f"delete text {op['start_index']}-{op['end_index']}"
 
-        elif op_type == 'replace_text':
+        elif op_type == "replace_text":
             # Clean text for list conversion if specified
-            text = op['text']
-            if op.get('_will_convert_to_list'):
+            text = op["text"]
+            if op.get("_will_convert_to_list"):
                 text = self._clean_text_for_list(text)
             # Replace is delete + insert (must be done in this order)
-            delete_request = create_delete_range_request(op['start_index'], op['end_index'], tab_id=self.tab_id)
-            insert_request = create_insert_text_request(op['start_index'], text, tab_id=self.tab_id)
+            delete_request = create_delete_range_request(
+                op["start_index"], op["end_index"], tab_id=self.tab_id
+            )
+            insert_request = create_insert_text_request(
+                op["start_index"], text, tab_id=self.tab_id
+            )
             # Return both requests as a list
             request = [delete_request, insert_request]
             description = f"replace text {op['start_index']}-{op['end_index']} with '{text[:20]}{'...' if len(text) > 20 else ''}'"
 
-        elif op_type == 'format_text':
+        elif op_type == "format_text":
             # Handle text-level formatting
             request = create_format_text_request(
-                op['start_index'], op['end_index'],
-                op.get('bold'), op.get('italic'), op.get('underline'),
-                op.get('strikethrough'), op.get('small_caps'), op.get('subscript'),
-                op.get('superscript'), op.get('font_size'), op.get('font_family'),
-                op.get('link'), op.get('foreground_color'), op.get('background_color'),
+                op["start_index"],
+                op["end_index"],
+                op.get("bold"),
+                op.get("italic"),
+                op.get("underline"),
+                op.get("strikethrough"),
+                op.get("small_caps"),
+                op.get("subscript"),
+                op.get("superscript"),
+                op.get("font_size"),
+                op.get("font_family"),
+                op.get("link"),
+                op.get("foreground_color"),
+                op.get("background_color"),
                 tab_id=self.tab_id,
             )
 
             # Handle paragraph-level formatting
             para_request = create_paragraph_style_request(
-                op['start_index'], op['end_index'],
-                line_spacing=op.get('line_spacing'),
-                heading_style=op.get('heading_style'),
-                alignment=op.get('alignment'),
-                indent_first_line=op.get('indent_first_line'),
-                indent_start=op.get('indent_start'),
-                indent_end=op.get('indent_end'),
-                space_above=op.get('space_above'),
-                space_below=op.get('space_below'),
+                op["start_index"],
+                op["end_index"],
+                line_spacing=op.get("line_spacing"),
+                heading_style=op.get("heading_style"),
+                alignment=op.get("alignment"),
+                indent_first_line=op.get("indent_first_line"),
+                indent_start=op.get("indent_start"),
+                indent_end=op.get("indent_end"),
+                space_above=op.get("space_above"),
+                space_below=op.get("space_below"),
                 tab_id=self.tab_id,
             )
 
@@ -883,115 +963,142 @@ class BatchOperationManager:
             format_changes = []
             # Text-level formatting
             for param, name in [
-                ('bold', 'bold'), ('italic', 'italic'), ('underline', 'underline'),
-                ('strikethrough', 'strikethrough'), ('small_caps', 'small caps'),
-                ('subscript', 'subscript'), ('superscript', 'superscript'),
-                ('font_size', 'font size'), ('font_family', 'font family'),
-                ('link', 'link'), ('foreground_color', 'foreground color'),
-                ('background_color', 'background color')
+                ("bold", "bold"),
+                ("italic", "italic"),
+                ("underline", "underline"),
+                ("strikethrough", "strikethrough"),
+                ("small_caps", "small caps"),
+                ("subscript", "subscript"),
+                ("superscript", "superscript"),
+                ("font_size", "font size"),
+                ("font_family", "font family"),
+                ("link", "link"),
+                ("foreground_color", "foreground color"),
+                ("background_color", "background color"),
             ]:
                 if op.get(param) is not None:
-                    value = f"{op[param]}pt" if param == 'font_size' else op[param]
+                    value = f"{op[param]}pt" if param == "font_size" else op[param]
                     format_changes.append(f"{name}: {value}")
             # Paragraph-level formatting
             for param, name in [
-                ('heading_style', 'heading style'), ('alignment', 'alignment'),
-                ('line_spacing', 'line spacing'), ('indent_first_line', 'first line indent'),
-                ('indent_start', 'left indent'), ('indent_end', 'right indent'),
-                ('space_above', 'space above'), ('space_below', 'space below')
+                ("heading_style", "heading style"),
+                ("alignment", "alignment"),
+                ("line_spacing", "line spacing"),
+                ("indent_first_line", "first line indent"),
+                ("indent_start", "left indent"),
+                ("indent_end", "right indent"),
+                ("space_above", "space above"),
+                ("space_below", "space below"),
             ]:
                 if op.get(param) is not None:
                     format_changes.append(f"{name}: {op[param]}")
 
             description = f"format text {op['start_index']}-{op['end_index']} ({', '.join(format_changes)})"
 
-        elif op_type == 'insert_table':
+        elif op_type == "insert_table":
             # Validate required fields with helpful error messages
             missing = []
-            if 'index' not in op:
-                missing.append('index')
-            if 'rows' not in op:
-                missing.append('rows')
-            if 'columns' not in op:
-                missing.append('columns')
+            if "index" not in op:
+                missing.append("index")
+            if "rows" not in op:
+                missing.append("rows")
+            if "columns" not in op:
+                missing.append("columns")
             if missing:
                 raise KeyError(
                     f"insert_table operation missing required field(s): {', '.join(missing)}. "
-                    f"Example: {{\"type\": \"insert_table\", \"index\": 1, \"rows\": 3, \"columns\": 4}}"
+                    f'Example: {{"type": "insert_table", "index": 1, "rows": 3, "columns": 4}}'
                 )
-            request = create_insert_table_request(op['index'], op['rows'], op['columns'], tab_id=self.tab_id)
+            request = create_insert_table_request(
+                op["index"], op["rows"], op["columns"], tab_id=self.tab_id
+            )
             description = f"insert {op['rows']}x{op['columns']} table at {op['index']}"
 
-        elif op_type == 'insert_page_break':
-            request = create_insert_page_break_request(op['index'], tab_id=self.tab_id)
+        elif op_type == "insert_page_break":
+            request = create_insert_page_break_request(op["index"], tab_id=self.tab_id)
             description = f"insert page break at {op['index']}"
 
-        elif op_type == 'find_replace':
+        elif op_type == "find_replace":
             # Note: find_replace uses tab_ids (list) instead of tab_id (single)
             tab_ids = [self.tab_id] if self.tab_id else None
             request = create_find_replace_request(
-                op['find_text'], op['replace_text'], op.get('match_case', False), tab_ids=tab_ids
+                op["find_text"],
+                op["replace_text"],
+                op.get("match_case", False),
+                tab_ids=tab_ids,
             )
             description = f"find/replace '{op['find_text']}' → '{op['replace_text']}'"
 
-        elif op_type == 'convert_to_list':
+        elif op_type == "convert_to_list":
             # Validate required fields
-            if 'start_index' not in op or 'end_index' not in op:
+            if "start_index" not in op or "end_index" not in op:
                 raise KeyError(
                     "convert_to_list operation requires 'start_index' and 'end_index'. "
-                    "Example: {\"type\": \"convert_to_list\", \"start_index\": 100, \"end_index\": 200, \"list_type\": \"ORDERED\"}"
+                    'Example: {"type": "convert_to_list", "start_index": 100, "end_index": 200, "list_type": "ORDERED"}'
                 )
             # Normalize and validate list_type
-            list_type = op.get('list_type', 'UNORDERED')
-            normalized_list_type = LIST_TYPE_ALIASES.get(list_type if isinstance(list_type, str) else str(list_type))
+            list_type = op.get("list_type", "UNORDERED")
+            normalized_list_type = LIST_TYPE_ALIASES.get(
+                list_type if isinstance(list_type, str) else str(list_type)
+            )
             if normalized_list_type is None:
                 raise ValueError(
                     f"Invalid list_type '{list_type}'. Valid values: ORDERED, UNORDERED, bullet, numbered"
                 )
             request = create_bullet_list_request(
-                op['start_index'], op['end_index'], normalized_list_type, tab_id=self.tab_id
+                op["start_index"],
+                op["end_index"],
+                normalized_list_type,
+                tab_id=self.tab_id,
             )
-            list_type_display = "bullet" if normalized_list_type == "UNORDERED" else "numbered"
+            list_type_display = (
+                "bullet" if normalized_list_type == "UNORDERED" else "numbered"
+            )
             description = f"convert to {list_type_display} list {op['start_index']}-{op['end_index']}"
 
         else:
             supported_types = [
-                'insert_text', 'delete_text', 'replace_text', 'format_text',
-                'insert_table', 'insert_page_break', 'find_replace', 'convert_to_list'
+                "insert_text",
+                "delete_text",
+                "replace_text",
+                "format_text",
+                "insert_table",
+                "insert_page_break",
+                "find_replace",
+                "convert_to_list",
             ]
-            raise ValueError(f"Unsupported operation type '{op_type}'. Supported: {', '.join(supported_types)}")
+            raise ValueError(
+                f"Unsupported operation type '{op_type}'. Supported: {', '.join(supported_types)}"
+            )
 
         return request, description
 
     async def _execute_batch_requests(
-        self,
-        document_id: str,
-        requests: list[dict[str, Any]]
+        self, document_id: str, requests: list[dict[str, Any]]
     ) -> dict[str, Any]:
         """
         Execute the batch requests against the Google Docs API.
-        
+
         Args:
             document_id: Document ID
             requests: List of API requests
-            
+
         Returns:
             API response
         """
         return await asyncio.to_thread(
-            self.service.documents().batchUpdate(
-                documentId=document_id,
-                body={'requests': requests}
-            ).execute
+            self.service.documents()
+            .batchUpdate(documentId=document_id, body={"requests": requests})
+            .execute
         )
 
     def _build_operation_summary(self, operation_descriptions: list[str]) -> str:
         """
         Build a concise summary of operations performed.
-        
+
         Args:
             operation_descriptions: List of operation descriptions
-            
+
         Returns:
             Summary string
         """
@@ -999,7 +1106,7 @@ class BatchOperationManager:
             return "no operations"
 
         summary_items = operation_descriptions[:3]  # Show first 3 operations
-        summary = ', '.join(summary_items)
+        summary = ", ".join(summary_items)
 
         if len(operation_descriptions) > 3:
             remaining = len(operation_descriptions) - 3
@@ -1015,60 +1122,71 @@ class BatchOperationManager:
             Dictionary with supported operation types and their required parameters
         """
         return {
-            'supported_operations': {
-                'insert_text': {
-                    'aliases': ['insert'],
-                    'required': ['index', 'text'],
-                    'description': 'Insert text at specified index'
+            "supported_operations": {
+                "insert_text": {
+                    "aliases": ["insert"],
+                    "required": ["index", "text"],
+                    "description": "Insert text at specified index",
                 },
-                'delete_text': {
-                    'aliases': ['delete'],
-                    'required': ['start_index', 'end_index'],
-                    'description': 'Delete text in specified range'
+                "delete_text": {
+                    "aliases": ["delete"],
+                    "required": ["start_index", "end_index"],
+                    "description": "Delete text in specified range",
                 },
-                'replace_text': {
-                    'aliases': ['replace'],
-                    'required': ['start_index', 'end_index', 'text'],
-                    'description': 'Replace text in range with new text'
+                "replace_text": {
+                    "aliases": ["replace"],
+                    "required": ["start_index", "end_index", "text"],
+                    "description": "Replace text in range with new text",
                 },
-                'format_text': {
-                    'aliases': ['format'],
-                    'required': ['start_index', 'end_index'],
-                    'optional': ['bold', 'italic', 'underline', 'font_size', 'font_family'],
-                    'description': 'Apply formatting to text range'
+                "format_text": {
+                    "aliases": ["format"],
+                    "required": ["start_index", "end_index"],
+                    "optional": [
+                        "bold",
+                        "italic",
+                        "underline",
+                        "font_size",
+                        "font_family",
+                    ],
+                    "description": "Apply formatting to text range",
                 },
-                'insert_table': {
-                    'required': ['index', 'rows', 'columns'],
-                    'description': 'Insert table at specified index'
+                "insert_table": {
+                    "required": ["index", "rows", "columns"],
+                    "description": "Insert table at specified index",
                 },
-                'insert_page_break': {
-                    'required': ['index'],
-                    'description': 'Insert page break at specified index'
+                "insert_page_break": {
+                    "required": ["index"],
+                    "description": "Insert page break at specified index",
                 },
-                'find_replace': {
-                    'required': ['find_text', 'replace_text'],
-                    'optional': ['match_case'],
-                    'description': 'Find and replace text throughout document'
+                "find_replace": {
+                    "required": ["find_text", "replace_text"],
+                    "optional": ["match_case"],
+                    "description": "Find and replace text throughout document",
                 },
-                'convert_to_list': {
-                    'required': ['start_index', 'end_index'],
-                    'optional': ['list_type'],
-                    'description': 'Convert text range to bullet or numbered list',
-                    'list_type_values': ['ORDERED', 'UNORDERED', 'bullet', 'numbered']
-                }
+                "convert_to_list": {
+                    "required": ["start_index", "end_index"],
+                    "optional": ["list_type"],
+                    "description": "Convert text range to bullet or numbered list",
+                    "list_type_values": ["ORDERED", "UNORDERED", "bullet", "numbered"],
+                },
             },
-            'operation_aliases': {
-                'insert': 'insert_text',
-                'delete': 'delete_text',
-                'replace': 'replace_text',
-                'format': 'format_text',
+            "operation_aliases": {
+                "insert": "insert_text",
+                "delete": "delete_text",
+                "replace": "replace_text",
+                "format": "format_text",
             },
-            'example_operations': [
+            "example_operations": [
                 {"type": "insert", "index": 1, "text": "Hello World"},
                 {"type": "format", "start_index": 1, "end_index": 12, "bold": True},
                 {"type": "insert_table", "index": 20, "rows": 2, "columns": 3},
-                {"type": "convert_to_list", "start_index": 100, "end_index": 200, "list_type": "ORDERED"}
-            ]
+                {
+                    "type": "convert_to_list",
+                    "start_index": 100,
+                    "end_index": 200,
+                    "list_type": "ORDERED",
+                },
+            ],
         }
 
     async def execute_batch_with_search(
@@ -1142,7 +1260,9 @@ class BatchOperationManager:
             ]
         """
         logger.info(f"Executing enhanced batch on document {document_id}")
-        logger.info(f"Operations: {len(operations)}, auto_adjust: {auto_adjust_positions}, preview: {preview_only}")
+        logger.info(
+            f"Operations: {len(operations)}, auto_adjust: {auto_adjust_positions}, preview: {preview_only}"
+        )
 
         if not operations:
             return BatchExecutionResult(
@@ -1171,8 +1291,12 @@ class BatchOperationManager:
 
         # Expand all_occurrences operations into individual operations
         # This must happen BEFORE resolution since expanded operations use indices
-        expanded_operations = self._expand_all_occurrences_operations(operations, doc_data)
-        logger.debug(f"Expanded {len(operations)} operations to {len(expanded_operations)} operations")
+        expanded_operations = self._expand_all_occurrences_operations(
+            operations, doc_data
+        )
+        logger.debug(
+            f"Expanded {len(operations)} operations to {len(expanded_operations)} operations"
+        )
 
         # Resolve all operations and build requests
         resolved_ops, operation_results = await self._resolve_operations_with_search(
@@ -1245,7 +1369,9 @@ class BatchOperationManager:
                     document_id, resolved_ops, operation_results, doc_data
                 )
             except Exception as e:
-                logger.warning(f"Failed to record batch operations for undo history: {e}")
+                logger.warning(
+                    f"Failed to record batch operations for undo history: {e}"
+                )
 
             # Build message with info about expansion if applicable
             if len(expanded_operations) != len(operations):
@@ -1298,9 +1424,9 @@ class BatchOperationManager:
 
         for op in operations:
             # Only expand search-based operations with all_occurrences=True
-            if op.get('search') and op.get('all_occurrences', False):
-                search_text = op['search']
-                match_case = op.get('match_case', True)
+            if op.get("search") and op.get("all_occurrences", False):
+                search_text = op["search"]
+                match_case = op.get("match_case", True)
 
                 # Find all occurrences
                 occurrences = find_all_occurrences_in_document(
@@ -1318,39 +1444,39 @@ class BatchOperationManager:
                     # Create a new operation for this occurrence
                     op_copy = op.copy()
                     # Remove search-related fields since we're converting to index-based
-                    op_copy.pop('search', None)
-                    op_copy.pop('all_occurrences', None)
-                    op_copy.pop('occurrence', None)
-                    op_copy.pop('position', None)
+                    op_copy.pop("search", None)
+                    op_copy.pop("all_occurrences", None)
+                    op_copy.pop("occurrence", None)
+                    op_copy.pop("position", None)
 
                     # Apply position based on original position setting
-                    position = op.get('position', 'replace')
-                    op_type = normalize_operation_type(op.get('type', ''))
+                    position = op.get("position", "replace")
+                    op_type = normalize_operation_type(op.get("type", ""))
 
-                    if op_type in ('insert', 'insert_text'):
+                    if op_type in ("insert", "insert_text"):
                         # For insert, use position to determine index
-                        if position == 'before':
-                            op_copy['index'] = start_idx
-                        elif position == 'after':
-                            op_copy['index'] = end_idx
+                        if position == "before":
+                            op_copy["index"] = start_idx
+                        elif position == "after":
+                            op_copy["index"] = end_idx
                         else:  # replace - insert at start, will need delete first
-                            op_copy['index'] = start_idx
-                        op_copy['type'] = 'insert_text'
+                            op_copy["index"] = start_idx
+                        op_copy["type"] = "insert_text"
 
-                    elif op_type in ('delete', 'delete_text'):
-                        op_copy['start_index'] = start_idx
-                        op_copy['end_index'] = end_idx
-                        op_copy['type'] = 'delete_text'
+                    elif op_type in ("delete", "delete_text"):
+                        op_copy["start_index"] = start_idx
+                        op_copy["end_index"] = end_idx
+                        op_copy["type"] = "delete_text"
 
-                    elif op_type in ('replace', 'replace_text'):
-                        op_copy['start_index'] = start_idx
-                        op_copy['end_index'] = end_idx
-                        op_copy['type'] = 'replace_text'
+                    elif op_type in ("replace", "replace_text"):
+                        op_copy["start_index"] = start_idx
+                        op_copy["end_index"] = end_idx
+                        op_copy["type"] = "replace_text"
 
-                    elif op_type in ('format', 'format_text'):
-                        op_copy['start_index'] = start_idx
-                        op_copy['end_index'] = end_idx
-                        op_copy['type'] = 'format_text'
+                    elif op_type in ("format", "format_text"):
+                        op_copy["start_index"] = start_idx
+                        op_copy["end_index"] = end_idx
+                        op_copy["type"] = "format_text"
 
                     else:
                         # Unsupported operation type for all_occurrences
@@ -1415,87 +1541,110 @@ class BatchOperationManager:
         virtual_text_tracker = VirtualTextTracker(doc_data)
 
         for i, op in enumerate(operations):
-            op_type = op.get('type', '')
+            op_type = op.get("type", "")
             op_copy = op.copy()
 
             # Validate operation type before processing
             if not op_type:
-                valid_types = sorted(set(OPERATION_ALIASES.values()))  # Canonical types only
-                example = {"type": "insert", "search": "target text", "position": "after", "text": "new text"}
-                results.append(BatchOperationResult(
-                    index=i,
-                    type='',
-                    success=False,
-                    description="Invalid operation",
-                    error=f"Missing 'type' field in operation at index {i}. "
-                          f"Valid types: {', '.join(valid_types)}. "
-                          f"Example: {example}",
-                    resolved=False,
-                    executed=False,
-                ))
+                valid_types = sorted(
+                    set(OPERATION_ALIASES.values())
+                )  # Canonical types only
+                example = {
+                    "type": "insert",
+                    "search": "target text",
+                    "position": "after",
+                    "text": "new text",
+                }
+                results.append(
+                    BatchOperationResult(
+                        index=i,
+                        type="",
+                        success=False,
+                        description="Invalid operation",
+                        error=f"Missing 'type' field in operation at index {i}. "
+                        f"Valid types: {', '.join(valid_types)}. "
+                        f"Example: {example}",
+                        resolved=False,
+                        executed=False,
+                    )
+                )
                 resolved_ops.append(None)
                 continue
 
             if op_type not in VALID_OPERATION_TYPES:
-                valid_types = sorted(set(OPERATION_ALIASES.values()))  # Canonical types only
-                results.append(BatchOperationResult(
-                    index=i,
-                    type=op_type,
-                    success=False,
-                    description="Invalid operation type",
-                    error=f"Unsupported operation type: '{op_type}' at index {i}. Valid types: {', '.join(valid_types)}",
-                    resolved=False,
-                    executed=False,
-                ))
+                valid_types = sorted(
+                    set(OPERATION_ALIASES.values())
+                )  # Canonical types only
+                results.append(
+                    BatchOperationResult(
+                        index=i,
+                        type=op_type,
+                        success=False,
+                        description="Invalid operation type",
+                        error=f"Unsupported operation type: '{op_type}' at index {i}. Valid types: {', '.join(valid_types)}",
+                        resolved=False,
+                        executed=False,
+                    )
+                )
                 resolved_ops.append(None)
                 continue
 
             # Validate required fields for insert operations
             normalized_op_type = normalize_operation_type(op_type)
-            if normalized_op_type == 'insert_text':
+            if normalized_op_type == "insert_text":
                 # Insert requires 'text' field
-                if 'text' not in op:
-                    results.append(BatchOperationResult(
-                        index=i,
-                        type=op_type,
-                        success=False,
-                        description="Invalid insert operation",
-                        error="Insert operation requires 'text' field",
-                        resolved=False,
-                        executed=False,
-                    ))
+                if "text" not in op:
+                    results.append(
+                        BatchOperationResult(
+                            index=i,
+                            type=op_type,
+                            success=False,
+                            description="Invalid insert operation",
+                            error="Insert operation requires 'text' field",
+                            resolved=False,
+                            executed=False,
+                        )
+                    )
                     resolved_ops.append(None)
                     continue
 
                 # Insert requires at least one positioning method
-                has_position = any(key in op for key in ['index', 'search', 'location', 'range_spec'])
+                has_position = any(
+                    key in op for key in ["index", "search", "location", "range_spec"]
+                )
                 if not has_position:
-                    results.append(BatchOperationResult(
-                        index=i,
-                        type=op_type,
-                        success=False,
-                        description="Invalid insert operation",
-                        error="Insert operation requires positioning: 'index', 'search', 'location', or 'range_spec'",
-                        resolved=False,
-                        executed=False,
-                    ))
+                    results.append(
+                        BatchOperationResult(
+                            index=i,
+                            type=op_type,
+                            success=False,
+                            description="Invalid insert operation",
+                            error="Insert operation requires positioning: 'index', 'search', 'location', or 'range_spec'",
+                            resolved=False,
+                            executed=False,
+                        )
+                    )
                     resolved_ops.append(None)
                     continue
 
             # Check if this operation uses range_spec (new range-based positioning)
-            if 'range_spec' in op:
-                range_result = self._resolve_range_spec(op, doc_data, cumulative_shift, auto_adjust)
+            if "range_spec" in op:
+                range_result = self._resolve_range_spec(
+                    op, doc_data, cumulative_shift, auto_adjust
+                )
 
                 if not range_result.success:
-                    results.append(BatchOperationResult(
-                        index=i,
-                        type=op_type,
-                        success=False,
-                        description="Range resolution failed",
-                        error=range_result.message,
-                        resolved=False,
-                        executed=False,
-                    ))
+                    results.append(
+                        BatchOperationResult(
+                            index=i,
+                            type=op_type,
+                            success=False,
+                            description="Range resolution failed",
+                            error=range_result.message,
+                            resolved=False,
+                            executed=False,
+                        )
+                    )
                     resolved_ops.append(None)
                     continue
 
@@ -1506,26 +1655,28 @@ class BatchOperationManager:
                 resolved_index = range_result.start_index
 
             # Check if this operation uses location-based positioning
-            elif 'location' in op:
-                location = op['location']
-                if location not in ('start', 'end'):
-                    results.append(BatchOperationResult(
-                        index=i,
-                        type=op_type,
-                        success=False,
-                        description="Invalid location value",
-                        error=f"Invalid location: '{location}'. Valid values: 'start', 'end'",
-                        resolved=False,
-                        executed=False,
-                    ))
+            elif "location" in op:
+                location = op["location"]
+                if location not in ("start", "end"):
+                    results.append(
+                        BatchOperationResult(
+                            index=i,
+                            type=op_type,
+                            success=False,
+                            description="Invalid location value",
+                            error=f"Invalid location: '{location}'. Valid values: 'start', 'end'",
+                            resolved=False,
+                            executed=False,
+                        )
+                    )
                     resolved_ops.append(None)
                     continue
 
                 # Resolve location to index using document structure
                 structure = parse_document_structure(doc_data)
-                total_length = structure['total_length']
+                total_length = structure["total_length"]
 
-                if location == 'end':
+                if location == "end":
                     # Use total_length - 1 for safe insertion (last valid index)
                     resolved_index = total_length - 1 if total_length > 1 else 1
                 else:  # location == 'start'
@@ -1536,15 +1687,17 @@ class BatchOperationManager:
                     resolved_index += cumulative_shift
 
                 # Convert to index-based operation
-                op_copy = self._convert_location_to_index_op(op, op_type, resolved_index)
+                op_copy = self._convert_location_to_index_op(
+                    op, op_type, resolved_index
+                )
 
             # Check if this is a search-based operation (legacy mode)
-            elif 'search' in op:
-                search_text = op['search']
-                position = op.get('position', 'replace')
-                occurrence = op.get('occurrence', 1)
-                match_case = op.get('match_case', True)
-                extend = op.get('extend')  # Optional: 'paragraph', 'sentence', 'line'
+            elif "search" in op:
+                search_text = op["search"]
+                position = op.get("position", "replace")
+                occurrence = op.get("occurrence", 1)
+                match_case = op.get("match_case", True)
+                extend = op.get("extend")  # Optional: 'paragraph', 'sentence', 'line'
 
                 # Use virtual text tracker to support chained operations
                 # (searching for text inserted by earlier operations in the batch)
@@ -1553,15 +1706,17 @@ class BatchOperationManager:
                 )
 
                 if not success:
-                    results.append(BatchOperationResult(
-                        index=i,
-                        type=op_type,
-                        success=False,
-                        description=f"Search failed for '{search_text}'",
-                        error=msg,
-                        resolved=False,
-                        executed=False,
-                    ))
+                    results.append(
+                        BatchOperationResult(
+                            index=i,
+                            type=op_type,
+                            success=False,
+                            description=f"Search failed for '{search_text}'",
+                            error=msg,
+                            resolved=False,
+                            executed=False,
+                        )
+                    )
                     resolved_ops.append(None)
                     continue
 
@@ -1574,22 +1729,30 @@ class BatchOperationManager:
                     # For 'replace' position, start_idx is the match start
 
                     # Find boundaries based on the found position
-                    if extend_lower == 'paragraph':
-                        boundary_start, boundary_end = find_paragraph_boundaries(doc_data, start_idx)
-                    elif extend_lower == 'sentence':
-                        boundary_start, boundary_end = find_sentence_boundaries(doc_data, start_idx)
-                    elif extend_lower == 'line':
-                        boundary_start, boundary_end = find_line_boundaries(doc_data, start_idx)
+                    if extend_lower == "paragraph":
+                        boundary_start, boundary_end = find_paragraph_boundaries(
+                            doc_data, start_idx
+                        )
+                    elif extend_lower == "sentence":
+                        boundary_start, boundary_end = find_sentence_boundaries(
+                            doc_data, start_idx
+                        )
+                    elif extend_lower == "line":
+                        boundary_start, boundary_end = find_line_boundaries(
+                            doc_data, start_idx
+                        )
                     else:
-                        results.append(BatchOperationResult(
-                            index=i,
-                            type=op_type,
-                            success=False,
-                            description=f"Invalid extend value: '{extend}'",
-                            error=f"Invalid extend value: '{extend}'. Valid values: 'paragraph', 'sentence', 'line'",
-                            resolved=False,
-                            executed=False,
-                        ))
+                        results.append(
+                            BatchOperationResult(
+                                index=i,
+                                type=op_type,
+                                success=False,
+                                description=f"Invalid extend value: '{extend}'",
+                                error=f"Invalid extend value: '{extend}'. Valid values: 'paragraph', 'sentence', 'line'",
+                                resolved=False,
+                                executed=False,
+                            )
+                        )
                         resolved_ops.append(None)
                         continue
 
@@ -1619,25 +1782,27 @@ class BatchOperationManager:
                 # Index-based operation - normalize type and apply cumulative shift
                 resolved_index = None
                 # Normalize the operation type (e.g., 'insert' -> 'insert_text')
-                if 'type' in op_copy:
-                    op_copy['type'] = normalize_operation_type(op_copy['type'])
+                if "type" in op_copy:
+                    op_copy["type"] = normalize_operation_type(op_copy["type"])
                 if auto_adjust and cumulative_shift != 0:
                     op_copy = self._apply_position_shift(op_copy, cumulative_shift)
 
             # Calculate position shift for this operation
             shift, affected_range = self._calculate_op_shift(op_copy)
 
-            results.append(BatchOperationResult(
-                index=i,
-                type=op_type,
-                success=False,  # Not yet executed - will be set to True after execution
-                description=self._describe_operation(op_copy),
-                position_shift=shift,
-                affected_range=affected_range,
-                resolved_index=resolved_index,
-                resolved=True,  # Operation was successfully resolved to indices
-                executed=False,  # Not yet executed - will be set to True after execution
-            ))
+            results.append(
+                BatchOperationResult(
+                    index=i,
+                    type=op_type,
+                    success=False,  # Not yet executed - will be set to True after execution
+                    description=self._describe_operation(op_copy),
+                    position_shift=shift,
+                    affected_range=affected_range,
+                    resolved_index=resolved_index,
+                    resolved=True,  # Operation was successfully resolved to indices
+                    executed=False,  # Not yet executed - will be set to True after execution
+                )
+            )
 
             resolved_ops.append(op_copy)
 
@@ -1677,7 +1842,7 @@ class BatchOperationManager:
         Returns:
             RangeResult with resolved start/end indices
         """
-        range_spec = op.get('range_spec', {})
+        range_spec = op.get("range_spec", {})
 
         # Resolve range using the centralized resolver
         result = resolve_range(doc_data, range_spec)
@@ -1716,34 +1881,34 @@ class BatchOperationManager:
         result = op.copy()
 
         # Remove range_spec field
-        result.pop('range_spec', None)
+        result.pop("range_spec", None)
 
         # Map based on operation type
-        if op_type in ('insert', 'insert_text'):
-            result['type'] = 'insert_text'
-            result['index'] = start_idx
-        elif op_type in ('delete', 'delete_text'):
-            result['type'] = 'delete_text'
-            result['start_index'] = start_idx
-            result['end_index'] = end_idx
-        elif op_type in ('replace', 'replace_text'):
-            result['type'] = 'replace_text'
-            result['start_index'] = start_idx
-            result['end_index'] = end_idx
-        elif op_type in ('format', 'format_text'):
-            result['type'] = 'format_text'
-            result['start_index'] = start_idx
-            result['end_index'] = end_idx
-        elif op_type == 'insert_table':
-            result['type'] = 'insert_table'
-            result['index'] = start_idx
-        elif op_type == 'insert_page_break':
-            result['type'] = 'insert_page_break'
-            result['index'] = start_idx
-        elif op_type == 'convert_to_list':
-            result['type'] = 'convert_to_list'
-            result['start_index'] = start_idx
-            result['end_index'] = end_idx
+        if op_type in ("insert", "insert_text"):
+            result["type"] = "insert_text"
+            result["index"] = start_idx
+        elif op_type in ("delete", "delete_text"):
+            result["type"] = "delete_text"
+            result["start_index"] = start_idx
+            result["end_index"] = end_idx
+        elif op_type in ("replace", "replace_text"):
+            result["type"] = "replace_text"
+            result["start_index"] = start_idx
+            result["end_index"] = end_idx
+        elif op_type in ("format", "format_text"):
+            result["type"] = "format_text"
+            result["start_index"] = start_idx
+            result["end_index"] = end_idx
+        elif op_type == "insert_table":
+            result["type"] = "insert_table"
+            result["index"] = start_idx
+        elif op_type == "insert_page_break":
+            result["type"] = "insert_page_break"
+            result["index"] = start_idx
+        elif op_type == "convert_to_list":
+            result["type"] = "convert_to_list"
+            result["start_index"] = start_idx
+            result["end_index"] = end_idx
 
         return result
 
@@ -1758,35 +1923,35 @@ class BatchOperationManager:
         result = op.copy()
 
         # Remove search-specific fields
-        for key in ['search', 'position', 'occurrence', 'match_case']:
+        for key in ["search", "position", "occurrence", "match_case"]:
             result.pop(key, None)
 
         # Map based on operation type
-        if op_type in ('insert', 'insert_text'):
-            result['type'] = 'insert_text'
-            result['index'] = start_idx
-        elif op_type in ('delete', 'delete_text'):
-            result['type'] = 'delete_text'
-            result['start_index'] = start_idx
-            result['end_index'] = end_idx
-        elif op_type in ('replace', 'replace_text'):
-            result['type'] = 'replace_text'
-            result['start_index'] = start_idx
-            result['end_index'] = end_idx
-        elif op_type in ('format', 'format_text'):
-            result['type'] = 'format_text'
-            result['start_index'] = start_idx
-            result['end_index'] = end_idx
-        elif op_type == 'insert_table':
-            result['type'] = 'insert_table'
-            result['index'] = start_idx
-        elif op_type == 'insert_page_break':
-            result['type'] = 'insert_page_break'
-            result['index'] = start_idx
-        elif op_type == 'convert_to_list':
-            result['type'] = 'convert_to_list'
-            result['start_index'] = start_idx
-            result['end_index'] = end_idx
+        if op_type in ("insert", "insert_text"):
+            result["type"] = "insert_text"
+            result["index"] = start_idx
+        elif op_type in ("delete", "delete_text"):
+            result["type"] = "delete_text"
+            result["start_index"] = start_idx
+            result["end_index"] = end_idx
+        elif op_type in ("replace", "replace_text"):
+            result["type"] = "replace_text"
+            result["start_index"] = start_idx
+            result["end_index"] = end_idx
+        elif op_type in ("format", "format_text"):
+            result["type"] = "format_text"
+            result["start_index"] = start_idx
+            result["end_index"] = end_idx
+        elif op_type == "insert_table":
+            result["type"] = "insert_table"
+            result["index"] = start_idx
+        elif op_type == "insert_page_break":
+            result["type"] = "insert_page_break"
+            result["index"] = start_idx
+        elif op_type == "convert_to_list":
+            result["type"] = "convert_to_list"
+            result["start_index"] = start_idx
+            result["end_index"] = end_idx
 
         return result
 
@@ -1812,30 +1977,32 @@ class BatchOperationManager:
         result = op.copy()
 
         # Remove location-specific field
-        result.pop('location', None)
+        result.pop("location", None)
 
         # Map based on operation type - location-based ops are insert operations
-        if op_type in ('insert', 'insert_text'):
-            result['type'] = 'insert_text'
-            result['index'] = resolved_index
-        elif op_type in ('format', 'format_text'):
+        if op_type in ("insert", "insert_text"):
+            result["type"] = "insert_text"
+            result["index"] = resolved_index
+        elif op_type in ("format", "format_text"):
             # Format at location doesn't make sense without a range
             # but we support it for consistency - uses resolved_index as start
-            result['type'] = 'format_text'
-            result['start_index'] = resolved_index
+            result["type"] = "format_text"
+            result["start_index"] = resolved_index
             # If no end_index provided, this will need text length
-            if 'end_index' not in result:
-                text = result.get('text', '')
-                result['end_index'] = resolved_index + len(text) if text else resolved_index
-        elif op_type == 'insert_table':
-            result['type'] = 'insert_table'
-            result['index'] = resolved_index
-        elif op_type == 'insert_page_break':
-            result['type'] = 'insert_page_break'
-            result['index'] = resolved_index
+            if "end_index" not in result:
+                text = result.get("text", "")
+                result["end_index"] = (
+                    resolved_index + len(text) if text else resolved_index
+                )
+        elif op_type == "insert_table":
+            result["type"] = "insert_table"
+            result["index"] = resolved_index
+        elif op_type == "insert_page_break":
+            result["type"] = "insert_page_break"
+            result["index"] = resolved_index
         else:
             # For other types, just set the index
-            result['index'] = resolved_index
+            result["index"] = resolved_index
 
         return result
 
@@ -1847,12 +2014,12 @@ class BatchOperationManager:
         """Apply position shift to an index-based operation."""
         result = op.copy()
 
-        if 'index' in result:
-            result['index'] += shift
-        if 'start_index' in result:
-            result['start_index'] += shift
-        if 'end_index' in result:
-            result['end_index'] += shift
+        if "index" in result:
+            result["index"] += shift
+        if "start_index" in result:
+            result["start_index"] += shift
+        if "end_index" in result:
+            result["end_index"] += shift
 
         return result
 
@@ -1861,97 +2028,119 @@ class BatchOperationManager:
         op: Dict[str, Any],
     ) -> Tuple[int, Dict[str, int]]:
         """Calculate position shift caused by an operation."""
-        op_type = op.get('type', '')
+        op_type = op.get("type", "")
 
-        if op_type == 'insert_text':
-            text_len = len(op.get('text', ''))
-            start_idx = op.get('index', 0)
+        if op_type == "insert_text":
+            text_len = len(op.get("text", ""))
+            start_idx = op.get("index", 0)
             return text_len, {"start": start_idx, "end": start_idx + text_len}
 
-        elif op_type == 'delete_text':
-            start_idx = op.get('start_index', 0)
-            end_idx = op.get('end_index', start_idx)
+        elif op_type == "delete_text":
+            start_idx = op.get("start_index", 0)
+            end_idx = op.get("end_index", start_idx)
             deleted = end_idx - start_idx
             return -deleted, {"start": start_idx, "end": start_idx}
 
-        elif op_type == 'replace_text':
-            start_idx = op.get('start_index', 0)
-            end_idx = op.get('end_index', start_idx)
+        elif op_type == "replace_text":
+            start_idx = op.get("start_index", 0)
+            end_idx = op.get("end_index", start_idx)
             old_len = end_idx - start_idx
-            new_len = len(op.get('text', ''))
+            new_len = len(op.get("text", ""))
             shift = new_len - old_len
             return shift, {"start": start_idx, "end": start_idx + new_len}
 
-        elif op_type in ('format_text', 'find_replace'):
+        elif op_type in ("format_text", "find_replace"):
             # These don't change positions (find_replace is applied atomically)
-            start_idx = op.get('start_index', 0)
-            end_idx = op.get('end_index', start_idx)
+            start_idx = op.get("start_index", 0)
+            end_idx = op.get("end_index", start_idx)
             return 0, {"start": start_idx, "end": end_idx}
 
-        elif op_type == 'insert_table':
+        elif op_type == "insert_table":
             # Tables add structure but position shift is complex
             # Conservatively estimate based on rows/columns
-            start_idx = op.get('index', 0)
+            start_idx = op.get("index", 0)
             return 0, {"start": start_idx, "end": start_idx}
 
-        elif op_type == 'insert_page_break':
-            start_idx = op.get('index', 0)
+        elif op_type == "insert_page_break":
+            start_idx = op.get("index", 0)
             return 1, {"start": start_idx, "end": start_idx + 1}
 
-        elif op_type == 'convert_to_list':
+        elif op_type == "convert_to_list":
             # Converting to list doesn't change positions (only adds formatting)
-            start_idx = op.get('start_index', 0)
-            end_idx = op.get('end_index', start_idx)
+            start_idx = op.get("start_index", 0)
+            end_idx = op.get("end_index", start_idx)
             return 0, {"start": start_idx, "end": end_idx}
 
         return 0, {"start": 0, "end": 0}
 
     def _describe_operation(self, op: Dict[str, Any]) -> str:
         """Generate human-readable description of an operation."""
-        op_type = op.get('type', 'unknown')
+        op_type = op.get("type", "unknown")
 
-        if op_type == 'insert_text':
-            text = op.get('text', '')
-            preview = text[:20] + '...' if len(text) > 20 else text
+        if op_type == "insert_text":
+            text = op.get("text", "")
+            preview = text[:20] + "..." if len(text) > 20 else text
             return f"insert '{preview}' at {op.get('index', '?')}"
 
-        elif op_type == 'delete_text':
+        elif op_type == "delete_text":
             return f"delete {op.get('start_index', '?')}-{op.get('end_index', '?')}"
 
-        elif op_type == 'replace_text':
-            text = op.get('text', '')
-            preview = text[:20] + '...' if len(text) > 20 else text
+        elif op_type == "replace_text":
+            text = op.get("text", "")
+            preview = text[:20] + "..." if len(text) > 20 else text
             return f"replace {op.get('start_index', '?')}-{op.get('end_index', '?')} with '{preview}'"
 
-        elif op_type == 'format_text':
+        elif op_type == "format_text":
             formats = []
             # Text-level formatting
-            for key in ['bold', 'italic', 'underline', 'strikethrough', 'small_caps',
-                        'subscript', 'superscript', 'font_size', 'font_family',
-                        'link', 'foreground_color', 'background_color']:
+            for key in [
+                "bold",
+                "italic",
+                "underline",
+                "strikethrough",
+                "small_caps",
+                "subscript",
+                "superscript",
+                "font_size",
+                "font_family",
+                "link",
+                "foreground_color",
+                "background_color",
+            ]:
                 if op.get(key) is not None:
                     formats.append(f"{key}={op[key]}")
             # Paragraph-level formatting
-            for key in ['heading_style', 'alignment', 'line_spacing',
-                        'indent_first_line', 'indent_start', 'indent_end',
-                        'space_above', 'space_below']:
+            for key in [
+                "heading_style",
+                "alignment",
+                "line_spacing",
+                "indent_first_line",
+                "indent_start",
+                "indent_end",
+                "space_above",
+                "space_below",
+            ]:
                 if op.get(key) is not None:
                     formats.append(f"{key}={op[key]}")
             return f"format {op.get('start_index', '?')}-{op.get('end_index', '?')} ({', '.join(formats) or 'none'})"
 
-        elif op_type == 'insert_table':
+        elif op_type == "insert_table":
             return f"insert {op.get('rows', '?')}x{op.get('columns', '?')} table at {op.get('index', '?')}"
 
-        elif op_type == 'insert_page_break':
+        elif op_type == "insert_page_break":
             return f"insert page break at {op.get('index', '?')}"
 
-        elif op_type == 'find_replace':
-            return f"find '{op.get('find_text', '?')}' → '{op.get('replace_text', '?')}'"
+        elif op_type == "find_replace":
+            return (
+                f"find '{op.get('find_text', '?')}' → '{op.get('replace_text', '?')}'"
+            )
 
-        elif op_type == 'convert_to_list':
-            list_type = op.get('list_type', 'UNORDERED')
+        elif op_type == "convert_to_list":
+            list_type = op.get("list_type", "UNORDERED")
             # Normalize to display name
-            normalized = LIST_TYPE_ALIASES.get(list_type if isinstance(list_type, str) else str(list_type), 'UNORDERED')
+            normalized = LIST_TYPE_ALIASES.get(
+                list_type if isinstance(list_type, str) else str(list_type), "UNORDERED"
+            )
             list_type_display = "bullet" if normalized == "UNORDERED" else "numbered"
             return f"convert to {list_type_display} list {op.get('start_index', '?')}-{op.get('end_index', '?')}"
 
@@ -1968,71 +2157,110 @@ class BatchOperationManager:
             if op is None:
                 continue
 
-            op_type = op.get('type', '')
+            op_type = op.get("type", "")
 
-            if op_type == 'insert_text':
-                requests.append(create_insert_text_request(op['index'], op['text'], tab_id=self.tab_id))
+            if op_type == "insert_text":
+                requests.append(
+                    create_insert_text_request(
+                        op["index"], op["text"], tab_id=self.tab_id
+                    )
+                )
                 # Check if insert operation has formatting parameters - apply formatting after insert
                 format_req = create_format_text_request(
-                    op['index'], op['index'] + len(op['text']),
-                    op.get('bold'), op.get('italic'), op.get('underline'),
-                    op.get('strikethrough'), op.get('small_caps'), op.get('subscript'),
-                    op.get('superscript'), op.get('font_size'), op.get('font_family'),
-                    op.get('link'), op.get('foreground_color'), op.get('background_color'),
+                    op["index"],
+                    op["index"] + len(op["text"]),
+                    op.get("bold"),
+                    op.get("italic"),
+                    op.get("underline"),
+                    op.get("strikethrough"),
+                    op.get("small_caps"),
+                    op.get("subscript"),
+                    op.get("superscript"),
+                    op.get("font_size"),
+                    op.get("font_family"),
+                    op.get("link"),
+                    op.get("foreground_color"),
+                    op.get("background_color"),
                     tab_id=self.tab_id,
                 )
                 # Always clear formatting to prevent inheriting surrounding styles.
                 # This ensures plain text insertions stay plain.
                 clear_req = create_clear_formatting_request(
-                    op['index'], op['index'] + len(op['text']),
-                    preserve_links=(op.get('link') is not None),
+                    op["index"],
+                    op["index"] + len(op["text"]),
+                    preserve_links=(op.get("link") is not None),
                     tab_id=self.tab_id,
                 )
                 requests.append(clear_req)
                 if format_req:
                     requests.append(format_req)
 
-            elif op_type == 'delete_text':
-                requests.append(create_delete_range_request(
-                    op['start_index'], op['end_index'], tab_id=self.tab_id
-                ))
+            elif op_type == "delete_text":
+                requests.append(
+                    create_delete_range_request(
+                        op["start_index"], op["end_index"], tab_id=self.tab_id
+                    )
+                )
 
-            elif op_type == 'replace_text':
+            elif op_type == "replace_text":
                 # Replace = delete + insert
-                requests.append(create_delete_range_request(
-                    op['start_index'], op['end_index'], tab_id=self.tab_id
-                ))
-                requests.append(create_insert_text_request(
-                    op['start_index'], op['text'], tab_id=self.tab_id
-                ))
+                requests.append(
+                    create_delete_range_request(
+                        op["start_index"], op["end_index"], tab_id=self.tab_id
+                    )
+                )
+                requests.append(
+                    create_insert_text_request(
+                        op["start_index"], op["text"], tab_id=self.tab_id
+                    )
+                )
                 # Check if replace operation has formatting parameters - apply formatting after insert
                 format_req = create_format_text_request(
-                    op['start_index'], op['start_index'] + len(op.get('text', '')),
-                    op.get('bold'), op.get('italic'), op.get('underline'),
-                    op.get('strikethrough'), op.get('small_caps'), op.get('subscript'),
-                    op.get('superscript'), op.get('font_size'), op.get('font_family'),
-                    op.get('link'), op.get('foreground_color'), op.get('background_color'),
+                    op["start_index"],
+                    op["start_index"] + len(op.get("text", "")),
+                    op.get("bold"),
+                    op.get("italic"),
+                    op.get("underline"),
+                    op.get("strikethrough"),
+                    op.get("small_caps"),
+                    op.get("subscript"),
+                    op.get("superscript"),
+                    op.get("font_size"),
+                    op.get("font_family"),
+                    op.get("link"),
+                    op.get("foreground_color"),
+                    op.get("background_color"),
                     tab_id=self.tab_id,
                 )
                 # Always clear formatting to prevent inheriting surrounding styles.
                 # This ensures plain text replacements stay plain.
                 clear_req = create_clear_formatting_request(
-                    op['start_index'], op['start_index'] + len(op.get('text', '')),
-                    preserve_links=(op.get('link') is not None),
+                    op["start_index"],
+                    op["start_index"] + len(op.get("text", "")),
+                    preserve_links=(op.get("link") is not None),
                     tab_id=self.tab_id,
                 )
                 requests.append(clear_req)
                 if format_req:
                     requests.append(format_req)
 
-            elif op_type == 'format_text':
+            elif op_type == "format_text":
                 # Handle text-level formatting (bold, italic, font, etc.)
                 req = create_format_text_request(
-                    op['start_index'], op['end_index'],
-                    op.get('bold'), op.get('italic'), op.get('underline'),
-                    op.get('strikethrough'), op.get('small_caps'), op.get('subscript'),
-                    op.get('superscript'), op.get('font_size'), op.get('font_family'),
-                    op.get('link'), op.get('foreground_color'), op.get('background_color'),
+                    op["start_index"],
+                    op["end_index"],
+                    op.get("bold"),
+                    op.get("italic"),
+                    op.get("underline"),
+                    op.get("strikethrough"),
+                    op.get("small_caps"),
+                    op.get("subscript"),
+                    op.get("superscript"),
+                    op.get("font_size"),
+                    op.get("font_family"),
+                    op.get("link"),
+                    op.get("foreground_color"),
+                    op.get("background_color"),
                     tab_id=self.tab_id,
                 )
                 if req:
@@ -2040,59 +2268,74 @@ class BatchOperationManager:
 
                 # Handle paragraph-level formatting (heading_style, alignment, etc.)
                 para_req = create_paragraph_style_request(
-                    op['start_index'], op['end_index'],
-                    line_spacing=op.get('line_spacing'),
-                    heading_style=op.get('heading_style'),
-                    alignment=op.get('alignment'),
-                    indent_first_line=op.get('indent_first_line'),
-                    indent_start=op.get('indent_start'),
-                    indent_end=op.get('indent_end'),
-                    space_above=op.get('space_above'),
-                    space_below=op.get('space_below'),
+                    op["start_index"],
+                    op["end_index"],
+                    line_spacing=op.get("line_spacing"),
+                    heading_style=op.get("heading_style"),
+                    alignment=op.get("alignment"),
+                    indent_first_line=op.get("indent_first_line"),
+                    indent_start=op.get("indent_start"),
+                    indent_end=op.get("indent_end"),
+                    space_above=op.get("space_above"),
+                    space_below=op.get("space_below"),
                     tab_id=self.tab_id,
                 )
                 if para_req:
                     requests.append(para_req)
 
-            elif op_type == 'insert_table':
+            elif op_type == "insert_table":
                 # Validate required fields with helpful error messages
                 missing = []
-                if 'index' not in op:
-                    missing.append('index')
-                if 'rows' not in op:
-                    missing.append('rows')
-                if 'columns' not in op:
-                    missing.append('columns')
+                if "index" not in op:
+                    missing.append("index")
+                if "rows" not in op:
+                    missing.append("rows")
+                if "columns" not in op:
+                    missing.append("columns")
                 if missing:
                     raise KeyError(
                         f"insert_table operation missing required field(s): {', '.join(missing)}. "
-                        f"Example: {{\"type\": \"insert_table\", \"index\": 1, \"rows\": 3, \"columns\": 4}} "
-                        f"or {{\"type\": \"insert_table\", \"location\": \"end\", \"rows\": 3, \"columns\": 4}}"
+                        f'Example: {{"type": "insert_table", "index": 1, "rows": 3, "columns": 4}} '
+                        f'or {{"type": "insert_table", "location": "end", "rows": 3, "columns": 4}}'
                     )
-                requests.append(create_insert_table_request(
-                    op['index'], op['rows'], op['columns'], tab_id=self.tab_id
-                ))
+                requests.append(
+                    create_insert_table_request(
+                        op["index"], op["rows"], op["columns"], tab_id=self.tab_id
+                    )
+                )
 
-            elif op_type == 'insert_page_break':
-                requests.append(create_insert_page_break_request(op['index'], tab_id=self.tab_id))
+            elif op_type == "insert_page_break":
+                requests.append(
+                    create_insert_page_break_request(op["index"], tab_id=self.tab_id)
+                )
 
-            elif op_type == 'find_replace':
+            elif op_type == "find_replace":
                 # Note: find_replace uses tab_ids (list) instead of tab_id (single)
                 tab_ids = [self.tab_id] if self.tab_id else None
-                requests.append(create_find_replace_request(
-                    op['find_text'], op['replace_text'], op.get('match_case', False), tab_ids=tab_ids
-                ))
+                requests.append(
+                    create_find_replace_request(
+                        op["find_text"],
+                        op["replace_text"],
+                        op.get("match_case", False),
+                        tab_ids=tab_ids,
+                    )
+                )
 
-            elif op_type == 'convert_to_list':
+            elif op_type == "convert_to_list":
                 # Normalize and validate list_type
-                list_type = op.get('list_type', 'UNORDERED')
+                list_type = op.get("list_type", "UNORDERED")
                 normalized_list_type = LIST_TYPE_ALIASES.get(
                     list_type if isinstance(list_type, str) else str(list_type),
-                    'UNORDERED'
+                    "UNORDERED",
                 )
-                requests.append(create_bullet_list_request(
-                    op['start_index'], op['end_index'], normalized_list_type, tab_id=self.tab_id
-                ))
+                requests.append(
+                    create_bullet_list_request(
+                        op["start_index"],
+                        op["end_index"],
+                        normalized_list_type,
+                        tab_id=self.tab_id,
+                    )
+                )
 
         return requests
 
@@ -2100,7 +2343,7 @@ class BatchOperationManager:
         self,
         document_id: str,
         resolved_ops: List[Dict[str, Any]],
-        operation_results: List['BatchOperationResult'],
+        operation_results: List["BatchOperationResult"],
         doc_data: Dict[str, Any],
         batch_id: Optional[str] = None,
     ) -> str:
@@ -2125,14 +2368,14 @@ class BatchOperationManager:
 
         # Map operation types to history operation types
         op_type_map = {
-            'insert_text': 'insert_text',
-            'insert': 'insert_text',
-            'delete_text': 'delete_text',
-            'delete': 'delete_text',
-            'replace_text': 'replace_text',
-            'replace': 'replace_text',
-            'format_text': 'format_text',
-            'format': 'format_text',
+            "insert_text": "insert_text",
+            "insert": "insert_text",
+            "delete_text": "delete_text",
+            "delete": "delete_text",
+            "replace_text": "replace_text",
+            "replace": "replace_text",
+            "format_text": "format_text",
+            "format": "format_text",
         }
 
         recorded_count = 0
@@ -2140,18 +2383,20 @@ class BatchOperationManager:
             if op is None or not result.success:
                 continue
 
-            op_type = op.get('type', '')
+            op_type = op.get("type", "")
             normalized_type = normalize_operation_type(op_type)
             history_op_type = op_type_map.get(normalized_type, op_type_map.get(op_type))
 
             if not history_op_type:
                 # Skip operations that don't have a mapped history type (e.g., insert_table, find_replace)
-                logger.debug(f"Skipping history recording for operation type: {op_type}")
+                logger.debug(
+                    f"Skipping history recording for operation type: {op_type}"
+                )
                 continue
 
-            start_index = op.get('index') or op.get('start_index', 0)
-            end_index = op.get('end_index')
-            text = op.get('text', '')
+            start_index = op.get("index") or op.get("start_index", 0)
+            end_index = op.get("end_index")
+            text = op.get("text", "")
             position_shift = result.position_shift
 
             # Capture deleted/original text for undo if available from result
@@ -2160,11 +2405,13 @@ class BatchOperationManager:
             if result.affected_range:
                 # For delete/replace, we'd need to capture text before operation
                 # Since we're recording after, this is best-effort from doc_data (which is pre-operation)
-                if history_op_type in ['delete_text', 'replace_text'] and end_index:
+                if history_op_type in ["delete_text", "replace_text"] and end_index:
                     try:
-                        extracted = extract_text_at_range(doc_data, start_index, end_index)
+                        extracted = extract_text_at_range(
+                            doc_data, start_index, end_index
+                        )
                         captured = extracted.get("text", "")
-                        if history_op_type == 'delete_text':
+                        if history_op_type == "delete_text":
                             deleted_text = captured
                         else:
                             original_text = captured
@@ -2174,7 +2421,7 @@ class BatchOperationManager:
             # Determine undo capability
             undo_capability = UndoCapability.FULL
             undo_notes = None
-            if history_op_type == 'format_text':
+            if history_op_type == "format_text":
                 undo_capability = UndoCapability.NONE
                 undo_notes = "Format undo requires capturing original formatting (not yet supported)"
 
@@ -2198,7 +2445,9 @@ class BatchOperationManager:
                     batch_index=i,
                 )
                 recorded_count += 1
-                logger.debug(f"Recorded batch operation {i} for undo: {history_op_type} at {start_index} (batch={batch_id})")
+                logger.debug(
+                    f"Recorded batch operation {i} for undo: {history_op_type} at {start_index} (batch={batch_id})"
+                )
             except Exception as e:
                 logger.warning(f"Failed to record batch operation {i}: {e}")
 

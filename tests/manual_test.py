@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Manual test script for gdocs tools."""
+
 import asyncio
 import sys
 import os
@@ -8,6 +9,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from dotenv import load_dotenv  # noqa: E402
+
 load_dotenv()
 
 # Import after path setup
@@ -15,6 +17,7 @@ from tools_cli import init_server, ToolTester  # noqa: E402
 
 DOC_ID = os.environ.get("TEST_DOC_ID", "YOUR_TEST_DOC_ID")
 USER_EMAIL = os.environ.get("USER_GOOGLE_EMAIL", "user@example.com")
+
 
 async def main():
     """Run manual tests."""
@@ -32,7 +35,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         location="end",
-        text="\n\n=== NEWLINE TEST ===\nLine 1\nLine 2\nLine 3\n"
+        text="\n\n=== NEWLINE TEST ===\nLine 1\nLine 2\nLine 3\n",
     )
     print(f"Insert with newlines result: {result}")
 
@@ -43,7 +46,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         search="Line 1\nLine 2",
-        preview=True
+        preview=True,
     )
     print(f"Search with newline result: {result}")
 
@@ -55,7 +58,7 @@ async def main():
         user_google_email=USER_EMAIL,
         search="NEWLINE TEST",
         position="after",
-        text="\n[Text inserted AFTER the heading]\n"
+        text="\n[Text inserted AFTER the heading]\n",
     )
     print(f"Insert after heading result: {result}")
 
@@ -67,7 +70,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         search="=== NEWLINE TEST ===",
-        preview=True
+        preview=True,
     )
     print(f"Found section: {result}")
 
@@ -78,7 +81,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         location="end",
-        text="\n=== INDENTATION TEST ===\nNormal line\n    4-space indent\n        8-space indent\n\tTab indent\n\t\tDouble tab\n"
+        text="\n=== INDENTATION TEST ===\nNormal line\n    4-space indent\n        8-space indent\n\tTab indent\n\t\tDouble tab\n",
     )
     print(f"Indentation test result: {result}")
 
@@ -90,7 +93,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         location="end",
-        text="\n=== REMOVE FORMAT TEST ===\nThis text will be made bold then un-bold.\n"
+        text="\n=== REMOVE FORMAT TEST ===\nThis text will be made bold then un-bold.\n",
     )
     print(f"Added text: {result}")
 
@@ -101,7 +104,7 @@ async def main():
         search="made bold then un-bold",
         position="replace",
         text="made bold then un-bold",
-        bold=True
+        bold=True,
     )
     print(f"Made bold: {result}")
 
@@ -113,7 +116,7 @@ async def main():
         search="made bold then un-bold",
         position="replace",
         text="made bold then un-bold",
-        bold=False
+        bold=False,
     )
     print(f"Removed bold: {result}")
 
@@ -124,7 +127,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         element_type="horizontal_rule",
-        location="end"
+        location="end",
     )
     print(f"Horizontal rule result: {result}")
 
@@ -135,7 +138,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         location="end",
-        text=""
+        text="",
     )
     print(f"Empty text result: {result}")
 
@@ -146,7 +149,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         location="end",
-        text="\n=== SPECIAL CHARS TEST ===\nEmojis: 🎉 🚀 ✅ 👍\nMath: ∑ ∆ √ π ∞\nCurrency: $ € £ ¥\nLanguages: こんにちは 你好 مرحبا\n"
+        text="\n=== SPECIAL CHARS TEST ===\nEmojis: 🎉 🚀 ✅ 👍\nMath: ∑ ∆ √ π ∞\nCurrency: $ € £ ¥\nLanguages: こんにちは 你好 مرحبا\n",
     )
     print(f"Unicode/special chars result: {result}")
 
@@ -158,7 +161,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         location="end",
-        text=f"\n=== LONG TEXT TEST (5KB) ===\n{long_text}\n"
+        text=f"\n=== LONG TEXT TEST (5KB) ===\n{long_text}\n",
     )
     print(f"Long text result: {result}")
 
@@ -168,7 +171,7 @@ async def main():
         "get_doc_section",
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
-        heading="The Problem"
+        heading="The Problem",
     )
     print(f"Get section result: {result[:500] if len(result) > 500 else result}")
 
@@ -179,7 +182,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         current_heading="The Problem",
-        direction="next"
+        direction="next",
     )
     print(f"Navigate siblings result: {result}")
 
@@ -191,7 +194,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         location="end",
-        text="\n=== AUTO LINKIFY TEST ===\nVisit https://www.example.com for more info.\nAlso check out https://www.google.com and https://www.github.com\n"
+        text="\n=== AUTO LINKIFY TEST ===\nVisit https://www.example.com for more info.\nAlso check out https://www.google.com and https://www.github.com\n",
     )
     # Now auto-linkify them
     result = await tester.call_tool(
@@ -208,7 +211,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         section_type="header",
-        content="Test Document Header"
+        content="Test Document Header",
     )
     print(f"Header result: {result}")
 
@@ -219,7 +222,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         section_type="footer",
-        content="Page Footer - Confidential"
+        content="Page Footer - Confidential",
     )
     print(f"Footer result: {result}")
 
@@ -230,7 +233,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         location="end",
-        text="\n\nNew Section Title\nThis is paragraph text under the new section.\n"
+        text="\n\nNew Section Title\nThis is paragraph text under the new section.\n",
     )
     print(f"Text insertion result: {result}")
 
@@ -242,7 +245,7 @@ async def main():
         search="New Section Title",
         position="replace",
         text="New Section Title",
-        heading_style="HEADING_2"
+        heading_style="HEADING_2",
     )
     print(f"Heading style result: {result}")
 
@@ -253,7 +256,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         location="end",
-        text="\nThis text should be centered.\n"
+        text="\nThis text should be centered.\n",
     )
     print(f"Text insertion result: {result}")
 
@@ -264,7 +267,7 @@ async def main():
         search="This text should be centered",
         position="replace",
         text="This text should be centered",
-        alignment="CENTER"
+        alignment="CENTER",
     )
     print(f"Alignment result: {result}")
 
@@ -276,7 +279,7 @@ async def main():
         user_google_email=USER_EMAIL,
         location="end",
         text="\nClick here to visit Google\n",
-        link="https://www.google.com"
+        link="https://www.google.com",
     )
     print(f"Hyperlink result: {result}")
 
@@ -288,7 +291,7 @@ async def main():
         search="First list item\nSecond list item\nThird list item",
         position="replace",
         text="First list item\nSecond list item\nThird list item",
-        convert_to_list="UNORDERED"
+        convert_to_list="UNORDERED",
     )
     print(f"Convert to bullet list result: {result}")
 
@@ -298,7 +301,7 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         location="end",
-        text="\n\n=== NUMBERED LIST TEST ==="
+        text="\n\n=== NUMBERED LIST TEST ===",
     )
     print(f"Section header result: {result}")
 
@@ -311,7 +314,7 @@ async def main():
         element_type="list",
         location="end",
         list_type="ORDERED",
-        items=["Step 1: Do something", "Step 2: Do something else", "Step 3: Finish"]
+        items=["Step 1: Do something", "Step 2: Do something else", "Step 3: Finish"],
     )
     print(f"Insert numbered list result: {result}")
 
@@ -323,7 +326,7 @@ async def main():
         user_google_email=USER_EMAIL,
         location="end",
         text="\n\n=== CODE BLOCK TEST ===\ndef hello():\n    print('Hello World')\n    return True\n",
-        code_block=True
+        code_block=True,
     )
     print(f"Code block result: {result}")
 
@@ -334,9 +337,10 @@ async def main():
         document_id=DOC_ID,
         user_google_email=USER_EMAIL,
         element_type="page_break",
-        location="end"
+        location="end",
     )
     print(f"Page break result: {result}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

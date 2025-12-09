@@ -1291,21 +1291,23 @@ class TestNewDocsErrorBuilderMethods:
     def test_not_found_basic(self):
         """Test basic not_found error."""
         error = DocsErrorBuilder.not_found(
-            entity_type="bookmark",
-            search_criteria="my_bookmark"
+            entity_type="bookmark", search_criteria="my_bookmark"
         )
         assert error.code == "OPERATION_FAILED"
         assert "Bookmark" in error.message
         assert "my_bookmark" in error.message
         assert "not found" in error.message.lower()
-        assert error.context.received == {"search": "my_bookmark", "entity_type": "bookmark"}
+        assert error.context.received == {
+            "search": "my_bookmark",
+            "entity_type": "bookmark",
+        }
 
     def test_not_found_with_available_options(self):
         """Test not_found error with available options."""
         error = DocsErrorBuilder.not_found(
             entity_type="named range",
             search_criteria="missing_range",
-            available_options=["range1", "range2", "range3"]
+            available_options=["range1", "range2", "range3"],
         )
         assert error.code == "OPERATION_FAILED"
         assert "named range" in error.reason.lower()
@@ -1317,7 +1319,7 @@ class TestNewDocsErrorBuilderMethods:
         error = DocsErrorBuilder.not_found(
             entity_type="item",
             search_criteria="missing",
-            available_options=many_options
+            available_options=many_options,
         )
         assert len(error.context.available_headings) == 11
         assert "10 more" in error.context.available_headings[-1]
@@ -1327,7 +1329,7 @@ class TestNewDocsErrorBuilderMethods:
         error = DocsErrorBuilder.not_found(
             entity_type="section",
             search_criteria="Introduction",
-            suggestion="Try using find_doc_elements to list all sections."
+            suggestion="Try using find_doc_elements to list all sections.",
         )
         assert error.suggestion == "Try using find_doc_elements to list all sections."
 
@@ -1336,13 +1338,15 @@ class TestNewDocsErrorBuilderMethods:
         error = DocsErrorBuilder.invalid_state(
             reason="Cannot undo - no operations in history",
             current_state="Operation history is empty",
-            required_state="At least one operation in history"
+            required_state="At least one operation in history",
         )
         assert error.code == "OPERATION_FAILED"
         assert "undo" in error.message.lower()
         assert "empty" in error.reason.lower()
         assert error.context.received == {"current_state": "Operation history is empty"}
-        assert error.context.expected == {"required_state": "At least one operation in history"}
+        assert error.context.expected == {
+            "required_state": "At least one operation in history"
+        }
 
     def test_invalid_state_with_suggestion(self):
         """Test invalid_state with custom suggestion."""
@@ -1350,17 +1354,14 @@ class TestNewDocsErrorBuilderMethods:
             reason="Document is read-only",
             current_state="Viewer permission",
             required_state="Editor permission",
-            suggestion="Request edit access from the document owner."
+            suggestion="Request edit access from the document owner.",
         )
         assert error.suggestion == "Request edit access from the document owner."
 
     def test_out_of_range_basic(self):
         """Test basic out_of_range error."""
         error = DocsErrorBuilder.out_of_range(
-            param_name="font_size",
-            value=500,
-            min_val=1,
-            max_val=400
+            param_name="font_size", value=500, min_val=1, max_val=400
         )
         assert error.code == "INVALID_PARAM_VALUE"
         assert "font_size" in error.message
@@ -1376,17 +1377,14 @@ class TestNewDocsErrorBuilderMethods:
             value=2000,
             min_val=50,
             max_val=1000,
-            suggestion="Use values like 100 (single), 150 (1.5x), or 200 (double)."
+            suggestion="Use values like 100 (single), 150 (1.5x), or 200 (double).",
         )
         assert "100 (single)" in error.suggestion
 
     def test_out_of_range_negative_value(self):
         """Test out_of_range with negative value."""
         error = DocsErrorBuilder.out_of_range(
-            param_name="indent_level",
-            value=-1,
-            min_val=0,
-            max_val=8
+            param_name="indent_level", value=-1, min_val=0, max_val=8
         )
         assert error.code == "INVALID_PARAM_VALUE"
         assert "-1" in error.message
@@ -1448,8 +1446,7 @@ class TestNewValidationManagerMethods:
         vm = ValidationManager()
         params = {"start_index": 10, "text": "hello"}
         is_valid, error = vm.validate_mutually_exclusive(
-            params,
-            [["start_index", "location", "search"]]
+            params, [["start_index", "location", "search"]]
         )
         assert is_valid is True
         assert error is None
@@ -1459,8 +1456,7 @@ class TestNewValidationManagerMethods:
         vm = ValidationManager()
         params = {"start_index": 10, "location": "end", "text": "hello"}
         is_valid, error = vm.validate_mutually_exclusive(
-            params,
-            [["start_index", "location", "search"]]
+            params, [["start_index", "location", "search"]]
         )
         assert is_valid is False
         parsed = json.loads(error)
@@ -1473,8 +1469,7 @@ class TestNewValidationManagerMethods:
         vm = ValidationManager()
         params = {"start_index": 10, "location": None, "search": None}
         is_valid, error = vm.validate_mutually_exclusive(
-            params,
-            [["start_index", "location", "search"]]
+            params, [["start_index", "location", "search"]]
         )
         assert is_valid is True
         assert error is None
@@ -1483,13 +1478,18 @@ class TestNewValidationManagerMethods:
         """Test validate_mutually_exclusive with multiple groups."""
         vm = ValidationManager()
         # First group is fine, but second group has a conflict
-        params = {"start_index": 10, "search": None, "bold": True, "heading_style": "HEADING_1"}
+        params = {
+            "start_index": 10,
+            "search": None,
+            "bold": True,
+            "heading_style": "HEADING_1",
+        }
         is_valid, error = vm.validate_mutually_exclusive(
             params,
             [
                 ["start_index", "location", "search"],
-                ["bold", "heading_style"]  # Both provided = conflict
-            ]
+                ["bold", "heading_style"],  # Both provided = conflict
+            ],
         )
         assert is_valid is False
         parsed = json.loads(error)
@@ -1501,7 +1501,7 @@ class TestNewValidationManagerMethods:
         error = vm.create_not_found_error(
             entity_type="bookmark",
             search_criteria="missing_bookmark",
-            available_options=["bookmark1", "bookmark2"]
+            available_options=["bookmark1", "bookmark2"],
         )
         parsed = json.loads(error)
         assert parsed["error"] is True
@@ -1514,7 +1514,7 @@ class TestNewValidationManagerMethods:
         error = vm.create_invalid_state_error(
             reason="Cannot save - document is locked",
             current_state="locked",
-            required_state="unlocked"
+            required_state="unlocked",
         )
         parsed = json.loads(error)
         assert parsed["error"] is True
@@ -1524,10 +1524,7 @@ class TestNewValidationManagerMethods:
         """Test create_out_of_range_error produces valid JSON."""
         vm = ValidationManager()
         error = vm.create_out_of_range_error(
-            param_name="table_rows",
-            value=5000,
-            min_val=1,
-            max_val=1000
+            param_name="table_rows", value=5000, min_val=1, max_val=1000
         )
         parsed = json.loads(error)
         assert parsed["error"] is True

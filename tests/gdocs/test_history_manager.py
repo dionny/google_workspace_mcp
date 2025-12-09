@@ -1,6 +1,7 @@
 """
 Tests for the HistoryManager and related functionality.
 """
+
 import pytest
 from datetime import datetime, timezone
 
