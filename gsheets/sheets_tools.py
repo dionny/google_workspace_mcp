@@ -1703,6 +1703,140 @@ async def add_conditional_formatting(
 
 
 @server.tool()
+@handle_http_errors("delete_sheet", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def delete_sheet(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Deletes a sheet from a spreadsheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_name (Optional[str]): Name of the sheet to delete. Either sheet_name or sheet_id is required.
+        sheet_id (Optional[int]): Numeric ID of the sheet to delete. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful sheet deletion.
+    """
+    logger.info(
+        f"[delete_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet: {sheet_name}, SheetId: {sheet_id}"
+    )
+
+    if sheet_name is None and sheet_id is None:
+        raise ValueError("Either sheet_name or sheet_id must be provided.")
+
+    # Resolve sheet ID and get the sheet name for confirmation message
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Get sheet name for confirmation if we only have ID
+    if sheet_name is None:
+        resolved_sheet_name = await _get_sheet_name_by_id(
+            service, spreadsheet_id, resolved_sheet_id
+        )
+    else:
+        resolved_sheet_name = sheet_name
+
+    # Build the delete request
+    request_body = {"requests": [{"deleteSheet": {"sheetId": resolved_sheet_id}}]}
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully deleted sheet '{resolved_sheet_name}' (ID: {resolved_sheet_id}) "
+        f"from spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully deleted sheet for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("rename_sheet", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def rename_sheet(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    new_name: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Renames a sheet in a spreadsheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        new_name (str): The new name for the sheet. Required.
+        sheet_name (Optional[str]): Current name of the sheet to rename. Either sheet_name or sheet_id is required.
+        sheet_id (Optional[int]): Numeric ID of the sheet to rename. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful sheet rename.
+    """
+    logger.info(
+        f"[rename_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet: {sheet_name}, SheetId: {sheet_id}, NewName: {new_name}"
+    )
+
+    if sheet_name is None and sheet_id is None:
+        raise ValueError("Either sheet_name or sheet_id must be provided.")
+
+    if not new_name or not new_name.strip():
+        raise ValueError("new_name cannot be empty.")
+
+    # Resolve sheet ID and get the old sheet name for confirmation message
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Get old sheet name for confirmation if we only have ID
+    if sheet_name is None:
+        old_sheet_name = await _get_sheet_name_by_id(
+            service, spreadsheet_id, resolved_sheet_id
+        )
+    else:
+        old_sheet_name = sheet_name
+
+    # Build the rename request using updateSheetProperties
+    request_body = {
+        "requests": [
+            {
+                "updateSheetProperties": {
+                    "properties": {"sheetId": resolved_sheet_id, "title": new_name},
+                    "fields": "title",
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully renamed sheet from '{old_sheet_name}' to '{new_name}' "
+        f"(ID: {resolved_sheet_id}) in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully renamed sheet for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
 @handle_http_errors("clear_conditional_formatting", service_type="sheets")
 @require_google_service("sheets", "sheets_write")
 async def clear_conditional_formatting(
