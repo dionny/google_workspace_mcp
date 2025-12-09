@@ -481,6 +481,101 @@ async def append_values(
     return text_output
 
 
+async def _get_sheet_id_by_name(service, spreadsheet_id: str, sheet_name: str) -> int:
+    """
+    Helper function to get a sheet's ID by its name.
+
+    Args:
+        service: The Google Sheets API service.
+        spreadsheet_id: The ID of the spreadsheet.
+        sheet_name: The name of the sheet to find.
+
+    Returns:
+        int: The sheet ID.
+
+    Raises:
+        Exception: If the sheet is not found.
+    """
+    spreadsheet = await asyncio.to_thread(
+        service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+    )
+
+    for sheet in spreadsheet.get("sheets", []):
+        sheet_props = sheet.get("properties", {})
+        if sheet_props.get("title") == sheet_name:
+            return sheet_props.get("sheetId")
+
+    raise Exception(f"Sheet '{sheet_name}' not found in spreadsheet {spreadsheet_id}")
+
+
+@server.tool()
+@handle_http_errors("rename_sheet", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def rename_sheet(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    new_name: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Renames a sheet (tab) in a Google Spreadsheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        new_name (str): The new name for the sheet. Required.
+        sheet_name (Optional[str]): The current name of the sheet to rename.
+            Either sheet_name or sheet_id must be provided.
+        sheet_id (Optional[int]): The ID of the sheet to rename.
+            Either sheet_name or sheet_id must be provided.
+
+    Returns:
+        str: Confirmation message of the successful rename operation.
+    """
+    logger.info(
+        f"[rename_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"Sheet name: {sheet_name}, Sheet ID: {sheet_id}, New name: {new_name}"
+    )
+
+    if not sheet_name and sheet_id is None:
+        raise Exception("Either 'sheet_name' or 'sheet_id' must be provided.")
+
+    # If sheet_name is provided, look up the sheet_id
+    if sheet_id is None:
+        sheet_id = await _get_sheet_id_by_name(service, spreadsheet_id, sheet_name)
+
+    request_body = {
+        "requests": [
+            {
+                "updateSheetProperties": {
+                    "properties": {
+                        "sheetId": sheet_id,
+                        "title": new_name,
+                    },
+                    "fields": "title",
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    old_identifier = f"'{sheet_name}'" if sheet_name else f"ID {sheet_id}"
+    text_output = (
+        f"Successfully renamed sheet {old_identifier} to '{new_name}' "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully renamed sheet to '{new_name}' for {user_google_email}.")
+    return text_output
+
+
 # Create comment management tools for sheets
 _comment_tools = create_comment_tools("spreadsheet", "spreadsheet_id")
 
