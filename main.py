@@ -118,6 +118,11 @@ def main():
         default="stdio",
         help="Transport mode: stdio (default) or streamable-http",
     )
+    parser.add_argument(
+        "--optimizer",
+        action="store_true",
+        help="Enable optimizer mode - expose only 3 meta-tools for semantic tool discovery (requires numpy and sentence-transformers)",
+    )
     args = parser.parse_args()
 
     # Set port and base URI once for reuse throughout the function
@@ -252,8 +257,100 @@ def main():
     # Filter tools based on tier configuration (if tier-based loading is enabled)
     filter_server_tools(server)
 
+    # Initialize optimizer mode if requested
+    if args.optimizer:
+        safe_print("")
+        safe_print("🔍 Initializing Optimizer Mode...")
+
+        # Check if optimizer dependencies are available
+        from core.optimizer import is_optimizer_available, initialize_optimizer
+
+        if not is_optimizer_available():
+            safe_print(
+                "❌ Optimizer mode requires numpy and sentence-transformers"
+            )
+            safe_print(
+                "   Install with: uv pip install numpy sentence-transformers"
+            )
+            sys.exit(1)
+
+        # Collect all registered tools from the server
+        tool_definitions = {}
+        tool_functions = {}
+        
+        # Map service modules to service names
+        service_mapping = {
+            "gmail": "gmail",
+            "drive": "drive", 
+            "calendar": "calendar",
+            "docs": "docs",
+            "sheets": "sheets",
+            "chat": "chat",
+            "forms": "forms",
+            "slides": "slides",
+            "tasks": "tasks",
+            "search": "search"
+        }
+        
+        if hasattr(server, "_tool_manager") and hasattr(
+            server._tool_manager, "_tools"
+        ):
+            for tool_name, tool_impl in server._tool_manager._tools.items():
+                # Skip the auth tool in optimizer mode
+                if tool_name == "start_google_auth":
+                    continue
+
+                # Try to determine service from tool name
+                service = None
+                for svc_key, svc_name in service_mapping.items():
+                    if svc_key in tool_name.lower() or (
+                        hasattr(tool_impl.fn, "__module__") 
+                        and svc_key in tool_impl.fn.__module__
+                    ):
+                        service = svc_name
+                        break
+                
+                # Extract tool metadata
+                tool_def = {
+                    "name": tool_name,
+                    "description": getattr(tool_impl.fn, "__doc__", "") or "",
+                    "inputSchema": getattr(tool_impl, "parameters_json_schema", {}),
+                    "service": service or "unknown",
+                }
+                tool_definitions[tool_name] = tool_def
+                
+                # Store the actual tool function for execution
+                tool_functions[tool_name] = tool_impl.fn
+
+        safe_print(f"   📋 Found {len(tool_definitions)} tools to optimize")
+
+        # Initialize the optimizer with both definitions and functions
+        try:
+            initialize_optimizer(tool_definitions, tool_functions)
+            safe_print("   ✅ Optimizer initialized with semantic embeddings")
+        except Exception as e:
+            safe_print(f"   ❌ Failed to initialize optimizer: {e}")
+            logger.error(f"Optimizer initialization failed: {e}", exc_info=True)
+            sys.exit(1)
+
+        # Now remove all the original tools and register only optimizer tools
+        if hasattr(server, "_tool_manager") and hasattr(
+            server._tool_manager, "_tools"
+        ):
+            server._tool_manager._tools.clear()
+            safe_print("   🗑️  Cleared original tool registrations")
+
+        # Register optimizer tools
+        from core.server import register_optimizer_tools
+
+        register_optimizer_tools()
+        safe_print("   ✅ Registered 4 optimizer meta-tools")
+        safe_print("")
+
     safe_print("📊 Configuration Summary:")
     safe_print(f"   🔧 Services Loaded: {len(tools_to_import)}/{len(tool_imports)}")
+    if args.optimizer:
+        safe_print("   🔍 Optimizer Mode: ENABLED (4 meta-tools active)")
     if args.tool_tier is not None:
         if args.tools is not None:
             safe_print(
