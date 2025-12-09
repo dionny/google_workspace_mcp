@@ -11,7 +11,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from gsheets.sheets_tools import _parse_range_to_grid_range
+from gsheets.sheets_tools import _parse_range_to_grid
 
 
 class TestMergeCellsRequestBodyStructure:
@@ -20,7 +20,8 @@ class TestMergeCellsRequestBodyStructure:
     def test_merge_all_request_structure(self):
         """Test the structure of a MERGE_ALL request."""
         sheet_id = 0
-        grid_range = _parse_range_to_grid_range("A1:C1", sheet_id)
+        grid_range = _parse_range_to_grid("A1:C1")
+        grid_range["sheetId"] = sheet_id
 
         request_body = {
             "requests": [
@@ -40,7 +41,8 @@ class TestMergeCellsRequestBodyStructure:
     def test_merge_columns_request_structure(self):
         """Test the structure of a MERGE_COLUMNS request."""
         sheet_id = 123
-        grid_range = _parse_range_to_grid_range("A1:D2", sheet_id)
+        grid_range = _parse_range_to_grid("A1:D2")
+        grid_range["sheetId"] = sheet_id
 
         request_body = {
             "requests": [
@@ -60,7 +62,8 @@ class TestMergeCellsRequestBodyStructure:
     def test_merge_rows_request_structure(self):
         """Test the structure of a MERGE_ROWS request."""
         sheet_id = 456
-        grid_range = _parse_range_to_grid_range("B2:B5", sheet_id)
+        grid_range = _parse_range_to_grid("B2:B5")
+        grid_range["sheetId"] = sheet_id
 
         request_body = {
             "requests": [
@@ -82,7 +85,8 @@ class TestUnmergeCellsRequestBodyStructure:
     def test_unmerge_cells_request_structure(self):
         """Test the structure of an unmerge request."""
         sheet_id = 0
-        grid_range = _parse_range_to_grid_range("A1:C1", sheet_id)
+        grid_range = _parse_range_to_grid("A1:C1")
+        grid_range["sheetId"] = sheet_id
 
         request_body = {"requests": [{"unmergeCells": {"range": grid_range}}]}
 
@@ -99,7 +103,8 @@ class TestUnmergeCellsRequestBodyStructure:
     def test_unmerge_large_range_structure(self):
         """Test unmerge request for a large range."""
         sheet_id = 0
-        grid_range = _parse_range_to_grid_range("A1:Z100", sheet_id)
+        grid_range = _parse_range_to_grid("A1:Z100")
+        grid_range["sheetId"] = sheet_id
 
         request_body = {"requests": [{"unmergeCells": {"range": grid_range}}]}
 
@@ -186,7 +191,7 @@ class TestMergeCellsRanges:
 
     def test_single_row_header_merge(self):
         """Test merging a typical header row range."""
-        grid_range = _parse_range_to_grid_range("A1:D1", sheet_id=0)
+        grid_range = _parse_range_to_grid("A1:D1")
         assert grid_range["startRowIndex"] == 0
         assert grid_range["endRowIndex"] == 1
         assert grid_range["startColumnIndex"] == 0
@@ -194,7 +199,7 @@ class TestMergeCellsRanges:
 
     def test_multi_row_merge(self):
         """Test merging multiple rows."""
-        grid_range = _parse_range_to_grid_range("A1:A5", sheet_id=0)
+        grid_range = _parse_range_to_grid("A1:A5")
         assert grid_range["startRowIndex"] == 0
         assert grid_range["endRowIndex"] == 5
         assert grid_range["startColumnIndex"] == 0
@@ -202,7 +207,7 @@ class TestMergeCellsRanges:
 
     def test_rectangular_merge(self):
         """Test merging a rectangular area."""
-        grid_range = _parse_range_to_grid_range("B2:D5", sheet_id=0)
+        grid_range = _parse_range_to_grid("B2:D5")
         assert grid_range["startRowIndex"] == 1
         assert grid_range["endRowIndex"] == 5
         assert grid_range["startColumnIndex"] == 1
@@ -210,8 +215,7 @@ class TestMergeCellsRanges:
 
     def test_range_with_sheet_prefix_stripped(self):
         """Test that sheet prefix is properly stripped."""
-        grid_range = _parse_range_to_grid_range("Sheet1!A1:C3", sheet_id=999)
-        assert grid_range["sheetId"] == 999
+        grid_range = _parse_range_to_grid("Sheet1!A1:C3")
         assert grid_range["startRowIndex"] == 0
         assert grid_range["endRowIndex"] == 3
         assert grid_range["startColumnIndex"] == 0

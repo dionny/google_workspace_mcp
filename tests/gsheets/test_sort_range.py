@@ -13,7 +13,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from gsheets.sheets_tools import _parse_range_to_grid_range
+from gsheets.sheets_tools import _parse_range_to_grid
 
 
 class TestSortSpecParsing:
@@ -194,16 +194,14 @@ class TestSortRangeRequestBodyStructure:
 
 
 class TestSortRangeWithGridRange:
-    """Tests for sort_range using _parse_range_to_grid_range."""
+    """Tests for sort_range using _parse_range_to_grid."""
 
     def test_sort_range_uses_grid_range(self):
         """Test that sort_range uses the grid range from range parsing."""
         range_name = "A1:D100"
-        sheet_id = 0
 
-        grid_range = _parse_range_to_grid_range(range_name, sheet_id)
+        grid_range = _parse_range_to_grid(range_name)
 
-        assert grid_range["sheetId"] == 0
         assert grid_range["startColumnIndex"] == 0
         assert grid_range["endColumnIndex"] == 4  # D is column 3, +1 for exclusive
         assert grid_range["startRowIndex"] == 0
@@ -212,11 +210,9 @@ class TestSortRangeWithGridRange:
     def test_sort_range_with_partial_sheet_range(self):
         """Test sort range with a subset of data."""
         range_name = "B2:E50"
-        sheet_id = 456
 
-        grid_range = _parse_range_to_grid_range(range_name, sheet_id)
+        grid_range = _parse_range_to_grid(range_name)
 
-        assert grid_range["sheetId"] == 456
         assert grid_range["startColumnIndex"] == 1  # B
         assert grid_range["endColumnIndex"] == 5  # E + 1
         assert grid_range["startRowIndex"] == 1  # Row 2 is index 1

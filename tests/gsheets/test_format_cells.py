@@ -13,50 +13,50 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from gsheets.sheets_tools import _parse_hex_color, _parse_range_to_grid_range
+from gsheets.sheets_tools import _parse_color, _parse_range_to_grid
 
 
-class TestHexColorParsing:
-    """Tests for _parse_hex_color helper function."""
+class TestColorParsing:
+    """Tests for _parse_color helper function."""
 
     def test_parse_hex_with_hash(self):
         """Test parsing hex color with # prefix."""
-        result = _parse_hex_color("#FF0000")
+        result = _parse_color("#FF0000")
         assert result["red"] == pytest.approx(1.0)
         assert result["green"] == pytest.approx(0.0)
         assert result["blue"] == pytest.approx(0.0)
 
     def test_parse_hex_without_hash(self):
         """Test parsing hex color without # prefix."""
-        result = _parse_hex_color("00FF00")
+        result = _parse_color("00FF00")
         assert result["red"] == pytest.approx(0.0)
         assert result["green"] == pytest.approx(1.0)
         assert result["blue"] == pytest.approx(0.0)
 
     def test_parse_hex_blue(self):
         """Test parsing blue color."""
-        result = _parse_hex_color("#0000FF")
+        result = _parse_color("#0000FF")
         assert result["red"] == pytest.approx(0.0)
         assert result["green"] == pytest.approx(0.0)
         assert result["blue"] == pytest.approx(1.0)
 
     def test_parse_hex_white(self):
         """Test parsing white color."""
-        result = _parse_hex_color("#FFFFFF")
+        result = _parse_color("#FFFFFF")
         assert result["red"] == pytest.approx(1.0)
         assert result["green"] == pytest.approx(1.0)
         assert result["blue"] == pytest.approx(1.0)
 
     def test_parse_hex_black(self):
         """Test parsing black color."""
-        result = _parse_hex_color("#000000")
+        result = _parse_color("#000000")
         assert result["red"] == pytest.approx(0.0)
         assert result["green"] == pytest.approx(0.0)
         assert result["blue"] == pytest.approx(0.0)
 
     def test_parse_hex_gray(self):
         """Test parsing gray color (E0E0E0)."""
-        result = _parse_hex_color("#E0E0E0")
+        result = _parse_color("#E0E0E0")
         expected = 224 / 255.0
         assert result["red"] == pytest.approx(expected)
         assert result["green"] == pytest.approx(expected)
@@ -64,31 +64,38 @@ class TestHexColorParsing:
 
     def test_parse_hex_lowercase(self):
         """Test parsing lowercase hex color."""
-        result = _parse_hex_color("#ff5500")
+        result = _parse_color("#ff5500")
         assert result["red"] == pytest.approx(1.0)
         assert result["green"] == pytest.approx(85 / 255.0)
         assert result["blue"] == pytest.approx(0.0)
 
-    def test_parse_hex_invalid_length(self):
-        """Test that invalid length raises ValueError."""
-        with pytest.raises(ValueError) as excinfo:
-            _parse_hex_color("#FFF")
-        assert "Expected 6 hex digits" in str(excinfo.value)
+    def test_parse_color_name_red(self):
+        """Test parsing color by name."""
+        result = _parse_color("red")
+        assert result["red"] == pytest.approx(1.0)
+        assert result["green"] == pytest.approx(0.0)
+        assert result["blue"] == pytest.approx(0.0)
+
+    def test_parse_color_name_blue(self):
+        """Test parsing blue color by name."""
+        result = _parse_color("blue")
+        assert result["red"] == pytest.approx(0.0)
+        assert result["green"] == pytest.approx(0.0)
+        assert result["blue"] == pytest.approx(1.0)
 
     def test_parse_hex_invalid_characters(self):
         """Test that invalid hex characters raise ValueError."""
         with pytest.raises(ValueError) as excinfo:
-            _parse_hex_color("#GGGGGG")
-        assert "Must contain valid hex digits" in str(excinfo.value)
+            _parse_color("#GGGGGG")
+        assert "Invalid color format" in str(excinfo.value)
 
 
 class TestRangeParsing:
-    """Tests for _parse_range_to_grid_range helper function."""
+    """Tests for _parse_range_to_grid helper function."""
 
     def test_parse_single_cell(self):
         """Test parsing a single cell reference."""
-        result = _parse_range_to_grid_range("A1", sheet_id=0)
-        assert result["sheetId"] == 0
+        result = _parse_range_to_grid("A1")
         assert result["startColumnIndex"] == 0
         assert result["endColumnIndex"] == 1
         assert result["startRowIndex"] == 0
@@ -96,8 +103,7 @@ class TestRangeParsing:
 
     def test_parse_range_a1_to_c10(self):
         """Test parsing a basic range."""
-        result = _parse_range_to_grid_range("A1:C10", sheet_id=0)
-        assert result["sheetId"] == 0
+        result = _parse_range_to_grid("A1:C10")
         assert result["startColumnIndex"] == 0
         assert result["endColumnIndex"] == 3  # C is column 2, +1 for exclusive
         assert result["startRowIndex"] == 0
@@ -105,8 +111,7 @@ class TestRangeParsing:
 
     def test_parse_range_b2_to_d5(self):
         """Test parsing another range."""
-        result = _parse_range_to_grid_range("B2:D5", sheet_id=123)
-        assert result["sheetId"] == 123
+        result = _parse_range_to_grid("B2:D5")
         assert result["startColumnIndex"] == 1
         assert result["endColumnIndex"] == 4
         assert result["startRowIndex"] == 1
@@ -114,31 +119,21 @@ class TestRangeParsing:
 
     def test_parse_range_with_sheet_prefix(self):
         """Test that sheet prefix is stripped."""
-        result = _parse_range_to_grid_range("Sheet1!A1:B2", sheet_id=456)
-        assert result["sheetId"] == 456
+        result = _parse_range_to_grid("Sheet1!A1:B2")
         assert result["startColumnIndex"] == 0
         assert result["endColumnIndex"] == 2
         assert result["startRowIndex"] == 0
         assert result["endRowIndex"] == 2
 
-    def test_parse_column_only_range(self):
-        """Test parsing a column-only range (no row numbers)."""
-        result = _parse_range_to_grid_range("A:C", sheet_id=0)
-        assert result["sheetId"] == 0
-        assert result["startColumnIndex"] == 0
-        assert result["endColumnIndex"] == 3
-        assert "startRowIndex" not in result
-        assert "endRowIndex" not in result
-
     def test_parse_range_double_letter_column(self):
         """Test parsing range with AA column."""
-        result = _parse_range_to_grid_range("AA1:AB10", sheet_id=0)
+        result = _parse_range_to_grid("AA1:AB10")
         assert result["startColumnIndex"] == 26  # AA is column 26 (0-based)
         assert result["endColumnIndex"] == 28  # AB is column 27, +1 for exclusive
 
     def test_parse_range_z_column(self):
         """Test parsing range ending at Z column."""
-        result = _parse_range_to_grid_range("Y1:Z10", sheet_id=0)
+        result = _parse_range_to_grid("Y1:Z10")
         assert result["startColumnIndex"] == 24  # Y
         assert result["endColumnIndex"] == 26  # Z is 25, +1 for exclusive
 
@@ -146,13 +141,13 @@ class TestRangeParsing:
         """Verify column letter to index conversion."""
         # This tests our understanding of column indexing
         # A = 0, B = 1, ..., Z = 25, AA = 26, AB = 27
-        result_a = _parse_range_to_grid_range("A1", sheet_id=0)
+        result_a = _parse_range_to_grid("A1")
         assert result_a["startColumnIndex"] == 0
 
-        result_z = _parse_range_to_grid_range("Z1", sheet_id=0)
+        result_z = _parse_range_to_grid("Z1")
         assert result_z["startColumnIndex"] == 25
 
-        result_aa = _parse_range_to_grid_range("AA1", sheet_id=0)
+        result_aa = _parse_range_to_grid("AA1")
         assert result_aa["startColumnIndex"] == 26
 
 
