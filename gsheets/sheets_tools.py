@@ -1108,6 +1108,108 @@ async def sort_range(
 
 
 @server.tool()
+@handle_http_errors("delete_sheet", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def delete_sheet(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Deletes a sheet (tab) from a Google Spreadsheet.
+
+    This tool permanently removes a sheet and all its data from the spreadsheet.
+    At least one sheet must remain in the spreadsheet - attempting to delete the
+    only remaining sheet will result in an error.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_name (Optional[str]): The name of the sheet to delete. If not provided
+            and sheet_id is not set, an error will be raised (to prevent accidental
+            deletion of the wrong sheet).
+        sheet_id (Optional[int]): The ID of the sheet to delete. Alternative to
+            sheet_name. Takes precedence over sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful deletion.
+
+    Example:
+        Delete a sheet by name:
+        >>> delete_sheet(spreadsheet_id="...", sheet_name="Old Data")
+
+        Delete a sheet by ID:
+        >>> delete_sheet(spreadsheet_id="...", sheet_id=123456)
+
+    Raises:
+        Exception: If neither sheet_name nor sheet_id is provided.
+        Exception: If the sheet does not exist.
+        Exception: If attempting to delete the only sheet in the spreadsheet.
+    """
+    logger.info(
+        f"[delete_sheet] Invoked. Email: '{user_google_email}', "
+        f"Spreadsheet: {spreadsheet_id}, sheet_name: {sheet_name}, sheet_id: {sheet_id}"
+    )
+
+    # Require explicit identification to prevent accidental deletion
+    if sheet_name is None and sheet_id is None:
+        raise Exception(
+            "Either 'sheet_name' or 'sheet_id' must be provided to identify the sheet to delete."
+        )
+
+    # Get spreadsheet info to validate and get sheet details
+    spreadsheet = await asyncio.to_thread(
+        service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+    )
+    sheets = spreadsheet.get("sheets", [])
+
+    # Check if this is the only sheet
+    if len(sheets) <= 1:
+        raise Exception(
+            f"Cannot delete the only sheet in spreadsheet {spreadsheet_id}. "
+            "A spreadsheet must have at least one sheet."
+        )
+
+    # Resolve the sheet to delete and get its name for the confirmation message
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Find the sheet title for the confirmation message
+    sheet_title = None
+    for sheet in sheets:
+        props = sheet.get("properties", {})
+        if props.get("sheetId") == resolved_sheet_id:
+            sheet_title = props.get("title", "Unknown")
+            break
+
+    if sheet_title is None:
+        identifier = sheet_name if sheet_name else f"ID {sheet_id}"
+        raise Exception(
+            f"Sheet '{identifier}' not found in spreadsheet {spreadsheet_id}."
+        )
+
+    # Delete the sheet
+    request_body = {"requests": [{"deleteSheet": {"sheetId": resolved_sheet_id}}]}
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully deleted sheet '{sheet_title}' (ID: {resolved_sheet_id}) "
+        f"from spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully deleted sheet '{sheet_title}' for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
 @handle_http_errors("copy_sheet", service_type="sheets")
 @require_google_service("sheets", "sheets_write")
 async def copy_sheet(
