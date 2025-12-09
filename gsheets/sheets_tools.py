@@ -576,6 +576,67 @@ async def rename_sheet(
     return text_output
 
 
+@server.tool()
+@handle_http_errors("delete_sheet", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def delete_sheet(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Deletes a sheet (tab) from a Google Spreadsheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_name (Optional[str]): The name of the sheet to delete.
+            Either sheet_name or sheet_id must be provided.
+        sheet_id (Optional[int]): The ID of the sheet to delete.
+            Either sheet_name or sheet_id must be provided.
+
+    Returns:
+        str: Confirmation message of the successful deletion.
+
+    Note:
+        Cannot delete the last sheet in a spreadsheet - Google Sheets requires
+        at least one sheet to exist.
+    """
+    logger.info(
+        f"[delete_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"Sheet name: {sheet_name}, Sheet ID: {sheet_id}"
+    )
+
+    if not sheet_name and sheet_id is None:
+        raise Exception("Either 'sheet_name' or 'sheet_id' must be provided.")
+
+    # If sheet_name is provided, look up the sheet_id
+    resolved_sheet_id = sheet_id
+    if resolved_sheet_id is None:
+        resolved_sheet_id = await _get_sheet_id_by_name(
+            service, spreadsheet_id, sheet_name
+        )
+
+    request_body = {"requests": [{"deleteSheet": {"sheetId": resolved_sheet_id}}]}
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    identifier = f"'{sheet_name}'" if sheet_name else f"ID {sheet_id}"
+    text_output = (
+        f"Successfully deleted sheet {identifier} "
+        f"from spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully deleted sheet {identifier} for {user_google_email}.")
+    return text_output
+
+
 # Create comment management tools for sheets
 _comment_tools = create_comment_tools("spreadsheet", "spreadsheet_id")
 
