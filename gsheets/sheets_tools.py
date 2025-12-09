@@ -179,6 +179,76 @@ async def read_sheet_values(
 
 
 @server.tool()
+@handle_http_errors("read_sheet_formulas", is_read_only=True, service_type="sheets")
+@require_google_service("sheets", "sheets_read")
+async def read_sheet_formulas(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    range_name: str = "A1:Z1000",
+) -> str:
+    """
+    Reads formulas from a specific range in a Google Sheet.
+
+    Unlike read_sheet_values which returns computed values, this tool returns
+    the actual formula text for cells that contain formulas. Cells without
+    formulas will show their plain values.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        range_name (str): The range to read (e.g., "Sheet1!A1:D10", "A1:D10"). Defaults to "A1:Z1000".
+
+    Returns:
+        str: The formatted formulas/values from the specified range.
+             Cells with formulas show the formula text (e.g., "=SUM(A1:A10)").
+             Cells without formulas show their plain values.
+
+    Example:
+        A cell containing =SUM(A1:A10) that displays "100" in the UI:
+        - read_sheet_values returns: "100"
+        - read_sheet_formulas returns: "=SUM(A1:A10)"
+    """
+    logger.info(
+        f"[read_sheet_formulas] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+    )
+
+    result = await asyncio.to_thread(
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=spreadsheet_id,
+            range=range_name,
+            valueRenderOption="FORMULA",
+        )
+        .execute
+    )
+
+    values = result.get("values", [])
+    if not values:
+        return f"No data found in range '{range_name}' for {user_google_email}."
+
+    # Format the output as a readable table
+    formatted_rows = []
+    for i, row in enumerate(values, 1):
+        # Pad row with empty strings to show structure
+        padded_row = row + [""] * max(0, len(values[0]) - len(row)) if values else row
+        formatted_rows.append(f"Row {i:2d}: {padded_row}")
+
+    text_output = (
+        f"Successfully read formulas from {len(values)} rows in range '{range_name}' "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}:\n"
+        + "\n".join(formatted_rows[:50])  # Limit to first 50 rows for readability
+        + (f"\n... and {len(values) - 50} more rows" if len(values) > 50 else "")
+    )
+
+    logger.info(
+        f"Successfully read formulas from {len(values)} rows for {user_google_email}."
+    )
+    return text_output
+
+
+@server.tool()
 @handle_http_errors("modify_sheet_values", service_type="sheets")
 @require_google_service("sheets", "sheets_write")
 async def modify_sheet_values(
