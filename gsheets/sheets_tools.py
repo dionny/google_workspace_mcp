@@ -1982,6 +1982,203 @@ async def set_borders(
 
 
 @server.tool()
+@handle_http_errors("sort_range", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def sort_range(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    range_name: str,
+    sort_column: str,
+    ascending: bool = True,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Sorts data in a range by a specified column.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        range_name (str): The range to sort (e.g., "A1:D10"). Required.
+        sort_column (str): The column letter to sort by (e.g., "A", "B", "AA"). Required.
+        ascending (bool): Sort in ascending order if True, descending if False. Defaults to True.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful sort operation.
+    """
+    logger.info(
+        f"[sort_range] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}, Column: {sort_column}"
+    )
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse range to get grid coordinates
+    grid_range = _parse_range_to_grid(range_name)
+    grid_range["sheetId"] = resolved_sheet_id
+
+    # Parse the sort column letter to get its index
+    sort_col_ref = f"{sort_column}1"
+    _, sort_col_idx = _parse_cell_reference(sort_col_ref)
+
+    # Validate that sort column is within the range
+    if sort_col_idx < grid_range["startColumnIndex"]:
+        raise ValueError(
+            f"Sort column '{sort_column}' (index {sort_col_idx}) is before the range start column."
+        )
+    if sort_col_idx >= grid_range["endColumnIndex"]:
+        raise ValueError(
+            f"Sort column '{sort_column}' (index {sort_col_idx}) is after the range end column."
+        )
+
+    # Build the sort request
+    request_body = {
+        "requests": [
+            {
+                "sortRange": {
+                    "range": grid_range,
+                    "sortSpecs": [
+                        {
+                            "dimensionIndex": sort_col_idx,
+                            "sortOrder": "ASCENDING" if ascending else "DESCENDING",
+                        }
+                    ],
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    sort_order = "ascending" if ascending else "descending"
+    text_output = (
+        f"Successfully sorted range '{range_name}' by column '{sort_column}' ({sort_order}) "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully sorted range for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("find_and_replace", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def find_and_replace(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    find_text: str,
+    replace_text: str,
+    range_name: Optional[str] = None,
+    match_case: bool = False,
+    match_entire_cell: bool = False,
+    use_regex: bool = False,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+    all_sheets: bool = False,
+) -> str:
+    """
+    Finds and replaces text in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        find_text (str): The text to find. Required.
+        replace_text (str): The text to replace with. Required.
+        range_name (Optional[str]): The range to search in (e.g., "A1:D10"). If not provided, searches entire sheet.
+        match_case (bool): If True, performs case-sensitive matching. Defaults to False.
+        match_entire_cell (bool): If True, only matches cells that contain exactly the find_text. Defaults to False.
+        use_regex (bool): If True, treats find_text as a regular expression. Defaults to False.
+        sheet_name (Optional[str]): Name of the sheet to search. If not provided and all_sheets=False, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+        all_sheets (bool): If True, searches all sheets in the spreadsheet. Defaults to False.
+
+    Returns:
+        str: Summary of replacements made including count.
+    """
+    logger.info(
+        f"[find_and_replace] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Find: '{find_text}', Replace: '{replace_text}'"
+    )
+
+    # Build the find/replace request
+    find_replace_request: Dict[str, Any] = {
+        "find": find_text,
+        "replacement": replace_text,
+        "matchCase": match_case,
+        "matchEntireCell": match_entire_cell,
+        "searchByRegex": use_regex,
+    }
+
+    if all_sheets:
+        # Search all sheets
+        find_replace_request["allSheets"] = True
+    elif range_name:
+        # Search within a specific range
+        resolved_sheet_id = await _resolve_sheet_id(
+            service, spreadsheet_id, sheet_name, sheet_id
+        )
+        grid_range = _parse_range_to_grid(range_name)
+        grid_range["sheetId"] = resolved_sheet_id
+        find_replace_request["range"] = grid_range
+    else:
+        # Search entire sheet (single sheet)
+        resolved_sheet_id = await _resolve_sheet_id(
+            service, spreadsheet_id, sheet_name, sheet_id
+        )
+        find_replace_request["sheetId"] = resolved_sheet_id
+
+    request_body = {"requests": [{"findReplace": find_replace_request}]}
+
+    response = await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Get the result
+    replies = response.get("replies", [])
+    if replies and "findReplace" in replies[0]:
+        result = replies[0]["findReplace"]
+        occurrences_changed = result.get("occurrencesChanged", 0)
+        values_changed = result.get("valuesChanged", 0)
+        rows_changed = result.get("rowsChanged", 0)
+        sheets_changed = result.get("sheetsChanged", 0)
+    else:
+        occurrences_changed = 0
+        values_changed = 0
+        rows_changed = 0
+        sheets_changed = 0
+
+    # Build summary
+    search_scope = (
+        "all sheets"
+        if all_sheets
+        else (f"range '{range_name}'" if range_name else "entire sheet")
+    )
+    text_output = (
+        f"Find and replace completed in spreadsheet {spreadsheet_id} for {user_google_email}.\n"
+        f"Search scope: {search_scope}\n"
+        f"Found: '{find_text}' -> Replaced with: '{replace_text}'\n"
+        f"Results: {occurrences_changed} occurrence(s) replaced in {values_changed} cell(s), "
+        f"{rows_changed} row(s), {sheets_changed} sheet(s)."
+    )
+
+    logger.info(
+        f"Successfully completed find/replace: {occurrences_changed} occurrences changed for {user_google_email}."
+    )
+    return text_output
+
+
+@server.tool()
 @handle_http_errors("clear_conditional_formatting", service_type="sheets")
 @require_google_service("sheets", "sheets_write")
 async def clear_conditional_formatting(
