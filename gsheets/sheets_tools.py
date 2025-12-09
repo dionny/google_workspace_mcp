@@ -7,7 +7,8 @@ This module provides MCP tools for interacting with Google Sheets API.
 import logging
 import asyncio
 import json
-from typing import List, Optional, Union
+import re
+from typing import Any, Dict, List, Optional, Union
 
 
 from auth.service_decorator import require_google_service
@@ -26,7 +27,6 @@ async def list_spreadsheets(
     service,
     user_google_email: str,
     max_results: int = 25,
-    name_filter: Optional[str] = None,
 ) -> str:
     """
     Lists spreadsheets from Google Drive that the user has access to.
@@ -34,33 +34,16 @@ async def list_spreadsheets(
     Args:
         user_google_email (str): The user's Google email address. Required.
         max_results (int): Maximum number of spreadsheets to return. Defaults to 25.
-        name_filter (str): Optional filter to search for spreadsheets by name.
-            Supports partial matching (case-insensitive). Examples:
-            - "Budget" matches "Q4 Budget 2024", "budget tracker", etc.
-            - "2024" matches any spreadsheet with "2024" in the name.
 
     Returns:
         str: A formatted list of spreadsheet files (name, ID, modified time).
     """
-    logger.info(
-        f"[list_spreadsheets] Invoked. Email: '{user_google_email}', name_filter: '{name_filter}'"
-    )
-
-    # Build query - always filter for spreadsheets
-    query_parts = ["mimeType='application/vnd.google-apps.spreadsheet'"]
-
-    # Add name filter if provided
-    if name_filter:
-        # Escape single quotes in the filter value for the query
-        escaped_filter = name_filter.replace("'", "\\'")
-        query_parts.append(f"name contains '{escaped_filter}'")
-
-    query = " and ".join(query_parts)
+    logger.info(f"[list_spreadsheets] Invoked. Email: '{user_google_email}'")
 
     files_response = await asyncio.to_thread(
         service.files()
         .list(
-            q=query,
+            q="mimeType='application/vnd.google-apps.spreadsheet'",
             pageSize=max_results,
             fields="files(id,name,modifiedTime,webViewLink)",
             orderBy="modifiedTime desc",
@@ -72,22 +55,20 @@ async def list_spreadsheets(
 
     files = files_response.get("files", [])
     if not files:
-        filter_msg = f" matching '{name_filter}'" if name_filter else ""
-        return f"No spreadsheets{filter_msg} found for {user_google_email}."
+        return f"No spreadsheets found for {user_google_email}."
 
     spreadsheets_list = [
         f'- "{file["name"]}" (ID: {file["id"]}) | Modified: {file.get("modifiedTime", "Unknown")} | Link: {file.get("webViewLink", "No link")}'
         for file in files
     ]
 
-    filter_msg = f" matching '{name_filter}'" if name_filter else ""
     text_output = (
-        f"Successfully listed {len(files)} spreadsheets{filter_msg} for {user_google_email}:\n"
+        f"Successfully listed {len(files)} spreadsheets for {user_google_email}:\n"
         + "\n".join(spreadsheets_list)
     )
 
     logger.info(
-        f"Successfully listed {len(files)} spreadsheets{filter_msg} for {user_google_email}."
+        f"Successfully listed {len(files)} spreadsheets for {user_google_email}."
     )
     return text_output
 
@@ -145,6 +126,88 @@ async def get_spreadsheet_info(
     return text_output
 
 
+async def _get_sheet_name_by_id(service, spreadsheet_id: str, sheet_id: int) -> str:
+    """
+    Get the sheet name from a sheet ID.
+
+    Args:
+        service: Authenticated Sheets service
+        spreadsheet_id: The spreadsheet ID
+        sheet_id: Numeric ID of the sheet
+
+    Returns:
+        The sheet name (string)
+
+    Raises:
+        ValueError if sheet not found
+    """
+    spreadsheet = await asyncio.to_thread(
+        service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+    )
+
+    for sheet in spreadsheet.get("sheets", []):
+        props = sheet.get("properties", {})
+        if props.get("sheetId") == sheet_id:
+            return props.get("title")
+
+    available_sheets = [
+        f"{s.get('properties', {}).get('title')} (ID: {s.get('properties', {}).get('sheetId')})"
+        for s in spreadsheet.get("sheets", [])
+    ]
+    raise ValueError(
+        f"Sheet with ID {sheet_id} not found. Available sheets: {available_sheets}"
+    )
+
+
+async def _build_full_range(
+    service,
+    spreadsheet_id: str,
+    range_name: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Build a full range string with sheet reference if needed.
+
+    If the range_name already contains a sheet reference (contains '!'),
+    it is returned as-is. Otherwise, if sheet_name or sheet_id is provided,
+    the sheet reference is prepended.
+
+    Args:
+        service: Authenticated Sheets service
+        spreadsheet_id: The spreadsheet ID
+        range_name: The cell range (e.g., "A1:D10" or "Sheet1!A1:D10")
+        sheet_name: Optional sheet name
+        sheet_id: Optional sheet ID (takes precedence over sheet_name)
+
+    Returns:
+        Full range string with sheet reference
+    """
+    # If range already has a sheet reference, use it as-is
+    if "!" in range_name:
+        return range_name
+
+    # If sheet_id is provided, look up the sheet name
+    if sheet_id is not None:
+        resolved_sheet_name = await _get_sheet_name_by_id(
+            service, spreadsheet_id, sheet_id
+        )
+    elif sheet_name is not None:
+        resolved_sheet_name = sheet_name
+    else:
+        # No sheet specified, return range as-is (will use first sheet)
+        return range_name
+
+    # Quote sheet name if it contains spaces or special characters
+    if " " in resolved_sheet_name or any(
+        c in resolved_sheet_name for c in ["'", "!", ":", "[", "]"]
+    ):
+        escaped_name = resolved_sheet_name.replace("'", "''")
+        return f"'{escaped_name}'!{range_name}"
+    else:
+        return f"{resolved_sheet_name}!{range_name}"
+
+
 @server.tool()
 @handle_http_errors("read_sheet_values", is_read_only=True, service_type="sheets")
 @require_google_service("sheets", "sheets_read")
@@ -153,6 +216,8 @@ async def read_sheet_values(
     user_google_email: str,
     spreadsheet_id: str,
     range_name: str = "A1:Z1000",
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
 ) -> str:
     """
     Reads values from a specific range in a Google Sheet.
@@ -160,19 +225,31 @@ async def read_sheet_values(
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        range_name (str): The range to read (e.g., "Sheet1!A1:D10", "A1:D10"). Defaults to "A1:Z1000".
+        range_name (str): The range to read (e.g., "A1:D10"). Can include sheet name prefix
+            like "Sheet1!A1:D10" but this is optional if sheet_name or sheet_id is provided.
+            Defaults to "A1:Z1000".
+        sheet_name (Optional[str]): Name of the sheet to read from. If provided, the range_name
+            only needs the cell range (e.g., "A1:D10" instead of "Sheet1!A1:D10").
+            For sheet names with spaces, this avoids needing to escape quotes.
+        sheet_id (Optional[int]): Numeric ID of the sheet to read from. Alternative to sheet_name.
+            Takes precedence over sheet_name if both are provided.
 
     Returns:
         str: The formatted values from the specified range.
     """
     logger.info(
-        f"[read_sheet_values] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+        f"[read_sheet_values] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}, Sheet: {sheet_name}, SheetId: {sheet_id}"
+    )
+
+    # Build the full range with sheet reference if sheet_name or sheet_id is provided
+    full_range = await _build_full_range(
+        service, spreadsheet_id, range_name, sheet_name, sheet_id
     )
 
     result = await asyncio.to_thread(
         service.spreadsheets()
         .values()
-        .get(spreadsheetId=spreadsheet_id, range=range_name)
+        .get(spreadsheetId=spreadsheet_id, range=full_range)
         .execute
     )
 
@@ -208,6 +285,8 @@ async def modify_sheet_values(
     values: Optional[Union[str, List[List[str]]]] = None,
     value_input_option: str = "USER_ENTERED",
     clear_values: bool = False,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
 ) -> str:
     """
     Modifies values in a specific range of a Google Sheet - can write, update, or clear values.
@@ -215,17 +294,23 @@ async def modify_sheet_values(
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        range_name (str): The range to modify (e.g., "Sheet1!A1:D10", "A1:D10"). Required.
+        range_name (str): The range to modify (e.g., "A1:D10"). Can include sheet name prefix
+            like "Sheet1!A1:D10" but this is optional if sheet_name or sheet_id is provided. Required.
         values (Optional[Union[str, List[List[str]]]]): 2D array of values to write/update. Can be a JSON string or Python list. Required unless clear_values=True.
         value_input_option (str): How to interpret input values ("RAW" or "USER_ENTERED"). Defaults to "USER_ENTERED".
         clear_values (bool): If True, clears the range instead of writing values. Defaults to False.
+        sheet_name (Optional[str]): Name of the sheet to modify. If provided, the range_name
+            only needs the cell range (e.g., "A1:D10" instead of "Sheet1!A1:D10").
+            For sheet names with spaces, this avoids needing to escape quotes.
+        sheet_id (Optional[int]): Numeric ID of the sheet to modify. Alternative to sheet_name.
+            Takes precedence over sheet_name if both are provided.
 
     Returns:
         str: Confirmation message of the successful modification operation.
     """
     operation = "clear" if clear_values else "write"
     logger.info(
-        f"[modify_sheet_values] Invoked. Operation: {operation}, Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+        f"[modify_sheet_values] Invoked. Operation: {operation}, Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}, Sheet: {sheet_name}, SheetId: {sheet_id}"
     )
 
     # Parse values if it's a JSON string (MCP passes parameters as JSON strings)
@@ -256,11 +341,16 @@ async def modify_sheet_values(
             "Either 'values' must be provided or 'clear_values' must be True."
         )
 
+    # Build the full range with sheet reference if sheet_name or sheet_id is provided
+    full_range = await _build_full_range(
+        service, spreadsheet_id, range_name, sheet_name, sheet_id
+    )
+
     if clear_values:
         result = await asyncio.to_thread(
             service.spreadsheets()
             .values()
-            .clear(spreadsheetId=spreadsheet_id, range=range_name)
+            .clear(spreadsheetId=spreadsheet_id, range=full_range)
             .execute
         )
 
@@ -277,7 +367,7 @@ async def modify_sheet_values(
             .values()
             .update(
                 spreadsheetId=spreadsheet_id,
-                range=range_name,
+                range=full_range,
                 valueInputOption=value_input_option,
                 body=body,
             )
@@ -306,7 +396,7 @@ async def create_spreadsheet(
     service,
     user_google_email: str,
     title: str,
-    sheet_names: Optional[Union[str, List[str]]] = None,
+    sheet_names: Optional[List[str]] = None,
 ) -> str:
     """
     Creates a new Google Spreadsheet.
@@ -314,7 +404,7 @@ async def create_spreadsheet(
     Args:
         user_google_email (str): The user's Google email address. Required.
         title (str): The title of the new spreadsheet. Required.
-        sheet_names (Optional[Union[str, List[str]]]): List of sheet names to create. Can be a JSON string or Python list. If not provided, creates one sheet with default name.
+        sheet_names (Optional[List[str]]): List of sheet names to create. If not provided, creates one sheet with default name.
 
     Returns:
         str: Information about the newly created spreadsheet including ID and URL.
@@ -322,29 +412,6 @@ async def create_spreadsheet(
     logger.info(
         f"[create_spreadsheet] Invoked. Email: '{user_google_email}', Title: {title}"
     )
-
-    # Parse sheet_names if it's a JSON string (MCP passes parameters as JSON strings)
-    if sheet_names is not None and isinstance(sheet_names, str):
-        try:
-            parsed_sheet_names = json.loads(sheet_names)
-            if not isinstance(parsed_sheet_names, list):
-                raise ValueError(
-                    f"sheet_names must be a list, got {type(parsed_sheet_names).__name__}"
-                )
-            # Validate each sheet name is a string
-            for i, name in enumerate(parsed_sheet_names):
-                if not isinstance(name, str):
-                    raise ValueError(
-                        f"Sheet name at index {i} must be a string, got {type(name).__name__}"
-                    )
-            sheet_names = parsed_sheet_names
-            logger.info(
-                f"[create_spreadsheet] Parsed JSON string to Python list with {len(sheet_names)} sheet names"
-            )
-        except json.JSONDecodeError as e:
-            raise Exception(f"Invalid JSON format for sheet_names: {e}")
-        except ValueError as e:
-            raise Exception(f"Invalid sheet_names structure: {e}")
 
     spreadsheet_body = {"properties": {"title": title}}
 
@@ -413,152 +480,235 @@ async def create_sheet(
     return text_output
 
 
+# Create comment management tools for sheets
+_comment_tools = create_comment_tools("spreadsheet", "spreadsheet_id")
+
+# Extract and register the functions
+read_sheet_comments = _comment_tools["read_comments"]
+create_sheet_comment = _comment_tools["create_comment"]
+reply_to_sheet_comment = _comment_tools["reply_to_comment"]
+resolve_sheet_comment = _comment_tools["resolve_comment"]
+
+
+def _parse_cell_reference(cell_ref: str) -> tuple[int, int]:
+    """
+    Parse a cell reference like 'A1' into (row_index, column_index).
+
+    Args:
+        cell_ref: Cell reference in A1 notation (e.g., 'A1', 'B2', 'AA10')
+
+    Returns:
+        Tuple of (row_index, column_index) - both 0-indexed
+    """
+    import re
+
+    match = re.match(r"^([A-Za-z]+)(\d+)$", cell_ref.strip())
+    if not match:
+        raise ValueError(
+            f"Invalid cell reference: '{cell_ref}'. Expected format like 'A1', 'B2', 'AA10'."
+        )
+
+    col_letters = match.group(1).upper()
+    row_num = int(match.group(2))
+
+    # Convert column letters to index (A=0, B=1, ..., Z=25, AA=26, ...)
+    col_index = 0
+    for char in col_letters:
+        col_index = col_index * 26 + (ord(char) - ord("A") + 1)
+    col_index -= 1  # Make 0-indexed
+
+    row_index = row_num - 1  # Make 0-indexed
+
+    return row_index, col_index
+
+
+def _column_index_to_letter(col_index: int) -> str:
+    """
+    Convert a 0-indexed column number to column letters (0='A', 25='Z', 26='AA').
+    """
+    result = ""
+    col_index += 1  # Make 1-indexed for calculation
+    while col_index > 0:
+        col_index -= 1
+        result = chr(ord("A") + col_index % 26) + result
+        col_index //= 26
+    return result
+
+
+async def _get_sheet_id_by_name(service, spreadsheet_id: str, sheet_name: str) -> int:
+    """
+    Get the sheet ID from the sheet name.
+
+    Args:
+        service: Authenticated Sheets service
+        spreadsheet_id: The spreadsheet ID
+        sheet_name: Name of the sheet
+
+    Returns:
+        The sheet ID (integer)
+
+    Raises:
+        ValueError if sheet not found
+    """
+    spreadsheet = await asyncio.to_thread(
+        service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+    )
+
+    for sheet in spreadsheet.get("sheets", []):
+        props = sheet.get("properties", {})
+        if props.get("title") == sheet_name:
+            return props.get("sheetId")
+
+    available_sheets = [
+        s.get("properties", {}).get("title") for s in spreadsheet.get("sheets", [])
+    ]
+    raise ValueError(
+        f"Sheet '{sheet_name}' not found. Available sheets: {available_sheets}"
+    )
+
+
 @server.tool()
-@handle_http_errors("append_rows", service_type="sheets")
-@require_google_service("sheets", "sheets_write")
-async def append_rows(
+@handle_http_errors("read_cell_notes", is_read_only=True, service_type="sheets")
+@require_google_service("sheets", "sheets_read")
+async def read_cell_notes(
     service,
     user_google_email: str,
     spreadsheet_id: str,
     range_name: str,
-    values: Union[str, List[List[str]]],
-    value_input_option: str = "USER_ENTERED",
-    insert_data_option: str = "INSERT_ROWS",
 ) -> str:
     """
-    Appends rows of data to the end of existing data in a sheet.
+    Reads cell notes (yellow popup comments) from a range in a Google Sheet.
 
-    This is the easiest way to add new data to a spreadsheet - no need to
-    calculate the next empty row. The API automatically finds the end of
-    existing data and appends new rows there.
+    Cell notes are lightweight annotations attached to individual cells that appear
+    as yellow popups when you hover over a cell. These are different from threaded
+    comments (use read_spreadsheet_comments for those).
 
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        range_name (str): The range to append to (e.g., "Sheet1", "Sheet1!A:A", "Sheet1!A1:D1"). Required.
-            This defines where to search for existing data and where to append.
-            Using just the sheet name (e.g., "Sheet1") will append to the first table found.
-        values (Union[str, List[List[str]]]): 2D array of values to append. Can be a JSON string or Python list. Required.
-            Each inner list represents a row. Example: [["Name", "Age"], ["Alice", "30"]]
-        value_input_option (str): How to interpret input values. Defaults to "USER_ENTERED".
-            "USER_ENTERED": Values are parsed as if typed by a user (formulas executed, numbers/dates parsed).
-            "RAW": Values are stored exactly as provided.
-        insert_data_option (str): How to insert the data. Defaults to "INSERT_ROWS".
-            "INSERT_ROWS": Insert new rows for the appended data.
-            "OVERWRITE": Overwrite existing data in the range (rarely used for append).
+        range_name (str): The range to read notes from (e.g., "Sheet1!A1:D10", "A1:B5"). Required.
 
     Returns:
-        str: Confirmation message including the range where data was appended.
-
-    Example:
-        # Append a single row
-        append_rows(spreadsheet_id="abc123", range_name="Sheet1", values=[["New Name", "25", "Seattle"]])
-
-        # Append multiple rows
-        append_rows(spreadsheet_id="abc123", range_name="Data!A:C", values=[["Row1Col1", "Row1Col2"], ["Row2Col1", "Row2Col2"]])
+        str: Formatted list of cells with notes, including cell reference and note content.
     """
     logger.info(
-        f"[append_rows] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+        f"[read_cell_notes] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
     )
 
-    # Parse values if it's a JSON string (MCP passes parameters as JSON strings)
-    if isinstance(values, str):
-        try:
-            parsed_values = json.loads(values)
-            if not isinstance(parsed_values, list):
-                raise ValueError(
-                    f"Values must be a list, got {type(parsed_values).__name__}"
-                )
-            # Validate it's a list of lists
-            for i, row in enumerate(parsed_values):
-                if not isinstance(row, list):
-                    raise ValueError(
-                        f"Row {i} must be a list, got {type(row).__name__}"
-                    )
-            values = parsed_values
-            logger.info(
-                f"[append_rows] Parsed JSON string to Python list with {len(values)} rows"
-            )
-        except json.JSONDecodeError as e:
-            raise Exception(f"Invalid JSON format for values: {e}")
-        except ValueError as e:
-            raise Exception(f"Invalid values structure: {e}")
-
-    if not values:
-        raise Exception("'values' must be provided and non-empty.")
-
-    body = {"values": values}
-
+    # Get spreadsheet data including notes
     result = await asyncio.to_thread(
         service.spreadsheets()
-        .values()
-        .append(
+        .get(
             spreadsheetId=spreadsheet_id,
-            range=range_name,
-            valueInputOption=value_input_option,
-            insertDataOption=insert_data_option,
-            body=body,
+            ranges=[range_name],
+            fields="sheets.data.rowData.values.note,sheets.properties.title",
         )
         .execute
     )
 
-    updates = result.get("updates", {})
-    updated_range = updates.get("updatedRange", "unknown range")
-    updated_rows = updates.get("updatedRows", 0)
-    updated_cells = updates.get("updatedCells", 0)
+    sheets = result.get("sheets", [])
+    if not sheets:
+        return f"No data found in range '{range_name}'."
 
-    text_output = (
-        f"Successfully appended {updated_rows} row(s) ({updated_cells} cells) to spreadsheet {spreadsheet_id} for {user_google_email}. "
-        f"Data written to range: {updated_range}"
-    )
+    sheet = sheets[0]
+    sheet_name = sheet.get("properties", {}).get("title", "Unknown")
+    data = sheet.get("data", [])
+
+    if not data:
+        return f"No data found in range '{range_name}'."
+
+    notes_found = []
+    grid_data = data[0]
+    start_row = grid_data.get("startRow", 0)
+    start_col = grid_data.get("startColumn", 0)
+
+    row_data_list = grid_data.get("rowData", [])
+    for row_offset, row_data in enumerate(row_data_list):
+        values = row_data.get("values", [])
+        for col_offset, cell in enumerate(values):
+            note = cell.get("note")
+            if note:
+                row_num = start_row + row_offset + 1
+                col_letter = _column_index_to_letter(start_col + col_offset)
+                cell_ref = f"{col_letter}{row_num}"
+                notes_found.append({"cell": cell_ref, "note": note})
+
+    if not notes_found:
+        return f"No cell notes found in range '{range_name}' of sheet '{sheet_name}'."
+
+    output = [
+        f"Found {len(notes_found)} cell notes in range '{range_name}' of sheet '{sheet_name}':\n"
+    ]
+    for item in notes_found:
+        output.append(f"  Cell {item['cell']}: {item['note']}")
 
     logger.info(
-        f"Successfully appended {updated_rows} row(s) for {user_google_email}. Range: {updated_range}"
+        f"Successfully read {len(notes_found)} cell notes for {user_google_email}."
     )
-    return text_output
+    return "\n".join(output)
 
 
 @server.tool()
-@handle_http_errors("insert_rows", service_type="sheets")
+@handle_http_errors("update_cell_note", service_type="sheets")
 @require_google_service("sheets", "sheets_write")
-async def insert_rows(
+async def update_cell_note(
     service,
     user_google_email: str,
     spreadsheet_id: str,
-    sheet_id: int,
-    start_index: int,
-    count: int = 1,
-    inherit_from_before: bool = True,
+    cell: str,
+    note: str,
+    sheet_name: Optional[str] = None,
 ) -> str:
     """
-    Inserts blank rows at a specific position in a sheet.
+    Adds or updates a note on a specific cell in a Google Sheet.
+
+    Cell notes are lightweight yellow popup annotations that appear when hovering
+    over a cell. They are simpler than threaded comments - just plain text without
+    threading, author tracking, or resolution status.
 
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (int): The ID of the sheet (not the sheet name). Required. Use get_spreadsheet_info to find sheet IDs.
-        start_index (int): The row index to insert at (0-based). Required. Rows will be inserted starting at this index.
-        count (int): Number of rows to insert. Defaults to 1.
-        inherit_from_before (bool): If True, new rows inherit formatting from the row above. Defaults to True.
+        cell (str): Cell reference in A1 notation (e.g., 'A1', 'B2', 'AA10'). Required.
+        note (str): The note text to add to the cell. Required.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses the first sheet.
 
     Returns:
-        str: Confirmation message of the successful row insertion.
+        str: Confirmation message of the successful note update.
     """
     logger.info(
-        f"[insert_rows] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet ID: {sheet_id}, Start: {start_index}, Count: {count}"
+        f"[update_cell_note] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Cell: {cell}, Sheet: {sheet_name}"
     )
 
+    # Parse cell reference
+    row_index, col_index = _parse_cell_reference(cell)
+
+    # Get sheet ID
+    if sheet_name:
+        sheet_id = await _get_sheet_id_by_name(service, spreadsheet_id, sheet_name)
+    else:
+        # Get first sheet ID
+        spreadsheet = await asyncio.to_thread(
+            service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+        )
+        sheets = spreadsheet.get("sheets", [])
+        if not sheets:
+            raise ValueError("Spreadsheet has no sheets.")
+        sheet_id = sheets[0].get("properties", {}).get("sheetId")
+        sheet_name = sheets[0].get("properties", {}).get("title", "Sheet1")
+
+    # Build the update request
     request_body = {
         "requests": [
             {
-                "insertDimension": {
-                    "range": {
+                "updateCells": {
+                    "rows": [{"values": [{"note": note}]}],
+                    "fields": "note",
+                    "start": {
                         "sheetId": sheet_id,
-                        "dimension": "ROWS",
-                        "startIndex": start_index,
-                        "endIndex": start_index + count,
+                        "rowIndex": row_index,
+                        "columnIndex": col_index,
                     },
-                    "inheritFromBefore": inherit_from_before,
                 }
             }
         ]
@@ -571,537 +721,206 @@ async def insert_rows(
     )
 
     text_output = (
-        f"Successfully inserted {count} row(s) at index {start_index} in sheet ID {sheet_id} "
+        f"Successfully added/updated note on cell {cell} in sheet '{sheet_name}' "
+        f"of spreadsheet {spreadsheet_id} for {user_google_email}.\n"
+        f"Note content: {note}"
+    )
+
+    logger.info(f"Successfully updated cell note for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("clear_cell_note", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def clear_cell_note(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    cell: str,
+    sheet_name: Optional[str] = None,
+) -> str:
+    """
+    Removes a note from a specific cell in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        cell (str): Cell reference in A1 notation (e.g., 'A1', 'B2', 'AA10'). Required.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses the first sheet.
+
+    Returns:
+        str: Confirmation message of the successful note removal.
+    """
+    logger.info(
+        f"[clear_cell_note] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Cell: {cell}, Sheet: {sheet_name}"
+    )
+
+    # Parse cell reference
+    row_index, col_index = _parse_cell_reference(cell)
+
+    # Get sheet ID
+    if sheet_name:
+        sheet_id = await _get_sheet_id_by_name(service, spreadsheet_id, sheet_name)
+    else:
+        # Get first sheet ID
+        spreadsheet = await asyncio.to_thread(
+            service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+        )
+        sheets = spreadsheet.get("sheets", [])
+        if not sheets:
+            raise ValueError("Spreadsheet has no sheets.")
+        sheet_id = sheets[0].get("properties", {}).get("sheetId")
+        sheet_name = sheets[0].get("properties", {}).get("title", "Sheet1")
+
+    # Build the update request - setting note to empty string clears it
+    request_body = {
+        "requests": [
+            {
+                "updateCells": {
+                    "rows": [{"values": [{"note": ""}]}],
+                    "fields": "note",
+                    "start": {
+                        "sheetId": sheet_id,
+                        "rowIndex": row_index,
+                        "columnIndex": col_index,
+                    },
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully cleared note from cell {cell} in sheet '{sheet_name}' "
         f"of spreadsheet {spreadsheet_id} for {user_google_email}."
     )
 
-    logger.info(f"Successfully inserted {count} row(s) for {user_google_email}.")
+    logger.info(f"Successfully cleared cell note for {user_google_email}.")
     return text_output
 
 
-@server.tool()
-@handle_http_errors("delete_rows", service_type="sheets")
-@require_google_service("sheets", "sheets_write")
-async def delete_rows(
-    service,
-    user_google_email: str,
-    spreadsheet_id: str,
-    sheet_id: int,
-    start_index: int,
-    count: int = 1,
-) -> str:
+def _parse_range_to_grid(range_str: str) -> Dict[str, int]:
     """
-    Deletes rows from a sheet.
+    Parse a range string like 'A1:D10' into GridRange coordinates.
 
     Args:
-        user_google_email (str): The user's Google email address. Required.
-        spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (int): The ID of the sheet (not the sheet name). Required. Use get_spreadsheet_info to find sheet IDs.
-        start_index (int): The row index to start deleting from (0-based). Required. Rows will be deleted starting at this index.
-        count (int): Number of rows to delete. Defaults to 1.
+        range_str: Range in A1 notation (e.g., 'A1:D10', 'B2:C5')
 
     Returns:
-        str: Confirmation message of the successful row deletion.
+        Dict with startRowIndex, endRowIndex, startColumnIndex, endColumnIndex (all 0-indexed)
     """
-    logger.info(
-        f"[delete_rows] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet ID: {sheet_id}, Start: {start_index}, Count: {count}"
-    )
+    # Handle single cell vs range
+    if ":" in range_str:
+        start_cell, end_cell = range_str.split(":")
+    else:
+        start_cell = end_cell = range_str
 
-    if count < 1:
-        raise Exception(f"count ({count}) must be at least 1")
+    start_row, start_col = _parse_cell_reference(start_cell)
+    end_row, end_col = _parse_cell_reference(end_cell)
 
-    end_index = start_index + count
-
-    request_body = {
-        "requests": [
-            {
-                "deleteDimension": {
-                    "range": {
-                        "sheetId": sheet_id,
-                        "dimension": "ROWS",
-                        "startIndex": start_index,
-                        "endIndex": end_index,
-                    }
-                }
-            }
-        ]
+    return {
+        "startRowIndex": start_row,
+        "endRowIndex": end_row + 1,  # API uses exclusive end
+        "startColumnIndex": start_col,
+        "endColumnIndex": end_col + 1,  # API uses exclusive end
     }
 
-    await asyncio.to_thread(
-        service.spreadsheets()
-        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
-        .execute
-    )
 
-    text_output = (
-        f"Successfully deleted {count} row(s) starting at index {start_index} "
-        f"from sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
-    )
-
-    logger.info(f"Successfully deleted {count} row(s) for {user_google_email}.")
-    return text_output
-
-
-@server.tool()
-@handle_http_errors("insert_columns", service_type="sheets")
-@require_google_service("sheets", "sheets_write")
-async def insert_columns(
-    service,
-    user_google_email: str,
-    spreadsheet_id: str,
-    sheet_id: int,
-    start_index: int,
-    count: int = 1,
-    inherit_from_before: bool = True,
-) -> str:
+def _parse_color(color_str: str) -> Dict[str, float]:
     """
-    Inserts blank columns at a specific position in a sheet.
+    Parse a color string (hex or name) into RGBA dict for Sheets API.
 
     Args:
-        user_google_email (str): The user's Google email address. Required.
-        spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (int): The ID of the sheet (not the sheet name). Required. Use get_spreadsheet_info to find sheet IDs.
-        start_index (int): The column index to insert at (0-based, A=0, B=1, etc.). Required. Columns will be inserted starting at this index.
-        count (int): Number of columns to insert. Defaults to 1.
-        inherit_from_before (bool): If True, new columns inherit formatting from the column to the left. Defaults to True.
+        color_str: Color in hex format (#RRGGBB or #RGB) or common color name
 
     Returns:
-        str: Confirmation message of the successful column insertion.
+        Dict with red, green, blue values (0-1 float range)
     """
-    logger.info(
-        f"[insert_columns] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet ID: {sheet_id}, Start: {start_index}, Count: {count}"
-    )
-
-    request_body = {
-        "requests": [
-            {
-                "insertDimension": {
-                    "range": {
-                        "sheetId": sheet_id,
-                        "dimension": "COLUMNS",
-                        "startIndex": start_index,
-                        "endIndex": start_index + count,
-                    },
-                    "inheritFromBefore": inherit_from_before,
-                }
-            }
-        ]
+    color_names = {
+        "black": "#000000",
+        "white": "#FFFFFF",
+        "red": "#FF0000",
+        "green": "#00FF00",
+        "blue": "#0000FF",
+        "yellow": "#FFFF00",
+        "cyan": "#00FFFF",
+        "magenta": "#FF00FF",
+        "orange": "#FFA500",
+        "purple": "#800080",
+        "pink": "#FFC0CB",
+        "gray": "#808080",
+        "grey": "#808080",
+        "lightgray": "#D3D3D3",
+        "lightgrey": "#D3D3D3",
+        "darkgray": "#A9A9A9",
+        "darkgrey": "#A9A9A9",
     }
 
-    await asyncio.to_thread(
-        service.spreadsheets()
-        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
-        .execute
+    # Convert color name to hex
+    color_lower = color_str.lower().strip()
+    if color_lower in color_names:
+        color_str = color_names[color_lower]
+
+    # Parse hex color
+    hex_match = re.match(r"^#?([0-9A-Fa-f]{6})$", color_str)
+    if hex_match:
+        hex_val = hex_match.group(1)
+        return {
+            "red": int(hex_val[0:2], 16) / 255.0,
+            "green": int(hex_val[2:4], 16) / 255.0,
+            "blue": int(hex_val[4:6], 16) / 255.0,
+        }
+
+    # Try short hex (#RGB)
+    short_hex_match = re.match(r"^#?([0-9A-Fa-f]{3})$", color_str)
+    if short_hex_match:
+        hex_val = short_hex_match.group(1)
+        return {
+            "red": int(hex_val[0] * 2, 16) / 255.0,
+            "green": int(hex_val[1] * 2, 16) / 255.0,
+            "blue": int(hex_val[2] * 2, 16) / 255.0,
+        }
+
+    raise ValueError(
+        f"Invalid color format: '{color_str}'. Use hex (#RRGGBB or #RGB) or color name (red, blue, etc.)"
     )
-
-    text_output = (
-        f"Successfully inserted {count} column(s) at index {start_index} in sheet ID {sheet_id} "
-        f"of spreadsheet {spreadsheet_id} for {user_google_email}."
-    )
-
-    logger.info(f"Successfully inserted {count} column(s) for {user_google_email}.")
-    return text_output
-
-
-@server.tool()
-@handle_http_errors("delete_columns", service_type="sheets")
-@require_google_service("sheets", "sheets_write")
-async def delete_columns(
-    service,
-    user_google_email: str,
-    spreadsheet_id: str,
-    sheet_id: int,
-    start_index: int,
-    count: int = 1,
-) -> str:
-    """
-    Deletes columns from a sheet.
-
-    Args:
-        user_google_email (str): The user's Google email address. Required.
-        spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (int): The ID of the sheet (not the sheet name). Required. Use get_spreadsheet_info to find sheet IDs.
-        start_index (int): The column index to start deleting from (0-based, A=0, B=1, etc.). Required. Columns will be deleted starting at this index.
-        count (int): Number of columns to delete. Defaults to 1.
-
-    Returns:
-        str: Confirmation message of the successful column deletion.
-    """
-    logger.info(
-        f"[delete_columns] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet ID: {sheet_id}, Start: {start_index}, Count: {count}"
-    )
-
-    if count < 1:
-        raise Exception(f"count ({count}) must be at least 1")
-
-    end_index = start_index + count
-
-    request_body = {
-        "requests": [
-            {
-                "deleteDimension": {
-                    "range": {
-                        "sheetId": sheet_id,
-                        "dimension": "COLUMNS",
-                        "startIndex": start_index,
-                        "endIndex": end_index,
-                    }
-                }
-            }
-        ]
-    }
-
-    await asyncio.to_thread(
-        service.spreadsheets()
-        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
-        .execute
-    )
-
-    text_output = (
-        f"Successfully deleted {count} column(s) starting at index {start_index} "
-        f"from sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
-    )
-
-    logger.info(f"Successfully deleted {count} column(s) for {user_google_email}.")
-    return text_output
-
-
-@server.tool()
-@handle_http_errors("delete_sheet", service_type="sheets")
-@require_google_service("sheets", "sheets_write")
-async def delete_sheet(
-    service,
-    user_google_email: str,
-    spreadsheet_id: str,
-    sheet_id: Optional[int] = None,
-    sheet_name: Optional[str] = None,
-) -> str:
-    """
-    Deletes a sheet from a spreadsheet.
-
-    Args:
-        user_google_email (str): The user's Google email address. Required.
-        spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (Optional[int]): The ID of the sheet to delete. Either sheet_id or
-            sheet_name must be provided. If both are provided, sheet_id takes precedence.
-        sheet_name (Optional[str]): The name of the sheet to delete. Either sheet_id or
-            sheet_name must be provided. If both are provided, sheet_id takes precedence.
-
-    Returns:
-        str: Confirmation message of the successful sheet deletion.
-
-    Note:
-        A spreadsheet must have at least one sheet. Attempting to delete the last
-        remaining sheet will result in an error.
-    """
-    logger.info(
-        f"[delete_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
-        f"Sheet ID: {sheet_id}, Sheet Name: {sheet_name}"
-    )
-
-    resolved_sheet_id = await _resolve_sheet_id(
-        service, spreadsheet_id, sheet_name, sheet_id
-    )
-
-    request_body = {"requests": [{"deleteSheet": {"sheetId": resolved_sheet_id}}]}
-
-    await asyncio.to_thread(
-        service.spreadsheets()
-        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
-        .execute
-    )
-
-    identifier = (
-        f"'{sheet_name}' (ID: {resolved_sheet_id})"
-        if sheet_name and sheet_id is None
-        else f"ID {resolved_sheet_id}"
-    )
-    text_output = (
-        f"Successfully deleted sheet {identifier} from spreadsheet {spreadsheet_id} "
-        f"for {user_google_email}."
-    )
-
-    logger.info(f"Successfully deleted sheet {identifier} for {user_google_email}.")
-    return text_output
-
-
-@server.tool()
-@handle_http_errors("rename_sheet", service_type="sheets")
-@require_google_service("sheets", "sheets_write")
-async def rename_sheet(
-    service,
-    user_google_email: str,
-    spreadsheet_id: str,
-    new_name: str,
-    sheet_id: Optional[int] = None,
-    sheet_name: Optional[str] = None,
-) -> str:
-    """
-    Renames a sheet within a spreadsheet.
-
-    Args:
-        user_google_email (str): The user's Google email address. Required.
-        spreadsheet_id (str): The ID of the spreadsheet. Required.
-        new_name (str): The new name for the sheet. Required.
-        sheet_id (Optional[int]): The ID of the sheet to rename. Either sheet_id or
-            sheet_name must be provided. If both are provided, sheet_id takes precedence.
-        sheet_name (Optional[str]): The current name of the sheet to rename. Either sheet_id
-            or sheet_name must be provided. If both are provided, sheet_id takes precedence.
-
-    Returns:
-        str: Confirmation message of the successful sheet rename.
-    """
-    logger.info(
-        f"[rename_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
-        f"Sheet ID: {sheet_id}, Sheet Name: {sheet_name}, New Name: '{new_name}'"
-    )
-
-    resolved_sheet_id = await _resolve_sheet_id(
-        service, spreadsheet_id, sheet_name, sheet_id
-    )
-
-    request_body = {
-        "requests": [
-            {
-                "updateSheetProperties": {
-                    "properties": {"sheetId": resolved_sheet_id, "title": new_name},
-                    "fields": "title",
-                }
-            }
-        ]
-    }
-
-    await asyncio.to_thread(
-        service.spreadsheets()
-        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
-        .execute
-    )
-
-    identifier = (
-        f"'{sheet_name}' (ID: {resolved_sheet_id})"
-        if sheet_name and sheet_id is None
-        else f"ID {resolved_sheet_id}"
-    )
-    text_output = (
-        f"Successfully renamed sheet {identifier} to '{new_name}' in spreadsheet {spreadsheet_id} "
-        f"for {user_google_email}."
-    )
-
-    logger.info(
-        f"Successfully renamed sheet {identifier} to '{new_name}' for {user_google_email}."
-    )
-    return text_output
-
-
-@server.tool()
-@handle_http_errors("copy_sheet", service_type="sheets")
-@require_google_service("sheets", "sheets_write")
-async def copy_sheet(
-    service,
-    user_google_email: str,
-    spreadsheet_id: str,
-    new_name: Optional[str] = None,
-    sheet_id: Optional[int] = None,
-    sheet_name: Optional[str] = None,
-) -> str:
-    """
-    Creates a copy of a sheet within the same spreadsheet.
-
-    Args:
-        user_google_email (str): The user's Google email address. Required.
-        spreadsheet_id (str): The ID of the spreadsheet. Required.
-        new_name (Optional[str]): The name for the new sheet. If not provided,
-            Google Sheets will generate a name like "Copy of [original name]".
-        sheet_id (Optional[int]): The ID of the sheet to copy. Either sheet_id or
-            sheet_name must be provided. If both are provided, sheet_id takes precedence.
-        sheet_name (Optional[str]): The name of the sheet to copy. Either sheet_id or
-            sheet_name must be provided. If both are provided, sheet_id takes precedence.
-
-    Returns:
-        str: Confirmation message including the new sheet's ID and name.
-    """
-    logger.info(
-        f"[copy_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
-        f"Sheet ID: {sheet_id}, Sheet Name: {sheet_name}, New Name: {new_name or '(auto-generated)'}"
-    )
-
-    resolved_sheet_id = await _resolve_sheet_id(
-        service, spreadsheet_id, sheet_name, sheet_id
-    )
-
-    duplicate_request = {"sourceSheetId": resolved_sheet_id}
-    if new_name:
-        duplicate_request["newSheetName"] = new_name
-
-    request_body = {"requests": [{"duplicateSheet": duplicate_request}]}
-
-    response = await asyncio.to_thread(
-        service.spreadsheets()
-        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
-        .execute
-    )
-
-    # Extract the new sheet info from the response
-    new_sheet_props = response["replies"][0]["duplicateSheet"]["properties"]
-    new_sheet_id = new_sheet_props["sheetId"]
-    new_sheet_title = new_sheet_props["title"]
-
-    identifier = (
-        f"'{sheet_name}' (ID: {resolved_sheet_id})"
-        if sheet_name and sheet_id is None
-        else f"ID {resolved_sheet_id}"
-    )
-    text_output = (
-        f"Successfully copied sheet {identifier} to new sheet '{new_sheet_title}' (ID: {new_sheet_id}) "
-        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
-    )
-
-    logger.info(
-        f"Successfully copied sheet {identifier} to new sheet ID {new_sheet_id} for {user_google_email}."
-    )
-    return text_output
 
 
 async def _resolve_sheet_id(
     service, spreadsheet_id: str, sheet_name: Optional[str], sheet_id: Optional[int]
 ) -> int:
     """
-    Resolve a sheet identifier to a sheet ID.
-
-    Accepts either sheet_name or sheet_id. If both are provided, sheet_id takes
-    precedence. At least one must be provided.
+    Resolve to a sheet ID, looking up from name if needed.
 
     Args:
-        service: The Google Sheets API service.
-        spreadsheet_id: The ID of the spreadsheet.
-        sheet_name: The name of the sheet to look up.
-        sheet_id: The numeric ID of the sheet.
+        service: Authenticated Sheets service
+        spreadsheet_id: The spreadsheet ID
+        sheet_name: Optional sheet name
+        sheet_id: Optional sheet ID (takes precedence)
 
     Returns:
-        int: The resolved sheet ID.
-
-    Raises:
-        Exception: If neither sheet_name nor sheet_id is provided, or if sheet_name
-            is provided but no matching sheet is found.
+        The resolved sheet ID
     """
     if sheet_id is not None:
         return sheet_id
 
-    if sheet_name is None:
-        raise Exception("Either 'sheet_name' or 'sheet_id' must be provided.")
+    if sheet_name is not None:
+        return await _get_sheet_id_by_name(service, spreadsheet_id, sheet_name)
 
-    # Look up the sheet by name
+    # Get first sheet
     spreadsheet = await asyncio.to_thread(
         service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
     )
-
     sheets = spreadsheet.get("sheets", [])
-    for sheet in sheets:
-        sheet_props = sheet.get("properties", {})
-        if sheet_props.get("title") == sheet_name:
-            return sheet_props.get("sheetId")
-
-    # Sheet not found
-    available_sheets = [
-        sheet.get("properties", {}).get("title", "Unknown") for sheet in sheets
-    ]
-    raise Exception(
-        f"Sheet '{sheet_name}' not found in spreadsheet. "
-        f"Available sheets: {available_sheets}"
-    )
-
-
-def _parse_hex_color(hex_color: str) -> dict:
-    """
-    Parse a hex color string to Google Sheets API color format.
-
-    Args:
-        hex_color: Hex color string (e.g., '#FF0000' or 'FF0000')
-
-    Returns:
-        dict with red, green, blue values as floats (0.0 to 1.0)
-    """
-    # Remove # prefix if present
-    hex_color = hex_color.lstrip("#")
-
-    if len(hex_color) != 6:
-        raise ValueError(
-            f"Invalid hex color format: {hex_color}. Expected 6 hex digits."
-        )
-
-    try:
-        r = int(hex_color[0:2], 16) / 255.0
-        g = int(hex_color[2:4], 16) / 255.0
-        b = int(hex_color[4:6], 16) / 255.0
-    except ValueError:
-        raise ValueError(
-            f"Invalid hex color format: {hex_color}. Must contain valid hex digits."
-        )
-
-    return {"red": r, "green": g, "blue": b}
-
-
-def _parse_range_to_grid_range(range_name: str, sheet_id: int) -> dict:
-    """
-    Parse an A1 notation range to a GridRange object.
-
-    Args:
-        range_name: Range in A1 notation (e.g., 'A1:C10', 'Sheet1!A1:C10')
-        sheet_id: The sheet ID to use in the GridRange
-
-    Returns:
-        dict representing a GridRange for the Sheets API
-    """
-    import re
-
-    # Remove sheet name prefix if present (e.g., "Sheet1!A1:C10" -> "A1:C10")
-    if "!" in range_name:
-        range_name = range_name.split("!")[-1]
-
-    # Parse the range (e.g., "A1:C10" or "A1" or "A:C")
-    # Pattern matches: column letters + optional row number
-    cell_pattern = r"([A-Za-z]+)(\d*)"
-
-    if ":" in range_name:
-        start, end = range_name.split(":")
-        start_match = re.match(cell_pattern, start)
-        end_match = re.match(cell_pattern, end)
-
-        if not start_match or not end_match:
-            raise ValueError(f"Invalid range format: {range_name}")
-
-        start_col = start_match.group(1).upper()
-        start_row = start_match.group(2)
-        end_col = end_match.group(1).upper()
-        end_row = end_match.group(2)
-    else:
-        # Single cell
-        match = re.match(cell_pattern, range_name)
-        if not match:
-            raise ValueError(f"Invalid range format: {range_name}")
-        start_col = end_col = match.group(1).upper()
-        start_row = end_row = match.group(2)
-
-    def col_to_index(col: str) -> int:
-        """Convert column letter(s) to 0-based index (A=0, B=1, ..., Z=25, AA=26)."""
-        result = 0
-        for char in col:
-            result = result * 26 + (ord(char) - ord("A") + 1)
-        return result - 1
-
-    grid_range = {"sheetId": sheet_id}
-
-    # Column indices (always present)
-    grid_range["startColumnIndex"] = col_to_index(start_col)
-    grid_range["endColumnIndex"] = col_to_index(end_col) + 1
-
-    # Row indices (only if row numbers are specified)
-    if start_row:
-        grid_range["startRowIndex"] = int(start_row) - 1  # Convert to 0-based
-    if end_row:
-        grid_range["endRowIndex"] = int(end_row)  # End is exclusive, so no -1
-
-    return grid_range
+    if not sheets:
+        raise ValueError("Spreadsheet has no sheets.")
+    return sheets[0].get("properties", {}).get("sheetId")
 
 
 @server.tool()
@@ -1111,7 +930,6 @@ async def format_cells(
     service,
     user_google_email: str,
     spreadsheet_id: str,
-    sheet_id: int,
     range_name: str,
     bold: Optional[bool] = None,
     italic: Optional[bool] = None,
@@ -1119,13 +937,15 @@ async def format_cells(
     strikethrough: Optional[bool] = None,
     font_size: Optional[int] = None,
     font_family: Optional[str] = None,
-    text_color: Optional[str] = None,
+    font_color: Optional[str] = None,
     background_color: Optional[str] = None,
     horizontal_alignment: Optional[str] = None,
     vertical_alignment: Optional[str] = None,
+    wrap_strategy: Optional[str] = None,
     number_format_type: Optional[str] = None,
     number_format_pattern: Optional[str] = None,
-    wrap_strategy: Optional[str] = None,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
 ) -> str:
     """
     Applies formatting to a range of cells in a Google Sheet.
@@ -1133,159 +953,136 @@ async def format_cells(
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (int): The ID of the sheet (not the sheet name). Required.
-            Use get_spreadsheet_info to find sheet IDs.
-        range_name (str): The range to format in A1 notation (e.g., 'A1:C10', 'A1'). Required.
-            Do not include the sheet name prefix; use sheet_id instead.
-        bold (Optional[bool]): Make text bold.
-        italic (Optional[bool]): Make text italic.
-        underline (Optional[bool]): Underline text.
-        strikethrough (Optional[bool]): Strikethrough text.
+        range_name (str): The range to format (e.g., "A1:D10", "B2:C5"). Required.
+        bold (Optional[bool]): Set text bold.
+        italic (Optional[bool]): Set text italic.
+        underline (Optional[bool]): Set text underline.
+        strikethrough (Optional[bool]): Set text strikethrough.
         font_size (Optional[int]): Font size in points (e.g., 10, 12, 14).
-        font_family (Optional[str]): Font family name (e.g., 'Arial', 'Times New Roman').
-        text_color (Optional[str]): Text color as hex string (e.g., '#FF0000' for red).
-        background_color (Optional[str]): Cell background color as hex string (e.g., '#FFFF00' for yellow).
-        horizontal_alignment (Optional[str]): Horizontal alignment: 'LEFT', 'CENTER', or 'RIGHT'.
-        vertical_alignment (Optional[str]): Vertical alignment: 'TOP', 'MIDDLE', or 'BOTTOM'.
-        number_format_type (Optional[str]): Number format type: 'TEXT', 'NUMBER', 'PERCENT',
-            'CURRENCY', 'DATE', 'TIME', 'DATE_TIME', or 'SCIENTIFIC'.
-        number_format_pattern (Optional[str]): Custom number format pattern (e.g., '#,##0.00',
-            'yyyy-mm-dd', '$#,##0.00'). Used with number_format_type.
-        wrap_strategy (Optional[str]): Text wrap strategy: 'OVERFLOW_CELL', 'LEGACY_WRAP',
-            'CLIP', or 'WRAP'.
+        font_family (Optional[str]): Font family name (e.g., "Arial", "Times New Roman", "Courier New").
+        font_color (Optional[str]): Text color - hex (#RRGGBB) or name (red, blue, etc.).
+        background_color (Optional[str]): Cell background color - hex (#RRGGBB) or name (red, blue, etc.).
+        horizontal_alignment (Optional[str]): Horizontal alignment - LEFT, CENTER, or RIGHT.
+        vertical_alignment (Optional[str]): Vertical alignment - TOP, MIDDLE, or BOTTOM.
+        wrap_strategy (Optional[str]): Text wrapping - OVERFLOW_CELL, CLIP, or WRAP.
+        number_format_type (Optional[str]): Number format type - TEXT, NUMBER, CURRENCY, PERCENT, DATE, TIME, DATE_TIME, SCIENTIFIC.
+        number_format_pattern (Optional[str]): Custom number format pattern (e.g., "#,##0.00", "$#,##0", "yyyy-mm-dd").
+        sheet_name (Optional[str]): Name of the sheet. If not provided with range, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
 
     Returns:
         str: Confirmation message of the successful formatting operation.
-
-    Example:
-        # Bold header row with gray background
-        format_cells(spreadsheet_id="abc123", sheet_id=0, range_name="A1:Z1",
-                     bold=True, background_color="#E0E0E0")
-
-        # Currency formatting
-        format_cells(spreadsheet_id="abc123", sheet_id=0, range_name="B2:B100",
-                     number_format_type="CURRENCY", number_format_pattern="$#,##0.00")
-
-        # Date formatting with center alignment
-        format_cells(spreadsheet_id="abc123", sheet_id=0, range_name="A2:A100",
-                     number_format_type="DATE", number_format_pattern="yyyy-mm-dd",
-                     horizontal_alignment="CENTER")
     """
     logger.info(
-        f"[format_cells] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
-        f"Sheet ID: {sheet_id}, Range: {range_name}"
+        f"[format_cells] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
     )
 
-    # Build the cell format object
-    cell_format = {}
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse range
+    grid_range = _parse_range_to_grid(range_name)
+    grid_range["sheetId"] = resolved_sheet_id
+
+    # Build cell format
+    cell_format: Dict[str, Any] = {}
     fields = []
 
-    # Text format options
-    text_format = {}
+    # Text format properties
+    text_format: Dict[str, Any] = {}
     if bold is not None:
         text_format["bold"] = bold
+        fields.append("userEnteredFormat.textFormat.bold")
     if italic is not None:
         text_format["italic"] = italic
+        fields.append("userEnteredFormat.textFormat.italic")
     if underline is not None:
         text_format["underline"] = underline
+        fields.append("userEnteredFormat.textFormat.underline")
     if strikethrough is not None:
         text_format["strikethrough"] = strikethrough
+        fields.append("userEnteredFormat.textFormat.strikethrough")
     if font_size is not None:
         text_format["fontSize"] = font_size
+        fields.append("userEnteredFormat.textFormat.fontSize")
     if font_family is not None:
         text_format["fontFamily"] = font_family
-    if text_color is not None:
-        text_format["foregroundColor"] = _parse_hex_color(text_color)
+        fields.append("userEnteredFormat.textFormat.fontFamily")
+    if font_color is not None:
+        text_format["foregroundColor"] = _parse_color(font_color)
+        fields.append("userEnteredFormat.textFormat.foregroundColor")
 
     if text_format:
         cell_format["textFormat"] = text_format
-        # Build specific fields for text format
-        text_fields = []
-        if bold is not None:
-            text_fields.append("bold")
-        if italic is not None:
-            text_fields.append("italic")
-        if underline is not None:
-            text_fields.append("underline")
-        if strikethrough is not None:
-            text_fields.append("strikethrough")
-        if font_size is not None:
-            text_fields.append("fontSize")
-        if font_family is not None:
-            text_fields.append("fontFamily")
-        if text_color is not None:
-            text_fields.append("foregroundColor")
-        fields.extend([f"userEnteredFormat.textFormat.{f}" for f in text_fields])
 
     # Background color
     if background_color is not None:
-        cell_format["backgroundColor"] = _parse_hex_color(background_color)
+        cell_format["backgroundColor"] = _parse_color(background_color)
         fields.append("userEnteredFormat.backgroundColor")
 
-    # Horizontal alignment
+    # Alignment
     if horizontal_alignment is not None:
-        valid_h_alignments = ["LEFT", "CENTER", "RIGHT"]
-        if horizontal_alignment.upper() not in valid_h_alignments:
+        valid_h_align = ["LEFT", "CENTER", "RIGHT"]
+        h_align_upper = horizontal_alignment.upper()
+        if h_align_upper not in valid_h_align:
             raise ValueError(
-                f"Invalid horizontal_alignment: {horizontal_alignment}. "
-                f"Must be one of: {valid_h_alignments}"
+                f"Invalid horizontal_alignment: '{horizontal_alignment}'. Must be one of: {valid_h_align}"
             )
-        cell_format["horizontalAlignment"] = horizontal_alignment.upper()
+        cell_format["horizontalAlignment"] = h_align_upper
         fields.append("userEnteredFormat.horizontalAlignment")
 
-    # Vertical alignment
     if vertical_alignment is not None:
-        valid_v_alignments = ["TOP", "MIDDLE", "BOTTOM"]
-        if vertical_alignment.upper() not in valid_v_alignments:
+        valid_v_align = ["TOP", "MIDDLE", "BOTTOM"]
+        v_align_upper = vertical_alignment.upper()
+        if v_align_upper not in valid_v_align:
             raise ValueError(
-                f"Invalid vertical_alignment: {vertical_alignment}. "
-                f"Must be one of: {valid_v_alignments}"
+                f"Invalid vertical_alignment: '{vertical_alignment}'. Must be one of: {valid_v_align}"
             )
-        cell_format["verticalAlignment"] = vertical_alignment.upper()
+        cell_format["verticalAlignment"] = v_align_upper
         fields.append("userEnteredFormat.verticalAlignment")
+
+    # Text wrapping
+    if wrap_strategy is not None:
+        valid_wrap = ["OVERFLOW_CELL", "CLIP", "WRAP"]
+        wrap_upper = wrap_strategy.upper()
+        if wrap_upper not in valid_wrap:
+            raise ValueError(
+                f"Invalid wrap_strategy: '{wrap_strategy}'. Must be one of: {valid_wrap}"
+            )
+        cell_format["wrapStrategy"] = wrap_upper
+        fields.append("userEnteredFormat.wrapStrategy")
 
     # Number format
     if number_format_type is not None or number_format_pattern is not None:
-        number_format = {}
+        number_format: Dict[str, Any] = {}
         if number_format_type is not None:
             valid_types = [
                 "TEXT",
                 "NUMBER",
-                "PERCENT",
                 "CURRENCY",
+                "PERCENT",
                 "DATE",
                 "TIME",
                 "DATE_TIME",
                 "SCIENTIFIC",
             ]
-            if number_format_type.upper() not in valid_types:
+            type_upper = number_format_type.upper()
+            if type_upper not in valid_types:
                 raise ValueError(
-                    f"Invalid number_format_type: {number_format_type}. "
-                    f"Must be one of: {valid_types}"
+                    f"Invalid number_format_type: '{number_format_type}'. Must be one of: {valid_types}"
                 )
-            number_format["type"] = number_format_type.upper()
+            number_format["type"] = type_upper
         if number_format_pattern is not None:
             number_format["pattern"] = number_format_pattern
         cell_format["numberFormat"] = number_format
         fields.append("userEnteredFormat.numberFormat")
 
-    # Wrap strategy
-    if wrap_strategy is not None:
-        valid_wrap = ["OVERFLOW_CELL", "LEGACY_WRAP", "CLIP", "WRAP"]
-        if wrap_strategy.upper() not in valid_wrap:
-            raise ValueError(
-                f"Invalid wrap_strategy: {wrap_strategy}. Must be one of: {valid_wrap}"
-            )
-        cell_format["wrapStrategy"] = wrap_strategy.upper()
-        fields.append("userEnteredFormat.wrapStrategy")
+    if not fields:
+        return "No formatting options specified. Please provide at least one formatting option."
 
-    if not cell_format:
-        raise ValueError("At least one formatting option must be specified.")
-
-    # Parse the range to a GridRange
-    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
-
-    # Build the request
+    # Build request
     request_body = {
         "requests": [
             {
@@ -1304,117 +1101,232 @@ async def format_cells(
         .execute
     )
 
-    # Build a description of applied formatting
-    format_descriptions = []
+    # Build summary of applied formatting
+    format_summary = []
     if bold is not None:
-        format_descriptions.append(f"bold={bold}")
+        format_summary.append(f"bold={bold}")
     if italic is not None:
-        format_descriptions.append(f"italic={italic}")
+        format_summary.append(f"italic={italic}")
     if underline is not None:
-        format_descriptions.append(f"underline={underline}")
+        format_summary.append(f"underline={underline}")
     if strikethrough is not None:
-        format_descriptions.append(f"strikethrough={strikethrough}")
+        format_summary.append(f"strikethrough={strikethrough}")
     if font_size is not None:
-        format_descriptions.append(f"fontSize={font_size}")
+        format_summary.append(f"font_size={font_size}")
     if font_family is not None:
-        format_descriptions.append(f"fontFamily={font_family}")
-    if text_color is not None:
-        format_descriptions.append(f"textColor={text_color}")
+        format_summary.append(f"font_family={font_family}")
+    if font_color is not None:
+        format_summary.append(f"font_color={font_color}")
     if background_color is not None:
-        format_descriptions.append(f"backgroundColor={background_color}")
+        format_summary.append(f"background_color={background_color}")
     if horizontal_alignment is not None:
-        format_descriptions.append(f"horizontalAlignment={horizontal_alignment}")
+        format_summary.append(f"horizontal_alignment={horizontal_alignment}")
     if vertical_alignment is not None:
-        format_descriptions.append(f"verticalAlignment={vertical_alignment}")
-    if number_format_type is not None:
-        format_descriptions.append(f"numberFormatType={number_format_type}")
-    if number_format_pattern is not None:
-        format_descriptions.append(f"numberFormatPattern={number_format_pattern}")
+        format_summary.append(f"vertical_alignment={vertical_alignment}")
     if wrap_strategy is not None:
-        format_descriptions.append(f"wrapStrategy={wrap_strategy}")
-
-    format_summary = ", ".join(format_descriptions)
+        format_summary.append(f"wrap_strategy={wrap_strategy}")
+    if number_format_type is not None:
+        format_summary.append(f"number_format_type={number_format_type}")
+    if number_format_pattern is not None:
+        format_summary.append(f"number_format_pattern={number_format_pattern}")
 
     text_output = (
-        f"Successfully formatted range '{range_name}' in sheet ID {sheet_id} "
-        f"of spreadsheet {spreadsheet_id} for {user_google_email}. "
-        f"Applied: {format_summary}"
+        f"Successfully formatted range '{range_name}' in spreadsheet {spreadsheet_id} for {user_google_email}.\n"
+        f"Applied formatting: {', '.join(format_summary)}"
     )
 
-    logger.info(
-        f"Successfully formatted range '{range_name}' for {user_google_email}. "
-        f"Applied: {format_summary}"
-    )
+    logger.info(f"Successfully formatted cells for {user_google_email}.")
     return text_output
 
 
 @server.tool()
-@handle_http_errors("freeze_panes", service_type="sheets")
+@handle_http_errors("merge_cells", service_type="sheets")
 @require_google_service("sheets", "sheets_write")
-async def freeze_panes(
+async def merge_cells(
     service,
     user_google_email: str,
     spreadsheet_id: str,
-    sheet_id: int,
-    frozen_row_count: int = 0,
-    frozen_column_count: int = 0,
+    range_name: str,
+    merge_type: str = "MERGE_ALL",
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
 ) -> str:
     """
-    Freezes rows and/or columns in a sheet to keep them visible while scrolling.
+    Merges cells in a range in a Google Sheet.
 
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (int): The ID of the sheet (not the sheet name). Required.
-            Use get_spreadsheet_info to find sheet IDs.
-        frozen_row_count (int): Number of rows to freeze from the top. Defaults to 0.
-            Set to 0 to unfreeze all rows. Common values: 1 (freeze header row),
-            2 (freeze header + subheader).
-        frozen_column_count (int): Number of columns to freeze from the left. Defaults to 0.
-            Set to 0 to unfreeze all columns. Common values: 1 (freeze ID/name column).
+        range_name (str): The range to merge (e.g., "A1:D4", "B2:C3"). Required.
+        merge_type (str): Type of merge - MERGE_ALL (single merged cell), MERGE_COLUMNS (merge columns, keep rows separate), or MERGE_ROWS (merge rows, keep columns separate). Defaults to MERGE_ALL.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful merge operation.
+    """
+    logger.info(
+        f"[merge_cells] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+    )
+
+    # Validate merge type
+    valid_merge_types = ["MERGE_ALL", "MERGE_COLUMNS", "MERGE_ROWS"]
+    merge_type_upper = merge_type.upper()
+    if merge_type_upper not in valid_merge_types:
+        raise ValueError(
+            f"Invalid merge_type: '{merge_type}'. Must be one of: {valid_merge_types}"
+        )
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse range
+    grid_range = _parse_range_to_grid(range_name)
+    grid_range["sheetId"] = resolved_sheet_id
+
+    # Build request
+    request_body = {
+        "requests": [
+            {"mergeCells": {"range": grid_range, "mergeType": merge_type_upper}}
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully merged cells in range '{range_name}' with type '{merge_type_upper}' "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully merged cells for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("unmerge_cells", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def unmerge_cells(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    range_name: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Unmerges any merged cells in a range in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        range_name (str): The range to unmerge (e.g., "A1:D4", "B2:C3"). Required.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful unmerge operation.
+    """
+    logger.info(
+        f"[unmerge_cells] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+    )
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse range
+    grid_range = _parse_range_to_grid(range_name)
+    grid_range["sheetId"] = resolved_sheet_id
+
+    # Build request
+    request_body = {"requests": [{"unmergeCells": {"range": grid_range}}]}
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully unmerged cells in range '{range_name}' "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully unmerged cells for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("set_frozen_rows_columns", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def set_frozen_rows_columns(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    frozen_rows: Optional[int] = None,
+    frozen_columns: Optional[int] = None,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Sets the number of frozen rows and/or columns in a Google Sheet.
+
+    Frozen rows stay visible at the top when scrolling down.
+    Frozen columns stay visible on the left when scrolling right.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        frozen_rows (Optional[int]): Number of rows to freeze from the top. Use 0 to unfreeze all rows.
+        frozen_columns (Optional[int]): Number of columns to freeze from the left. Use 0 to unfreeze all columns.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
 
     Returns:
         str: Confirmation message of the successful freeze operation.
-
-    Example:
-        # Freeze the first row (header)
-        freeze_panes(spreadsheet_id="abc123", sheet_id=0, frozen_row_count=1)
-
-        # Freeze first row and first column
-        freeze_panes(spreadsheet_id="abc123", sheet_id=0, frozen_row_count=1, frozen_column_count=1)
-
-        # Unfreeze all rows and columns
-        freeze_panes(spreadsheet_id="abc123", sheet_id=0, frozen_row_count=0, frozen_column_count=0)
     """
     logger.info(
-        f"[freeze_panes] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
-        f"Sheet ID: {sheet_id}, Frozen Rows: {frozen_row_count}, Frozen Cols: {frozen_column_count}"
+        f"[set_frozen_rows_columns] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Rows: {frozen_rows}, Cols: {frozen_columns}"
     )
 
-    # Validate inputs
-    if frozen_row_count < 0:
-        raise ValueError(f"frozen_row_count must be >= 0, got {frozen_row_count}")
-    if frozen_column_count < 0:
-        raise ValueError(f"frozen_column_count must be >= 0, got {frozen_column_count}")
+    if frozen_rows is None and frozen_columns is None:
+        return "No freeze options specified. Please provide frozen_rows and/or frozen_columns."
 
-    # Build the fields mask - only update the frozen properties
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Build properties and fields
+    grid_properties: Dict[str, Any] = {}
     fields = []
-    grid_properties = {}
 
-    if frozen_row_count >= 0:
-        grid_properties["frozenRowCount"] = frozen_row_count
+    if frozen_rows is not None:
+        if frozen_rows < 0:
+            raise ValueError("frozen_rows must be 0 or greater")
+        grid_properties["frozenRowCount"] = frozen_rows
         fields.append("gridProperties.frozenRowCount")
 
-    if frozen_column_count >= 0:
-        grid_properties["frozenColumnCount"] = frozen_column_count
+    if frozen_columns is not None:
+        if frozen_columns < 0:
+            raise ValueError("frozen_columns must be 0 or greater")
+        grid_properties["frozenColumnCount"] = frozen_columns
         fields.append("gridProperties.frozenColumnCount")
 
+    # Build request
     request_body = {
         "requests": [
             {
                 "updateSheetProperties": {
                     "properties": {
-                        "sheetId": sheet_id,
+                        "sheetId": resolved_sheet_id,
                         "gridProperties": grid_properties,
                     },
                     "fields": ",".join(fields),
@@ -1429,932 +1341,26 @@ async def freeze_panes(
         .execute
     )
 
-    # Build description of the freeze operation
-    if frozen_row_count == 0 and frozen_column_count == 0:
-        freeze_description = "unfrozen all rows and columns"
-    else:
-        parts = []
-        if frozen_row_count > 0:
-            parts.append(f"{frozen_row_count} row(s)")
-        if frozen_column_count > 0:
-            parts.append(f"{frozen_column_count} column(s)")
-        freeze_description = f"frozen {' and '.join(parts)}"
+    # Build summary
+    summary_parts = []
+    if frozen_rows is not None:
+        summary_parts.append(
+            f"{frozen_rows} row(s) frozen" if frozen_rows > 0 else "rows unfrozen"
+        )
+    if frozen_columns is not None:
+        summary_parts.append(
+            f"{frozen_columns} column(s) frozen"
+            if frozen_columns > 0
+            else "columns unfrozen"
+        )
 
     text_output = (
-        f"Successfully {freeze_description} in sheet ID {sheet_id} "
-        f"of spreadsheet {spreadsheet_id} for {user_google_email}."
+        f"Successfully updated freeze settings in spreadsheet {spreadsheet_id} for {user_google_email}: "
+        + ", ".join(summary_parts)
     )
 
-    logger.info(f"Successfully {freeze_description} for {user_google_email}.")
+    logger.info(f"Successfully set frozen rows/columns for {user_google_email}.")
     return text_output
-
-
-@server.tool()
-@handle_http_errors("sort_range", service_type="sheets")
-@require_google_service("sheets", "sheets_write")
-async def sort_range(
-    service,
-    user_google_email: str,
-    spreadsheet_id: str,
-    sheet_id: int,
-    range_name: str,
-    sort_specs: Union[str, List[dict]],
-) -> str:
-    """
-    Sorts data in a range of cells in a Google Sheet.
-
-    Args:
-        user_google_email (str): The user's Google email address. Required.
-        spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (int): The ID of the sheet (not the sheet name). Required.
-            Use get_spreadsheet_info to find sheet IDs.
-        range_name (str): The range to sort in A1 notation (e.g., 'A1:D100', 'A2:C50'). Required.
-            Do not include the sheet name prefix; use sheet_id instead.
-        sort_specs (Union[str, List[dict]]): JSON array or Python list of sort specifications. Required.
-            Each specification must contain:
-            - column_index (int): The column index to sort by, relative to the range start (0-based).
-              For example, if range is 'B1:D10', column_index 0 refers to column B.
-            - order (str): Sort order - 'ASCENDING' or 'DESCENDING'.
-            Multiple sort specs create multi-level sorting (sort by first, then by second, etc.).
-
-    Returns:
-        str: Confirmation message of the successful sort operation.
-
-    Example:
-        # Sort by first column ascending
-        sort_range(spreadsheet_id="abc123", sheet_id=0, range_name="A1:D100",
-                   sort_specs='[{"column_index": 0, "order": "ASCENDING"}]')
-
-        # Multi-column sort: by column A ascending, then by column C descending
-        sort_range(spreadsheet_id="abc123", sheet_id=0, range_name="A1:D100",
-                   sort_specs='[{"column_index": 0, "order": "ASCENDING"}, {"column_index": 2, "order": "DESCENDING"}]')
-    """
-    logger.info(
-        f"[sort_range] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
-        f"Sheet ID: {sheet_id}, Range: {range_name}"
-    )
-
-    # Parse sort_specs if it's a JSON string
-    if isinstance(sort_specs, str):
-        try:
-            parsed_sort_specs = json.loads(sort_specs)
-            if not isinstance(parsed_sort_specs, list):
-                raise ValueError(
-                    f"sort_specs must be a list, got {type(parsed_sort_specs).__name__}"
-                )
-            sort_specs = parsed_sort_specs
-            logger.info(
-                f"[sort_range] Parsed JSON string to Python list with {len(sort_specs)} sort specs"
-            )
-        except json.JSONDecodeError as e:
-            raise Exception(f"Invalid JSON format for sort_specs: {e}")
-        except ValueError as e:
-            raise Exception(f"Invalid sort_specs structure: {e}")
-
-    if not sort_specs:
-        raise Exception("sort_specs must not be empty.")
-
-    # Validate and transform sort specs
-    valid_orders = ["ASCENDING", "DESCENDING"]
-    api_sort_specs = []
-
-    for i, spec in enumerate(sort_specs):
-        if not isinstance(spec, dict):
-            raise Exception(
-                f"sort_specs[{i}] must be a dict, got {type(spec).__name__}"
-            )
-
-        if "column_index" not in spec:
-            raise Exception(f"sort_specs[{i}] missing required 'column_index' field")
-        if "order" not in spec:
-            raise Exception(f"sort_specs[{i}] missing required 'order' field")
-
-        column_index = spec["column_index"]
-        order = spec["order"]
-
-        if not isinstance(column_index, int):
-            raise Exception(
-                f"sort_specs[{i}]['column_index'] must be an int, got {type(column_index).__name__}"
-            )
-        if column_index < 0:
-            raise Exception(
-                f"sort_specs[{i}]['column_index'] must be >= 0, got {column_index}"
-            )
-
-        if not isinstance(order, str):
-            raise Exception(
-                f"sort_specs[{i}]['order'] must be a string, got {type(order).__name__}"
-            )
-        if order.upper() not in valid_orders:
-            raise Exception(
-                f"sort_specs[{i}]['order'] must be one of {valid_orders}, got '{order}'"
-            )
-
-        api_sort_specs.append(
-            {"dimensionIndex": column_index, "sortOrder": order.upper()}
-        )
-
-    # Parse the range to a GridRange
-    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
-
-    # Build the sortRange request
-    request_body = {
-        "requests": [{"sortRange": {"range": grid_range, "sortSpecs": api_sort_specs}}]
-    }
-
-    await asyncio.to_thread(
-        service.spreadsheets()
-        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
-        .execute
-    )
-
-    # Build description of sort operation
-    sort_descriptions = []
-    for spec in sort_specs:
-        sort_descriptions.append(
-            f"column {spec['column_index']} {spec['order'].upper()}"
-        )
-    sort_summary = ", ".join(sort_descriptions)
-
-    text_output = (
-        f"Successfully sorted range '{range_name}' in sheet ID {sheet_id} "
-        f"of spreadsheet {spreadsheet_id} for {user_google_email}. "
-        f"Sort order: {sort_summary}"
-    )
-
-    logger.info(
-        f"Successfully sorted range '{range_name}' for {user_google_email}. "
-        f"Sort order: {sort_summary}"
-    )
-    return text_output
-
-
-@server.tool()
-@handle_http_errors("merge_cells", service_type="sheets")
-@require_google_service("sheets", "sheets_write")
-async def merge_cells(
-    service,
-    user_google_email: str,
-    spreadsheet_id: str,
-    sheet_id: int,
-    range_name: str,
-    merge_type: str = "MERGE_ALL",
-) -> str:
-    """
-    Merges cells in a range of a Google Sheet.
-
-    Args:
-        user_google_email (str): The user's Google email address. Required.
-        spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (int): The ID of the sheet (not the sheet name). Required.
-            Use get_spreadsheet_info to find sheet IDs.
-        range_name (str): The range to merge in A1 notation (e.g., 'A1:C1', 'B2:D5'). Required.
-            Do not include the sheet name prefix; use sheet_id instead.
-        merge_type (str): Type of merge to perform. Defaults to "MERGE_ALL".
-            - "MERGE_ALL": Merge all cells in the range into a single cell.
-            - "MERGE_COLUMNS": Merge cells in each column of the range separately.
-            - "MERGE_ROWS": Merge cells in each row of the range separately.
-
-    Returns:
-        str: Confirmation message of the successful merge operation.
-
-    Example:
-        # Merge cells A1:C1 into a single cell (for a header spanning multiple columns)
-        merge_cells(spreadsheet_id="abc123", sheet_id=0, range_name="A1:C1")
-
-        # Merge cells in each column separately (useful for grouped headers)
-        merge_cells(spreadsheet_id="abc123", sheet_id=0, range_name="A1:D2", merge_type="MERGE_COLUMNS")
-
-        # Merge cells in each row separately
-        merge_cells(spreadsheet_id="abc123", sheet_id=0, range_name="A1:A5", merge_type="MERGE_ROWS")
-
-    Note:
-        - When cells are merged, only the top-left cell's value is preserved. Other values are lost.
-        - Attempting to merge already-merged cells may cause an error. Use unmerge_cells first.
-    """
-    logger.info(
-        f"[merge_cells] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
-        f"Sheet ID: {sheet_id}, Range: {range_name}, Type: {merge_type}"
-    )
-
-    # Validate merge_type
-    valid_merge_types = ["MERGE_ALL", "MERGE_COLUMNS", "MERGE_ROWS"]
-    if merge_type.upper() not in valid_merge_types:
-        raise ValueError(
-            f"Invalid merge_type: {merge_type}. Must be one of: {valid_merge_types}"
-        )
-
-    # Parse the range to a GridRange
-    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
-
-    # Build the mergeCells request
-    request_body = {
-        "requests": [
-            {"mergeCells": {"range": grid_range, "mergeType": merge_type.upper()}}
-        ]
-    }
-
-    await asyncio.to_thread(
-        service.spreadsheets()
-        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
-        .execute
-    )
-
-    text_output = (
-        f"Successfully merged cells in range '{range_name}' (type: {merge_type.upper()}) "
-        f"in sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
-    )
-
-    logger.info(
-        f"Successfully merged cells in range '{range_name}' for {user_google_email}."
-    )
-    return text_output
-
-
-@server.tool()
-@handle_http_errors("unmerge_cells", service_type="sheets")
-@require_google_service("sheets", "sheets_write")
-async def unmerge_cells(
-    service,
-    user_google_email: str,
-    spreadsheet_id: str,
-    sheet_id: int,
-    range_name: str,
-) -> str:
-    """
-    Unmerges (splits) previously merged cells in a range of a Google Sheet.
-
-    Args:
-        user_google_email (str): The user's Google email address. Required.
-        spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (int): The ID of the sheet (not the sheet name). Required.
-            Use get_spreadsheet_info to find sheet IDs.
-        range_name (str): The range to unmerge in A1 notation (e.g., 'A1:C1', 'B2:D5'). Required.
-            Do not include the sheet name prefix; use sheet_id instead.
-            The range should cover the merged cells you want to split.
-
-    Returns:
-        str: Confirmation message of the successful unmerge operation.
-
-    Example:
-        # Unmerge a previously merged cell range
-        unmerge_cells(spreadsheet_id="abc123", sheet_id=0, range_name="A1:C1")
-
-        # Unmerge all merged cells in a region
-        unmerge_cells(spreadsheet_id="abc123", sheet_id=0, range_name="A1:Z100")
-
-    Note:
-        - After unmerging, only the top-left cell retains the original value.
-        - The other cells in the previously merged range become empty.
-        - It's safe to call unmerge on a range that doesn't contain merged cells.
-    """
-    logger.info(
-        f"[unmerge_cells] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
-        f"Sheet ID: {sheet_id}, Range: {range_name}"
-    )
-
-    # Parse the range to a GridRange
-    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
-
-    # Build the unmergeCells request
-    request_body = {"requests": [{"unmergeCells": {"range": grid_range}}]}
-
-    await asyncio.to_thread(
-        service.spreadsheets()
-        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
-        .execute
-    )
-
-    text_output = (
-        f"Successfully unmerged cells in range '{range_name}' "
-        f"in sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
-    )
-
-    logger.info(
-        f"Successfully unmerged cells in range '{range_name}' for {user_google_email}."
-    )
-    return text_output
-
-
-@server.tool()
-@handle_http_errors("batch_update_sheet", service_type="sheets")
-@require_google_service("sheets", "sheets_write")
-async def batch_update_sheet(
-    service,
-    user_google_email: str,
-    spreadsheet_id: str,
-    operations: Union[str, List[dict]],
-) -> str:
-    """
-    Performs multiple sheet operations in a single atomic API call for efficiency.
-
-    This tool allows combining multiple formatting, structural, and layout operations
-    into a single request. All operations succeed or fail together (atomic).
-
-    Args:
-        user_google_email (str): The user's Google email address. Required.
-        spreadsheet_id (str): The ID of the spreadsheet. Required.
-        operations (Union[str, List[dict]]): JSON array or Python list of operations. Required.
-            Each operation must have a "type" field and type-specific parameters.
-
-    Supported operation types:
-
-    1. format_cells - Apply cell formatting
-        - sheet_id (int): Sheet ID. Required.
-        - range (str): Range in A1 notation (e.g., 'A1:C10'). Required.
-        - bold (bool): Make text bold.
-        - italic (bool): Make text italic.
-        - underline (bool): Underline text.
-        - strikethrough (bool): Strikethrough text.
-        - font_size (int): Font size in points.
-        - font_family (str): Font family name.
-        - text_color (str): Text color as hex (e.g., '#FF0000').
-        - background_color (str): Background color as hex.
-        - horizontal_alignment (str): 'LEFT', 'CENTER', or 'RIGHT'.
-        - vertical_alignment (str): 'TOP', 'MIDDLE', or 'BOTTOM'.
-        - number_format_type (str): 'TEXT', 'NUMBER', 'PERCENT', 'CURRENCY', 'DATE', 'TIME', 'DATE_TIME', 'SCIENTIFIC'.
-        - number_format_pattern (str): Format pattern (e.g., '$#,##0.00').
-        - wrap_strategy (str): 'OVERFLOW_CELL', 'LEGACY_WRAP', 'CLIP', 'WRAP'.
-
-    2. freeze_panes - Freeze rows/columns
-        - sheet_id (int): Sheet ID. Required.
-        - frozen_row_count (int): Rows to freeze from top. Defaults to 0.
-        - frozen_column_count (int): Columns to freeze from left. Defaults to 0.
-
-    3. set_column_width - Set column width
-        - sheet_id (int): Sheet ID. Required.
-        - start_index (int): Start column index (0-based, A=0). Required.
-        - end_index (int): End column index (exclusive). Required.
-        - width (int): Width in pixels. Required.
-
-    4. set_row_height - Set row height
-        - sheet_id (int): Sheet ID. Required.
-        - start_index (int): Start row index (0-based). Required.
-        - end_index (int): End row index (exclusive). Required.
-        - height (int): Height in pixels. Required.
-
-    5. merge_cells - Merge cells
-        - sheet_id (int): Sheet ID. Required.
-        - range (str): Range in A1 notation. Required.
-        - merge_type (str): 'MERGE_ALL', 'MERGE_COLUMNS', or 'MERGE_ROWS'. Defaults to 'MERGE_ALL'.
-
-    6. unmerge_cells - Unmerge cells
-        - sheet_id (int): Sheet ID. Required.
-        - range (str): Range in A1 notation. Required.
-
-    7. sort_range - Sort data in a range
-        - sheet_id (int): Sheet ID. Required.
-        - range (str): Range in A1 notation. Required.
-        - sort_specs (list): List of {column_index, order} dicts. Required.
-
-    8. auto_resize_dimension - Auto-resize columns or rows to fit content
-        - sheet_id (int): Sheet ID. Required.
-        - dimension (str): 'COLUMNS' or 'ROWS'. Required.
-        - start_index (int): Start index (0-based). Required.
-        - end_index (int): End index (exclusive). Required.
-
-    Returns:
-        str: Summary of all operations performed.
-
-    Example:
-        # Format header, freeze it, and set column widths in one call
-        batch_update_sheet(
-            spreadsheet_id="abc123",
-            operations='[
-                {"type": "format_cells", "sheet_id": 0, "range": "A1:D1", "bold": true, "background_color": "#E0E0E0"},
-                {"type": "freeze_panes", "sheet_id": 0, "frozen_row_count": 1},
-                {"type": "set_column_width", "sheet_id": 0, "start_index": 0, "end_index": 4, "width": 150}
-            ]'
-        )
-    """
-    logger.info(
-        f"[batch_update_sheet] Invoked. Email: '{user_google_email}', "
-        f"Spreadsheet: {spreadsheet_id}"
-    )
-
-    # Parse operations if it's a JSON string
-    if isinstance(operations, str):
-        try:
-            parsed_operations = json.loads(operations)
-            if not isinstance(parsed_operations, list):
-                raise ValueError(
-                    f"operations must be a list, got {type(parsed_operations).__name__}"
-                )
-            operations = parsed_operations
-            logger.info(
-                f"[batch_update_sheet] Parsed JSON string to list with {len(operations)} operations"
-            )
-        except json.JSONDecodeError as e:
-            raise Exception(f"Invalid JSON format for operations: {e}")
-        except ValueError as e:
-            raise Exception(f"Invalid operations structure: {e}")
-
-    if not operations:
-        raise Exception("operations must not be empty.")
-
-    # Build the requests list
-    requests = []
-    operation_summaries = []
-
-    for i, op in enumerate(operations):
-        if not isinstance(op, dict):
-            raise Exception(f"operations[{i}] must be a dict, got {type(op).__name__}")
-
-        op_type = op.get("type")
-        if not op_type:
-            raise Exception(f"operations[{i}] missing required 'type' field")
-
-        try:
-            if op_type == "format_cells":
-                request, summary = _build_format_cells_request(op, i)
-                requests.append(request)
-                operation_summaries.append(summary)
-
-            elif op_type == "freeze_panes":
-                request, summary = _build_freeze_panes_request(op, i)
-                requests.append(request)
-                operation_summaries.append(summary)
-
-            elif op_type == "set_column_width":
-                request, summary = _build_set_column_width_request(op, i)
-                requests.append(request)
-                operation_summaries.append(summary)
-
-            elif op_type == "set_row_height":
-                request, summary = _build_set_row_height_request(op, i)
-                requests.append(request)
-                operation_summaries.append(summary)
-
-            elif op_type == "merge_cells":
-                request, summary = _build_merge_cells_request(op, i)
-                requests.append(request)
-                operation_summaries.append(summary)
-
-            elif op_type == "unmerge_cells":
-                request, summary = _build_unmerge_cells_request(op, i)
-                requests.append(request)
-                operation_summaries.append(summary)
-
-            elif op_type == "sort_range":
-                request, summary = _build_sort_range_request(op, i)
-                requests.append(request)
-                operation_summaries.append(summary)
-
-            elif op_type == "auto_resize_dimension":
-                request, summary = _build_auto_resize_dimension_request(op, i)
-                requests.append(request)
-                operation_summaries.append(summary)
-
-            else:
-                raise Exception(
-                    f"operations[{i}] has unknown type '{op_type}'. "
-                    f"Supported types: format_cells, freeze_panes, set_column_width, "
-                    f"set_row_height, merge_cells, unmerge_cells, sort_range, auto_resize_dimension"
-                )
-        except Exception as e:
-            raise Exception(f"Error in operations[{i}] ({op_type}): {e}")
-
-    # Execute the batch update
-    request_body = {"requests": requests}
-
-    await asyncio.to_thread(
-        service.spreadsheets()
-        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
-        .execute
-    )
-
-    # Build the summary message
-    summary_text = "\n".join(
-        f"  {i + 1}. {s}" for i, s in enumerate(operation_summaries)
-    )
-    text_output = (
-        f"Successfully executed {len(operations)} operation(s) on spreadsheet "
-        f"{spreadsheet_id} for {user_google_email}:\n{summary_text}"
-    )
-
-    logger.info(
-        f"Successfully executed {len(operations)} operations for {user_google_email}."
-    )
-    return text_output
-
-
-def _build_format_cells_request(op: dict, index: int) -> tuple:
-    """Build a repeatCell request for format_cells operation."""
-    sheet_id = op.get("sheet_id")
-    range_name = op.get("range")
-
-    if sheet_id is None:
-        raise ValueError("missing required 'sheet_id' field")
-    if not range_name:
-        raise ValueError("missing required 'range' field")
-
-    # Build the cell format object
-    cell_format = {}
-    fields = []
-    format_parts = []
-
-    # Text format options
-    text_format = {}
-    if op.get("bold") is not None:
-        text_format["bold"] = op["bold"]
-        fields.append("userEnteredFormat.textFormat.bold")
-        format_parts.append(f"bold={op['bold']}")
-    if op.get("italic") is not None:
-        text_format["italic"] = op["italic"]
-        fields.append("userEnteredFormat.textFormat.italic")
-        format_parts.append(f"italic={op['italic']}")
-    if op.get("underline") is not None:
-        text_format["underline"] = op["underline"]
-        fields.append("userEnteredFormat.textFormat.underline")
-        format_parts.append(f"underline={op['underline']}")
-    if op.get("strikethrough") is not None:
-        text_format["strikethrough"] = op["strikethrough"]
-        fields.append("userEnteredFormat.textFormat.strikethrough")
-        format_parts.append(f"strikethrough={op['strikethrough']}")
-    if op.get("font_size") is not None:
-        text_format["fontSize"] = op["font_size"]
-        fields.append("userEnteredFormat.textFormat.fontSize")
-        format_parts.append(f"fontSize={op['font_size']}")
-    if op.get("font_family") is not None:
-        text_format["fontFamily"] = op["font_family"]
-        fields.append("userEnteredFormat.textFormat.fontFamily")
-        format_parts.append(f"fontFamily={op['font_family']}")
-    if op.get("text_color") is not None:
-        text_format["foregroundColor"] = _parse_hex_color(op["text_color"])
-        fields.append("userEnteredFormat.textFormat.foregroundColor")
-        format_parts.append(f"textColor={op['text_color']}")
-
-    if text_format:
-        cell_format["textFormat"] = text_format
-
-    # Background color
-    if op.get("background_color") is not None:
-        cell_format["backgroundColor"] = _parse_hex_color(op["background_color"])
-        fields.append("userEnteredFormat.backgroundColor")
-        format_parts.append(f"backgroundColor={op['background_color']}")
-
-    # Horizontal alignment
-    if op.get("horizontal_alignment") is not None:
-        valid_h = ["LEFT", "CENTER", "RIGHT"]
-        if op["horizontal_alignment"].upper() not in valid_h:
-            raise ValueError(
-                f"horizontal_alignment must be one of {valid_h}, "
-                f"got '{op['horizontal_alignment']}'"
-            )
-        cell_format["horizontalAlignment"] = op["horizontal_alignment"].upper()
-        fields.append("userEnteredFormat.horizontalAlignment")
-        format_parts.append(f"hAlign={op['horizontal_alignment']}")
-
-    # Vertical alignment
-    if op.get("vertical_alignment") is not None:
-        valid_v = ["TOP", "MIDDLE", "BOTTOM"]
-        if op["vertical_alignment"].upper() not in valid_v:
-            raise ValueError(
-                f"vertical_alignment must be one of {valid_v}, "
-                f"got '{op['vertical_alignment']}'"
-            )
-        cell_format["verticalAlignment"] = op["vertical_alignment"].upper()
-        fields.append("userEnteredFormat.verticalAlignment")
-        format_parts.append(f"vAlign={op['vertical_alignment']}")
-
-    # Number format
-    if (
-        op.get("number_format_type") is not None
-        or op.get("number_format_pattern") is not None
-    ):
-        number_format = {}
-        if op.get("number_format_type") is not None:
-            valid_types = [
-                "TEXT",
-                "NUMBER",
-                "PERCENT",
-                "CURRENCY",
-                "DATE",
-                "TIME",
-                "DATE_TIME",
-                "SCIENTIFIC",
-            ]
-            if op["number_format_type"].upper() not in valid_types:
-                raise ValueError(
-                    f"number_format_type must be one of {valid_types}, "
-                    f"got '{op['number_format_type']}'"
-                )
-            number_format["type"] = op["number_format_type"].upper()
-            format_parts.append(f"numType={op['number_format_type']}")
-        if op.get("number_format_pattern") is not None:
-            number_format["pattern"] = op["number_format_pattern"]
-            format_parts.append(f"numPattern={op['number_format_pattern']}")
-        cell_format["numberFormat"] = number_format
-        fields.append("userEnteredFormat.numberFormat")
-
-    # Wrap strategy
-    if op.get("wrap_strategy") is not None:
-        valid_wrap = ["OVERFLOW_CELL", "LEGACY_WRAP", "CLIP", "WRAP"]
-        if op["wrap_strategy"].upper() not in valid_wrap:
-            raise ValueError(
-                f"wrap_strategy must be one of {valid_wrap}, "
-                f"got '{op['wrap_strategy']}'"
-            )
-        cell_format["wrapStrategy"] = op["wrap_strategy"].upper()
-        fields.append("userEnteredFormat.wrapStrategy")
-        format_parts.append(f"wrap={op['wrap_strategy']}")
-
-    if not cell_format:
-        raise ValueError("at least one formatting option must be specified")
-
-    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
-
-    request = {
-        "repeatCell": {
-            "range": grid_range,
-            "cell": {"userEnteredFormat": cell_format},
-            "fields": ",".join(fields),
-        }
-    }
-
-    summary = f"format_cells: {range_name} ({', '.join(format_parts)})"
-    return request, summary
-
-
-def _build_freeze_panes_request(op: dict, index: int) -> tuple:
-    """Build an updateSheetProperties request for freeze_panes operation."""
-    sheet_id = op.get("sheet_id")
-    if sheet_id is None:
-        raise ValueError("missing required 'sheet_id' field")
-
-    frozen_row_count = op.get("frozen_row_count", 0)
-    frozen_column_count = op.get("frozen_column_count", 0)
-
-    if frozen_row_count < 0:
-        raise ValueError(f"frozen_row_count must be >= 0, got {frozen_row_count}")
-    if frozen_column_count < 0:
-        raise ValueError(f"frozen_column_count must be >= 0, got {frozen_column_count}")
-
-    grid_properties = {
-        "frozenRowCount": frozen_row_count,
-        "frozenColumnCount": frozen_column_count,
-    }
-
-    request = {
-        "updateSheetProperties": {
-            "properties": {
-                "sheetId": sheet_id,
-                "gridProperties": grid_properties,
-            },
-            "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
-        }
-    }
-
-    summary = (
-        f"freeze_panes: {frozen_row_count} row(s), {frozen_column_count} column(s)"
-    )
-    return request, summary
-
-
-def _build_set_column_width_request(op: dict, index: int) -> tuple:
-    """Build an updateDimensionProperties request for set_column_width operation."""
-    sheet_id = op.get("sheet_id")
-    start_index = op.get("start_index")
-    end_index = op.get("end_index")
-    width = op.get("width")
-
-    if sheet_id is None:
-        raise ValueError("missing required 'sheet_id' field")
-    if start_index is None:
-        raise ValueError("missing required 'start_index' field")
-    if end_index is None:
-        raise ValueError("missing required 'end_index' field")
-    if width is None:
-        raise ValueError("missing required 'width' field")
-
-    if start_index < 0:
-        raise ValueError(f"start_index must be >= 0, got {start_index}")
-    if end_index <= start_index:
-        raise ValueError(
-            f"end_index ({end_index}) must be > start_index ({start_index})"
-        )
-    if width <= 0:
-        raise ValueError(f"width must be > 0, got {width}")
-
-    request = {
-        "updateDimensionProperties": {
-            "range": {
-                "sheetId": sheet_id,
-                "dimension": "COLUMNS",
-                "startIndex": start_index,
-                "endIndex": end_index,
-            },
-            "properties": {"pixelSize": width},
-            "fields": "pixelSize",
-        }
-    }
-
-    summary = f"set_column_width: columns {start_index}-{end_index - 1} to {width}px"
-    return request, summary
-
-
-def _build_set_row_height_request(op: dict, index: int) -> tuple:
-    """Build an updateDimensionProperties request for set_row_height operation."""
-    sheet_id = op.get("sheet_id")
-    start_index = op.get("start_index")
-    end_index = op.get("end_index")
-    height = op.get("height")
-
-    if sheet_id is None:
-        raise ValueError("missing required 'sheet_id' field")
-    if start_index is None:
-        raise ValueError("missing required 'start_index' field")
-    if end_index is None:
-        raise ValueError("missing required 'end_index' field")
-    if height is None:
-        raise ValueError("missing required 'height' field")
-
-    if start_index < 0:
-        raise ValueError(f"start_index must be >= 0, got {start_index}")
-    if end_index <= start_index:
-        raise ValueError(
-            f"end_index ({end_index}) must be > start_index ({start_index})"
-        )
-    if height <= 0:
-        raise ValueError(f"height must be > 0, got {height}")
-
-    request = {
-        "updateDimensionProperties": {
-            "range": {
-                "sheetId": sheet_id,
-                "dimension": "ROWS",
-                "startIndex": start_index,
-                "endIndex": end_index,
-            },
-            "properties": {"pixelSize": height},
-            "fields": "pixelSize",
-        }
-    }
-
-    summary = f"set_row_height: rows {start_index}-{end_index - 1} to {height}px"
-    return request, summary
-
-
-def _build_merge_cells_request(op: dict, index: int) -> tuple:
-    """Build a mergeCells request for merge_cells operation."""
-    sheet_id = op.get("sheet_id")
-    range_name = op.get("range")
-    merge_type = op.get("merge_type", "MERGE_ALL")
-
-    if sheet_id is None:
-        raise ValueError("missing required 'sheet_id' field")
-    if not range_name:
-        raise ValueError("missing required 'range' field")
-
-    valid_merge_types = ["MERGE_ALL", "MERGE_COLUMNS", "MERGE_ROWS"]
-    if merge_type.upper() not in valid_merge_types:
-        raise ValueError(
-            f"merge_type must be one of {valid_merge_types}, got '{merge_type}'"
-        )
-
-    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
-
-    request = {
-        "mergeCells": {
-            "range": grid_range,
-            "mergeType": merge_type.upper(),
-        }
-    }
-
-    summary = f"merge_cells: {range_name} ({merge_type.upper()})"
-    return request, summary
-
-
-def _build_unmerge_cells_request(op: dict, index: int) -> tuple:
-    """Build an unmergeCells request for unmerge_cells operation."""
-    sheet_id = op.get("sheet_id")
-    range_name = op.get("range")
-
-    if sheet_id is None:
-        raise ValueError("missing required 'sheet_id' field")
-    if not range_name:
-        raise ValueError("missing required 'range' field")
-
-    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
-
-    request = {"unmergeCells": {"range": grid_range}}
-
-    summary = f"unmerge_cells: {range_name}"
-    return request, summary
-
-
-def _build_sort_range_request(op: dict, index: int) -> tuple:
-    """Build a sortRange request for sort_range operation."""
-    sheet_id = op.get("sheet_id")
-    range_name = op.get("range")
-    sort_specs = op.get("sort_specs")
-
-    if sheet_id is None:
-        raise ValueError("missing required 'sheet_id' field")
-    if not range_name:
-        raise ValueError("missing required 'range' field")
-    if not sort_specs:
-        raise ValueError("missing required 'sort_specs' field")
-
-    if not isinstance(sort_specs, list):
-        raise ValueError(f"sort_specs must be a list, got {type(sort_specs).__name__}")
-
-    # Validate and transform sort specs
-    valid_orders = ["ASCENDING", "DESCENDING"]
-    api_sort_specs = []
-
-    for j, spec in enumerate(sort_specs):
-        if not isinstance(spec, dict):
-            raise ValueError(
-                f"sort_specs[{j}] must be a dict, got {type(spec).__name__}"
-            )
-
-        if "column_index" not in spec:
-            raise ValueError(f"sort_specs[{j}] missing 'column_index'")
-        if "order" not in spec:
-            raise ValueError(f"sort_specs[{j}] missing 'order'")
-
-        col_idx = spec["column_index"]
-        order = spec["order"]
-
-        if not isinstance(col_idx, int):
-            raise ValueError(
-                f"sort_specs[{j}]['column_index'] must be int, got {type(col_idx).__name__}"
-            )
-        if col_idx < 0:
-            raise ValueError(f"sort_specs[{j}]['column_index'] must be >= 0")
-
-        if order.upper() not in valid_orders:
-            raise ValueError(
-                f"sort_specs[{j}]['order'] must be one of {valid_orders}, got '{order}'"
-            )
-
-        api_sort_specs.append(
-            {
-                "dimensionIndex": col_idx,
-                "sortOrder": order.upper(),
-            }
-        )
-
-    grid_range = _parse_range_to_grid_range(range_name, sheet_id)
-
-    request = {
-        "sortRange": {
-            "range": grid_range,
-            "sortSpecs": api_sort_specs,
-        }
-    }
-
-    sort_desc = ", ".join(f"col{s['column_index']} {s['order']}" for s in sort_specs)
-    summary = f"sort_range: {range_name} by {sort_desc}"
-    return request, summary
-
-
-def _build_auto_resize_dimension_request(op: dict, index: int) -> tuple:
-    """Build an autoResizeDimensions request for auto_resize_dimension operation."""
-    sheet_id = op.get("sheet_id")
-    dimension = op.get("dimension")
-    start_index = op.get("start_index")
-    end_index = op.get("end_index")
-
-    if sheet_id is None:
-        raise ValueError("missing required 'sheet_id' field")
-    if dimension is None:
-        raise ValueError("missing required 'dimension' field")
-    if start_index is None:
-        raise ValueError("missing required 'start_index' field")
-    if end_index is None:
-        raise ValueError("missing required 'end_index' field")
-
-    valid_dimensions = ["COLUMNS", "ROWS"]
-    if dimension.upper() not in valid_dimensions:
-        raise ValueError(
-            f"dimension must be one of {valid_dimensions}, got '{dimension}'"
-        )
-    if start_index < 0:
-        raise ValueError(f"start_index must be >= 0, got {start_index}")
-    if end_index <= start_index:
-        raise ValueError(
-            f"end_index ({end_index}) must be > start_index ({start_index})"
-        )
-
-    request = {
-        "autoResizeDimensions": {
-            "dimensions": {
-                "sheetId": sheet_id,
-                "dimension": dimension.upper(),
-                "startIndex": start_index,
-                "endIndex": end_index,
-            }
-        }
-    }
-
-    dim_name = "column" if dimension.upper() == "COLUMNS" else "row"
-    if end_index - start_index == 1:
-        summary = f"auto_resize: {dim_name} {start_index}"
-    else:
-        summary = f"auto_resize: {dim_name}s {start_index}-{end_index - 1}"
-    return request, summary
 
 
 @server.tool()
@@ -2364,10 +1370,11 @@ async def set_column_width(
     service,
     user_google_email: str,
     spreadsheet_id: str,
-    sheet_id: int,
-    start_index: int,
-    end_index: int,
-    width: int,
+    start_column: str,
+    end_column: Optional[str] = None,
+    width: int = 100,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
 ) -> str:
     """
     Sets the width of one or more columns in a Google Sheet.
@@ -2375,48 +1382,47 @@ async def set_column_width(
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (int): The ID of the sheet (not the sheet name). Required.
-            Use get_spreadsheet_info to find sheet IDs.
-        start_index (int): The starting column index (0-based, A=0, B=1, etc.). Required.
-        end_index (int): The ending column index (exclusive). Required.
-            For a single column, use start_index + 1.
-        width (int): The width in pixels. Required.
-            Common values: 100 (narrow), 150 (medium), 200 (wide), 300 (extra wide).
+        start_column (str): The starting column letter (e.g., "A", "B", "AA"). Required.
+        end_column (Optional[str]): The ending column letter (inclusive). If not provided, only start_column is resized.
+        width (int): The width in pixels. Defaults to 100.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
 
     Returns:
-        str: Confirmation message of the successful column width change.
-
-    Example:
-        # Set column A to 200 pixels wide
-        set_column_width(spreadsheet_id="abc123", sheet_id=0, start_index=0, end_index=1, width=200)
-
-        # Set columns A through D to 150 pixels wide
-        set_column_width(spreadsheet_id="abc123", sheet_id=0, start_index=0, end_index=4, width=150)
+        str: Confirmation message of the successful column width update.
     """
     logger.info(
-        f"[set_column_width] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
-        f"Sheet ID: {sheet_id}, Columns: {start_index}-{end_index - 1}, Width: {width}px"
+        f"[set_column_width] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Column: {start_column}-{end_column}, Width: {width}"
     )
 
-    # Validate inputs
-    if start_index < 0:
-        raise ValueError(f"start_index must be >= 0, got {start_index}")
-    if end_index <= start_index:
-        raise ValueError(
-            f"end_index ({end_index}) must be greater than start_index ({start_index})"
-        )
-    if width <= 0:
-        raise ValueError(f"width must be > 0, got {width}")
+    if width < 0:
+        raise ValueError("width must be 0 or greater")
 
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse column letters to indices
+    start_col_ref = f"{start_column}1"
+    _, start_col_idx = _parse_cell_reference(start_col_ref)
+
+    if end_column:
+        end_col_ref = f"{end_column}1"
+        _, end_col_idx = _parse_cell_reference(end_col_ref)
+    else:
+        end_col_idx = start_col_idx
+
+    # Build request
     request_body = {
         "requests": [
             {
                 "updateDimensionProperties": {
                     "range": {
-                        "sheetId": sheet_id,
+                        "sheetId": resolved_sheet_id,
                         "dimension": "COLUMNS",
-                        "startIndex": start_index,
-                        "endIndex": end_index,
+                        "startIndex": start_col_idx,
+                        "endIndex": end_col_idx + 1,  # Exclusive end
                     },
                     "properties": {"pixelSize": width},
                     "fields": "pixelSize",
@@ -2431,18 +1437,13 @@ async def set_column_width(
         .execute
     )
 
-    columns_affected = end_index - start_index
-    if columns_affected == 1:
-        col_desc = f"column {start_index}"
-    else:
-        col_desc = f"columns {start_index}-{end_index - 1}"
-
+    col_range = f"{start_column}-{end_column}" if end_column else start_column
     text_output = (
-        f"Successfully set {col_desc} to {width}px wide "
-        f"in sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
+        f"Successfully set column(s) {col_range} width to {width}px "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
     )
 
-    logger.info(f"Successfully set {col_desc} to {width}px for {user_google_email}.")
+    logger.info(f"Successfully set column width for {user_google_email}.")
     return text_output
 
 
@@ -2453,10 +1454,11 @@ async def set_row_height(
     service,
     user_google_email: str,
     spreadsheet_id: str,
-    sheet_id: int,
-    start_index: int,
-    end_index: int,
-    height: int,
+    start_row: int,
+    end_row: Optional[int] = None,
+    height: int = 21,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
 ) -> str:
     """
     Sets the height of one or more rows in a Google Sheet.
@@ -2464,48 +1466,45 @@ async def set_row_height(
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (int): The ID of the sheet (not the sheet name). Required.
-            Use get_spreadsheet_info to find sheet IDs.
-        start_index (int): The starting row index (0-based, row 1 = index 0). Required.
-        end_index (int): The ending row index (exclusive). Required.
-            For a single row, use start_index + 1.
-        height (int): The height in pixels. Required.
-            Common values: 21 (default), 30 (medium), 50 (tall), 100 (extra tall).
+        start_row (int): The starting row number (1-indexed, e.g., 1 for the first row). Required.
+        end_row (Optional[int]): The ending row number (inclusive, 1-indexed). If not provided, only start_row is resized.
+        height (int): The height in pixels. Defaults to 21 (standard row height).
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
 
     Returns:
-        str: Confirmation message of the successful row height change.
-
-    Example:
-        # Set row 1 to 40 pixels tall
-        set_row_height(spreadsheet_id="abc123", sheet_id=0, start_index=0, end_index=1, height=40)
-
-        # Set rows 1 through 5 to 30 pixels tall
-        set_row_height(spreadsheet_id="abc123", sheet_id=0, start_index=0, end_index=5, height=30)
+        str: Confirmation message of the successful row height update.
     """
     logger.info(
-        f"[set_row_height] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
-        f"Sheet ID: {sheet_id}, Rows: {start_index}-{end_index - 1}, Height: {height}px"
+        f"[set_row_height] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Row: {start_row}-{end_row}, Height: {height}"
     )
 
-    # Validate inputs
-    if start_index < 0:
-        raise ValueError(f"start_index must be >= 0, got {start_index}")
-    if end_index <= start_index:
-        raise ValueError(
-            f"end_index ({end_index}) must be greater than start_index ({start_index})"
-        )
-    if height <= 0:
-        raise ValueError(f"height must be > 0, got {height}")
+    if height < 0:
+        raise ValueError("height must be 0 or greater")
+    if start_row < 1:
+        raise ValueError("start_row must be 1 or greater (1-indexed)")
+    if end_row is not None and end_row < start_row:
+        raise ValueError("end_row must be greater than or equal to start_row")
 
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Convert to 0-indexed
+    start_row_idx = start_row - 1
+    end_row_idx = (end_row - 1) if end_row else start_row_idx
+
+    # Build request
     request_body = {
         "requests": [
             {
                 "updateDimensionProperties": {
                     "range": {
-                        "sheetId": sheet_id,
+                        "sheetId": resolved_sheet_id,
                         "dimension": "ROWS",
-                        "startIndex": start_index,
-                        "endIndex": end_index,
+                        "startIndex": start_row_idx,
+                        "endIndex": end_row_idx + 1,  # Exclusive end
                     },
                     "properties": {"pixelSize": height},
                     "fields": "pixelSize",
@@ -2520,92 +1519,797 @@ async def set_row_height(
         .execute
     )
 
-    rows_affected = end_index - start_index
-    if rows_affected == 1:
-        row_desc = f"row {start_index}"
-    else:
-        row_desc = f"rows {start_index}-{end_index - 1}"
-
+    row_range = f"{start_row}-{end_row}" if end_row else str(start_row)
     text_output = (
-        f"Successfully set {row_desc} to {height}px tall "
-        f"in sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
+        f"Successfully set row(s) {row_range} height to {height}px "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
     )
 
-    logger.info(f"Successfully set {row_desc} to {height}px for {user_google_email}.")
+    logger.info(f"Successfully set row height for {user_google_email}.")
     return text_output
 
 
 @server.tool()
-@handle_http_errors("auto_resize_dimension", service_type="sheets")
+@handle_http_errors("add_conditional_formatting", service_type="sheets")
 @require_google_service("sheets", "sheets_write")
-async def auto_resize_dimension(
+async def add_conditional_formatting(
     service,
     user_google_email: str,
     spreadsheet_id: str,
-    sheet_id: int,
-    dimension: str,
-    start_index: int,
-    end_index: int,
+    range_name: str,
+    rule_type: str,
+    condition_type: Optional[str] = None,
+    condition_values: Optional[List[str]] = None,
+    background_color: Optional[str] = None,
+    font_color: Optional[str] = None,
+    bold: Optional[bool] = None,
+    italic: Optional[bool] = None,
+    min_color: Optional[str] = None,
+    mid_color: Optional[str] = None,
+    max_color: Optional[str] = None,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
 ) -> str:
     """
-    Auto-resizes columns or rows to fit their content in a Google Sheet.
-
-    This adjusts the width of columns or height of rows to automatically fit
-    the content they contain, similar to double-clicking the column/row border
-    in the Google Sheets UI.
+    Adds a conditional formatting rule to a range in a Google Sheet.
 
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (int): The ID of the sheet (not the sheet name). Required.
-            Use get_spreadsheet_info to find sheet IDs.
-        dimension (str): The dimension to resize - "COLUMNS" or "ROWS". Required.
-        start_index (int): The starting index (0-based). Required.
-            For columns: A=0, B=1, etc.
-            For rows: row 1 = index 0.
-        end_index (int): The ending index (exclusive). Required.
-            For a single column/row, use start_index + 1.
+        range_name (str): The range to apply formatting to (e.g., "A1:D10"). Required.
+        rule_type (str): Type of rule - BOOLEAN (condition-based) or GRADIENT (color scale). Required.
+        condition_type (Optional[str]): For BOOLEAN rules - type of condition: NUMBER_GREATER, NUMBER_LESS, NUMBER_EQ, NUMBER_BETWEEN, TEXT_CONTAINS, TEXT_NOT_CONTAINS, TEXT_STARTS_WITH, TEXT_ENDS_WITH, BLANK, NOT_BLANK, CUSTOM_FORMULA.
+        condition_values (Optional[List[str]]): Values for the condition. For NUMBER_BETWEEN provide [min, max]. For CUSTOM_FORMULA provide the formula.
+        background_color (Optional[str]): Background color for BOOLEAN rules - hex (#RRGGBB) or color name.
+        font_color (Optional[str]): Font color for BOOLEAN rules - hex (#RRGGBB) or color name.
+        bold (Optional[bool]): Apply bold for BOOLEAN rules.
+        italic (Optional[bool]): Apply italic for BOOLEAN rules.
+        min_color (Optional[str]): Color for minimum value in GRADIENT rules. Defaults to green.
+        mid_color (Optional[str]): Color for midpoint in GRADIENT rules (optional).
+        max_color (Optional[str]): Color for maximum value in GRADIENT rules. Defaults to red.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
 
     Returns:
-        str: Confirmation message of the successful auto-resize operation.
-
-    Example:
-        # Auto-resize column A to fit content
-        auto_resize_dimension(spreadsheet_id="abc123", sheet_id=0, dimension="COLUMNS", start_index=0, end_index=1)
-
-        # Auto-resize columns A through D
-        auto_resize_dimension(spreadsheet_id="abc123", sheet_id=0, dimension="COLUMNS", start_index=0, end_index=4)
-
-        # Auto-resize rows 1 through 10
-        auto_resize_dimension(spreadsheet_id="abc123", sheet_id=0, dimension="ROWS", start_index=0, end_index=10)
+        str: Confirmation message of the successful conditional formatting rule creation.
     """
     logger.info(
-        f"[auto_resize_dimension] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
-        f"Sheet ID: {sheet_id}, Dimension: {dimension}, Range: {start_index}-{end_index - 1}"
+        f"[add_conditional_formatting] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}, Type: {rule_type}"
     )
 
-    # Validate inputs
-    valid_dimensions = ["COLUMNS", "ROWS"]
-    if dimension.upper() not in valid_dimensions:
+    # Parse condition_values if it's a JSON string (MCP passes parameters as JSON strings)
+    if condition_values is not None and isinstance(condition_values, str):
+        try:
+            parsed_values = json.loads(condition_values)
+            if not isinstance(parsed_values, list):
+                raise ValueError(
+                    f"condition_values must be a list, got {type(parsed_values).__name__}"
+                )
+            condition_values = parsed_values
+            logger.info(
+                f"[add_conditional_formatting] Parsed JSON string to Python list with {len(condition_values)} values"
+            )
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON format for condition_values: {e}")
+
+    # Validate rule type
+    rule_type_upper = rule_type.upper()
+    if rule_type_upper not in ["BOOLEAN", "GRADIENT"]:
         raise ValueError(
-            f"dimension must be one of {valid_dimensions}, got '{dimension}'"
-        )
-    if start_index < 0:
-        raise ValueError(f"start_index must be >= 0, got {start_index}")
-    if end_index <= start_index:
-        raise ValueError(
-            f"end_index ({end_index}) must be greater than start_index ({start_index})"
+            f"Invalid rule_type: '{rule_type}'. Must be BOOLEAN or GRADIENT."
         )
 
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse range
+    grid_range = _parse_range_to_grid(range_name)
+    grid_range["sheetId"] = resolved_sheet_id
+
+    # Build the rule based on type
+    rule: Dict[str, Any] = {"ranges": [grid_range]}
+
+    if rule_type_upper == "BOOLEAN":
+        if not condition_type:
+            raise ValueError("condition_type is required for BOOLEAN rules")
+
+        # Valid condition types
+        valid_conditions = [
+            "NUMBER_GREATER",
+            "NUMBER_GREATER_THAN_EQ",
+            "NUMBER_LESS",
+            "NUMBER_LESS_THAN_EQ",
+            "NUMBER_EQ",
+            "NUMBER_NOT_EQ",
+            "NUMBER_BETWEEN",
+            "NUMBER_NOT_BETWEEN",
+            "TEXT_CONTAINS",
+            "TEXT_NOT_CONTAINS",
+            "TEXT_STARTS_WITH",
+            "TEXT_ENDS_WITH",
+            "TEXT_EQ",
+            "BLANK",
+            "NOT_BLANK",
+            "CUSTOM_FORMULA",
+        ]
+        condition_type_upper = condition_type.upper()
+        if condition_type_upper not in valid_conditions:
+            raise ValueError(
+                f"Invalid condition_type: '{condition_type}'. Must be one of: {valid_conditions}"
+            )
+
+        # Build condition
+        condition: Dict[str, Any] = {"type": condition_type_upper}
+        if condition_values:
+            condition["values"] = [{"userEnteredValue": v} for v in condition_values]
+
+        # Build format
+        cell_format: Dict[str, Any] = {}
+        if background_color:
+            cell_format["backgroundColor"] = _parse_color(background_color)
+        if font_color or bold is not None or italic is not None:
+            text_format: Dict[str, Any] = {}
+            if font_color:
+                text_format["foregroundColor"] = _parse_color(font_color)
+            if bold is not None:
+                text_format["bold"] = bold
+            if italic is not None:
+                text_format["italic"] = italic
+            cell_format["textFormat"] = text_format
+
+        rule["booleanRule"] = {"condition": condition, "format": cell_format}
+
+    else:  # GRADIENT
+        # Build gradient rule
+        gradient_rule: Dict[str, Any] = {
+            "minpoint": {
+                "type": "MIN",
+                "color": _parse_color(min_color or "green"),
+            },
+            "maxpoint": {
+                "type": "MAX",
+                "color": _parse_color(max_color or "red"),
+            },
+        }
+        if mid_color:
+            gradient_rule["midpoint"] = {
+                "type": "PERCENTILE",
+                "value": "50",
+                "color": _parse_color(mid_color),
+            }
+
+        rule["gradientRule"] = gradient_rule
+
+    # Build request
+    request_body = {
+        "requests": [{"addConditionalFormatRule": {"rule": rule, "index": 0}}]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully added {rule_type_upper} conditional formatting rule to range '{range_name}' "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully added conditional formatting for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("delete_sheet", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def delete_sheet(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Deletes a sheet from a spreadsheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        sheet_name (Optional[str]): Name of the sheet to delete. Either sheet_name or sheet_id is required.
+        sheet_id (Optional[int]): Numeric ID of the sheet to delete. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful sheet deletion.
+    """
+    logger.info(
+        f"[delete_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet: {sheet_name}, SheetId: {sheet_id}"
+    )
+
+    if sheet_name is None and sheet_id is None:
+        raise ValueError("Either sheet_name or sheet_id must be provided.")
+
+    # Resolve sheet ID and get the sheet name for confirmation message
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Get sheet name for confirmation if we only have ID
+    if sheet_name is None:
+        resolved_sheet_name = await _get_sheet_name_by_id(
+            service, spreadsheet_id, resolved_sheet_id
+        )
+    else:
+        resolved_sheet_name = sheet_name
+
+    # Build the delete request
+    request_body = {"requests": [{"deleteSheet": {"sheetId": resolved_sheet_id}}]}
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully deleted sheet '{resolved_sheet_name}' (ID: {resolved_sheet_id}) "
+        f"from spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully deleted sheet for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("rename_sheet", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def rename_sheet(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    new_name: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Renames a sheet in a spreadsheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        new_name (str): The new name for the sheet. Required.
+        sheet_name (Optional[str]): Current name of the sheet to rename. Either sheet_name or sheet_id is required.
+        sheet_id (Optional[int]): Numeric ID of the sheet to rename. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful sheet rename.
+    """
+    logger.info(
+        f"[rename_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet: {sheet_name}, SheetId: {sheet_id}, NewName: {new_name}"
+    )
+
+    if sheet_name is None and sheet_id is None:
+        raise ValueError("Either sheet_name or sheet_id must be provided.")
+
+    if not new_name or not new_name.strip():
+        raise ValueError("new_name cannot be empty.")
+
+    # Resolve sheet ID and get the old sheet name for confirmation message
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Get old sheet name for confirmation if we only have ID
+    if sheet_name is None:
+        old_sheet_name = await _get_sheet_name_by_id(
+            service, spreadsheet_id, resolved_sheet_id
+        )
+    else:
+        old_sheet_name = sheet_name
+
+    # Build the rename request using updateSheetProperties
     request_body = {
         "requests": [
             {
-                "autoResizeDimensions": {
-                    "dimensions": {
-                        "sheetId": sheet_id,
-                        "dimension": dimension.upper(),
+                "updateSheetProperties": {
+                    "properties": {"sheetId": resolved_sheet_id, "title": new_name},
+                    "fields": "title",
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully renamed sheet from '{old_sheet_name}' to '{new_name}' "
+        f"(ID: {resolved_sheet_id}) in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully renamed sheet for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("set_borders", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def set_borders(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    range_name: str,
+    top: Optional[bool] = None,
+    bottom: Optional[bool] = None,
+    left: Optional[bool] = None,
+    right: Optional[bool] = None,
+    inner_horizontal: Optional[bool] = None,
+    inner_vertical: Optional[bool] = None,
+    border_style: str = "SOLID",
+    border_color: Optional[str] = None,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Applies borders to a range of cells in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        range_name (str): The range to apply borders to (e.g., "A1:D10", "B2:C5"). Required.
+        top (Optional[bool]): Apply border to the top edge of the range.
+        bottom (Optional[bool]): Apply border to the bottom edge of the range.
+        left (Optional[bool]): Apply border to the left edge of the range.
+        right (Optional[bool]): Apply border to the right edge of the range.
+        inner_horizontal (Optional[bool]): Apply horizontal borders between cells inside the range.
+        inner_vertical (Optional[bool]): Apply vertical borders between cells inside the range.
+        border_style (str): Style of the border - DOTTED, DASHED, SOLID, SOLID_MEDIUM, SOLID_THICK, DOUBLE, or NONE. Defaults to SOLID. Use NONE to remove a border.
+        border_color (Optional[str]): Border color - hex (#RRGGBB) or color name (red, blue, etc.). Defaults to black.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful border operation.
+    """
+    logger.info(
+        f"[set_borders] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+    )
+
+    # Validate border style
+    valid_styles = [
+        "DOTTED",
+        "DASHED",
+        "SOLID",
+        "SOLID_MEDIUM",
+        "SOLID_THICK",
+        "DOUBLE",
+        "NONE",
+    ]
+    border_style_upper = border_style.upper()
+    if border_style_upper not in valid_styles:
+        raise ValueError(
+            f"Invalid border_style: '{border_style}'. Must be one of: {valid_styles}"
+        )
+
+    # Check if at least one border position is specified
+    if all(
+        v is None for v in [top, bottom, left, right, inner_horizontal, inner_vertical]
+    ):
+        return "No border positions specified. Please set at least one of: top, bottom, left, right, inner_horizontal, inner_vertical."
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse range
+    grid_range = _parse_range_to_grid(range_name)
+    grid_range["sheetId"] = resolved_sheet_id
+
+    # Build border style object
+    def build_border(enabled: Optional[bool]) -> Optional[Dict[str, Any]]:
+        if enabled is None:
+            return None
+        if not enabled:
+            # Explicitly set to False means remove the border
+            return {"style": "NONE"}
+        border: Dict[str, Any] = {"style": border_style_upper}
+        if border_color:
+            border["color"] = _parse_color(border_color)
+        else:
+            # Default to black
+            border["color"] = {"red": 0, "green": 0, "blue": 0}
+        return border
+
+    # Build the updateBorders request
+    update_borders_request: Dict[str, Any] = {"range": grid_range}
+
+    if top is not None:
+        update_borders_request["top"] = build_border(top)
+    if bottom is not None:
+        update_borders_request["bottom"] = build_border(bottom)
+    if left is not None:
+        update_borders_request["left"] = build_border(left)
+    if right is not None:
+        update_borders_request["right"] = build_border(right)
+    if inner_horizontal is not None:
+        update_borders_request["innerHorizontal"] = build_border(inner_horizontal)
+    if inner_vertical is not None:
+        update_borders_request["innerVertical"] = build_border(inner_vertical)
+
+    # Build request
+    request_body = {"requests": [{"updateBorders": update_borders_request}]}
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Build summary of applied borders
+    border_positions = []
+    if top is not None:
+        border_positions.append(f"top={'on' if top else 'off'}")
+    if bottom is not None:
+        border_positions.append(f"bottom={'on' if bottom else 'off'}")
+    if left is not None:
+        border_positions.append(f"left={'on' if left else 'off'}")
+    if right is not None:
+        border_positions.append(f"right={'on' if right else 'off'}")
+    if inner_horizontal is not None:
+        border_positions.append(
+            f"inner_horizontal={'on' if inner_horizontal else 'off'}"
+        )
+    if inner_vertical is not None:
+        border_positions.append(f"inner_vertical={'on' if inner_vertical else 'off'}")
+
+    style_info = f"style={border_style_upper}"
+    if border_color:
+        style_info += f", color={border_color}"
+
+    text_output = (
+        f"Successfully applied borders to range '{range_name}' in spreadsheet {spreadsheet_id} for {user_google_email}.\n"
+        f"Borders: {', '.join(border_positions)} ({style_info})"
+    )
+
+    logger.info(f"Successfully set borders for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("sort_range", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def sort_range(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    range_name: str,
+    sort_column: str,
+    ascending: bool = True,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Sorts data in a range by a specified column.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        range_name (str): The range to sort (e.g., "A1:D10"). Required.
+        sort_column (str): The column letter to sort by (e.g., "A", "B", "AA"). Required.
+        ascending (bool): Sort in ascending order if True, descending if False. Defaults to True.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful sort operation.
+    """
+    logger.info(
+        f"[sort_range] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}, Column: {sort_column}"
+    )
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse range to get grid coordinates
+    grid_range = _parse_range_to_grid(range_name)
+    grid_range["sheetId"] = resolved_sheet_id
+
+    # Parse the sort column letter to get its index
+    sort_col_ref = f"{sort_column}1"
+    _, sort_col_idx = _parse_cell_reference(sort_col_ref)
+
+    # Validate that sort column is within the range
+    if sort_col_idx < grid_range["startColumnIndex"]:
+        raise ValueError(
+            f"Sort column '{sort_column}' (index {sort_col_idx}) is before the range start column."
+        )
+    if sort_col_idx >= grid_range["endColumnIndex"]:
+        raise ValueError(
+            f"Sort column '{sort_column}' (index {sort_col_idx}) is after the range end column."
+        )
+
+    # Build the sort request
+    request_body = {
+        "requests": [
+            {
+                "sortRange": {
+                    "range": grid_range,
+                    "sortSpecs": [
+                        {
+                            "dimensionIndex": sort_col_idx,
+                            "sortOrder": "ASCENDING" if ascending else "DESCENDING",
+                        }
+                    ],
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    sort_order = "ascending" if ascending else "descending"
+    text_output = (
+        f"Successfully sorted range '{range_name}' by column '{sort_column}' ({sort_order}) "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully sorted range for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("find_and_replace", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def find_and_replace(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    find_text: str,
+    replace_text: str,
+    range_name: Optional[str] = None,
+    match_case: bool = False,
+    match_entire_cell: bool = False,
+    use_regex: bool = False,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+    all_sheets: bool = False,
+) -> str:
+    """
+    Finds and replaces text in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        find_text (str): The text to find. Required.
+        replace_text (str): The text to replace with. Required.
+        range_name (Optional[str]): The range to search in (e.g., "A1:D10"). If not provided, searches entire sheet.
+        match_case (bool): If True, performs case-sensitive matching. Defaults to False.
+        match_entire_cell (bool): If True, only matches cells that contain exactly the find_text. Defaults to False.
+        use_regex (bool): If True, treats find_text as a regular expression. Defaults to False.
+        sheet_name (Optional[str]): Name of the sheet to search. If not provided and all_sheets=False, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+        all_sheets (bool): If True, searches all sheets in the spreadsheet. Defaults to False.
+
+    Returns:
+        str: Summary of replacements made including count.
+    """
+    logger.info(
+        f"[find_and_replace] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Find: '{find_text}', Replace: '{replace_text}'"
+    )
+
+    # Build the find/replace request
+    find_replace_request: Dict[str, Any] = {
+        "find": find_text,
+        "replacement": replace_text,
+        "matchCase": match_case,
+        "matchEntireCell": match_entire_cell,
+        "searchByRegex": use_regex,
+    }
+
+    if all_sheets:
+        # Search all sheets
+        find_replace_request["allSheets"] = True
+    elif range_name:
+        # Search within a specific range
+        resolved_sheet_id = await _resolve_sheet_id(
+            service, spreadsheet_id, sheet_name, sheet_id
+        )
+        grid_range = _parse_range_to_grid(range_name)
+        grid_range["sheetId"] = resolved_sheet_id
+        find_replace_request["range"] = grid_range
+    else:
+        # Search entire sheet (single sheet)
+        resolved_sheet_id = await _resolve_sheet_id(
+            service, spreadsheet_id, sheet_name, sheet_id
+        )
+        find_replace_request["sheetId"] = resolved_sheet_id
+
+    request_body = {"requests": [{"findReplace": find_replace_request}]}
+
+    response = await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Get the result
+    replies = response.get("replies", [])
+    if replies and "findReplace" in replies[0]:
+        result = replies[0]["findReplace"]
+        occurrences_changed = result.get("occurrencesChanged", 0)
+        values_changed = result.get("valuesChanged", 0)
+        rows_changed = result.get("rowsChanged", 0)
+        sheets_changed = result.get("sheetsChanged", 0)
+    else:
+        occurrences_changed = 0
+        values_changed = 0
+        rows_changed = 0
+        sheets_changed = 0
+
+    # Build summary
+    search_scope = (
+        "all sheets"
+        if all_sheets
+        else (f"range '{range_name}'" if range_name else "entire sheet")
+    )
+    text_output = (
+        f"Find and replace completed in spreadsheet {spreadsheet_id} for {user_google_email}.\n"
+        f"Search scope: {search_scope}\n"
+        f"Found: '{find_text}' -> Replaced with: '{replace_text}'\n"
+        f"Results: {occurrences_changed} occurrence(s) replaced in {values_changed} cell(s), "
+        f"{rows_changed} row(s), {sheets_changed} sheet(s)."
+    )
+
+    logger.info(
+        f"Successfully completed find/replace: {occurrences_changed} occurrences changed for {user_google_email}."
+    )
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("insert_rows", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def insert_rows(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    start_row: int,
+    num_rows: int = 1,
+    inherit_from_before: bool = False,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Inserts blank rows at a specified position in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        start_row (int): The row number where new rows will be inserted (1-indexed).
+            New rows are inserted BEFORE this row. Required.
+        num_rows (int): The number of rows to insert. Defaults to 1.
+        inherit_from_before (bool): If True, new rows inherit formatting from the row
+            before start_row. If False, inherit from start_row. Defaults to False.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful row insertion.
+    """
+    logger.info(
+        f"[insert_rows] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, StartRow: {start_row}, NumRows: {num_rows}"
+    )
+
+    if start_row < 1:
+        raise ValueError("start_row must be 1 or greater (1-indexed)")
+    if num_rows < 1:
+        raise ValueError("num_rows must be 1 or greater")
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Convert to 0-indexed
+    start_index = start_row - 1
+
+    # Build the insert request
+    request_body = {
+        "requests": [
+            {
+                "insertDimension": {
+                    "range": {
+                        "sheetId": resolved_sheet_id,
+                        "dimension": "ROWS",
                         "startIndex": start_index,
-                        "endIndex": end_index,
+                        "endIndex": start_index + num_rows,
+                    },
+                    "inheritFromBefore": inherit_from_before,
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully inserted {num_rows} row(s) at row {start_row} "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully inserted rows for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("delete_rows", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def delete_rows(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    start_row: int,
+    num_rows: int = 1,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Deletes rows at a specified position in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        start_row (int): The first row number to delete (1-indexed). Required.
+        num_rows (int): The number of rows to delete. Defaults to 1.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful row deletion.
+    """
+    logger.info(
+        f"[delete_rows] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, StartRow: {start_row}, NumRows: {num_rows}"
+    )
+
+    if start_row < 1:
+        raise ValueError("start_row must be 1 or greater (1-indexed)")
+    if num_rows < 1:
+        raise ValueError("num_rows must be 1 or greater")
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Convert to 0-indexed
+    start_index = start_row - 1
+
+    # Build the delete request
+    request_body = {
+        "requests": [
+            {
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": resolved_sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": start_index,
+                        "endIndex": start_index + num_rows,
                     }
                 }
             }
@@ -2618,27 +2322,424 @@ async def auto_resize_dimension(
         .execute
     )
 
-    dim_name = "column" if dimension.upper() == "COLUMNS" else "row"
-    items_affected = end_index - start_index
-    if items_affected == 1:
-        dim_desc = f"{dim_name} {start_index}"
-    else:
-        dim_desc = f"{dim_name}s {start_index}-{end_index - 1}"
-
+    end_row = start_row + num_rows - 1
+    row_range = f"{start_row}-{end_row}" if num_rows > 1 else str(start_row)
     text_output = (
-        f"Successfully auto-resized {dim_desc} to fit content "
-        f"in sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
+        f"Successfully deleted {num_rows} row(s) ({row_range}) "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
     )
 
-    logger.info(f"Successfully auto-resized {dim_desc} for {user_google_email}.")
+    logger.info(f"Successfully deleted rows for {user_google_email}.")
     return text_output
 
 
-# Create comment management tools for sheets
-_comment_tools = create_comment_tools("spreadsheet", "spreadsheet_id")
+@server.tool()
+@handle_http_errors("insert_columns", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def insert_columns(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    start_column: str,
+    num_columns: int = 1,
+    inherit_from_before: bool = False,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Inserts blank columns at a specified position in a Google Sheet.
 
-# Extract and register the functions
-read_sheet_comments = _comment_tools["read_comments"]
-create_sheet_comment = _comment_tools["create_comment"]
-reply_to_sheet_comment = _comment_tools["reply_to_comment"]
-resolve_sheet_comment = _comment_tools["resolve_comment"]
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        start_column (str): The column letter where new columns will be inserted (e.g., "A", "B", "AA").
+            New columns are inserted BEFORE this column. Required.
+        num_columns (int): The number of columns to insert. Defaults to 1.
+        inherit_from_before (bool): If True, new columns inherit formatting from the column
+            before start_column. If False, inherit from start_column. Defaults to False.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful column insertion.
+    """
+    logger.info(
+        f"[insert_columns] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, StartColumn: {start_column}, NumColumns: {num_columns}"
+    )
+
+    if num_columns < 1:
+        raise ValueError("num_columns must be 1 or greater")
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse column letter to index
+    col_ref = f"{start_column}1"
+    _, start_col_idx = _parse_cell_reference(col_ref)
+
+    # Build the insert request
+    request_body = {
+        "requests": [
+            {
+                "insertDimension": {
+                    "range": {
+                        "sheetId": resolved_sheet_id,
+                        "dimension": "COLUMNS",
+                        "startIndex": start_col_idx,
+                        "endIndex": start_col_idx + num_columns,
+                    },
+                    "inheritFromBefore": inherit_from_before,
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully inserted {num_columns} column(s) at column {start_column} "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully inserted columns for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("delete_columns", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def delete_columns(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    start_column: str,
+    num_columns: int = 1,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Deletes columns at a specified position in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        start_column (str): The first column letter to delete (e.g., "A", "B", "AA"). Required.
+        num_columns (int): The number of columns to delete. Defaults to 1.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful column deletion.
+    """
+    logger.info(
+        f"[delete_columns] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, StartColumn: {start_column}, NumColumns: {num_columns}"
+    )
+
+    if num_columns < 1:
+        raise ValueError("num_columns must be 1 or greater")
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse column letter to index
+    col_ref = f"{start_column}1"
+    _, start_col_idx = _parse_cell_reference(col_ref)
+
+    # Build the delete request
+    request_body = {
+        "requests": [
+            {
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": resolved_sheet_id,
+                        "dimension": "COLUMNS",
+                        "startIndex": start_col_idx,
+                        "endIndex": start_col_idx + num_columns,
+                    }
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    if num_columns > 1:
+        end_col_letter = _column_index_to_letter(start_col_idx + num_columns - 1)
+        col_range = f"{start_column}-{end_col_letter}"
+    else:
+        col_range = start_column
+
+    text_output = (
+        f"Successfully deleted {num_columns} column(s) ({col_range}) "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully deleted columns for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("auto_resize_dimension", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def auto_resize_dimension(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    dimension: str,
+    start_index: Optional[int] = None,
+    end_index: Optional[int] = None,
+    start_column: Optional[str] = None,
+    end_column: Optional[str] = None,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Auto-resizes rows or columns to fit their content in a Google Sheet.
+
+    For rows, this adjusts the height to fit the tallest cell content.
+    For columns, this adjusts the width to fit the widest cell content.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        dimension (str): Either "ROWS" or "COLUMNS". Required.
+        start_index (Optional[int]): For ROWS: starting row number (1-indexed).
+            For COLUMNS: starting column index (0-indexed). Use start_column instead for columns.
+        end_index (Optional[int]): For ROWS: ending row number (inclusive, 1-indexed).
+            For COLUMNS: ending column index (exclusive, 0-indexed). Use end_column instead for columns.
+        start_column (Optional[str]): For COLUMNS: starting column letter (e.g., "A", "B", "AA").
+            More intuitive than start_index for columns.
+        end_column (Optional[str]): For COLUMNS: ending column letter (inclusive).
+            More intuitive than end_index for columns.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful auto-resize operation.
+    """
+    logger.info(
+        f"[auto_resize_dimension] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Dimension: {dimension}"
+    )
+
+    # Validate dimension
+    dimension_upper = dimension.upper()
+    if dimension_upper not in ["ROWS", "COLUMNS"]:
+        raise ValueError(
+            f"Invalid dimension: '{dimension}'. Must be ROWS or COLUMNS."
+        )
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Determine start and end indices
+    if dimension_upper == "COLUMNS":
+        # For columns, prefer letter-based specification
+        if start_column is not None:
+            col_ref = f"{start_column}1"
+            _, resolved_start = _parse_cell_reference(col_ref)
+        elif start_index is not None:
+            resolved_start = start_index
+        else:
+            resolved_start = 0  # Default to first column
+
+        if end_column is not None:
+            col_ref = f"{end_column}1"
+            _, end_col_idx = _parse_cell_reference(col_ref)
+            resolved_end = end_col_idx + 1  # API uses exclusive end
+        elif end_index is not None:
+            resolved_end = end_index
+        else:
+            # Auto-resize all columns - need to get sheet dimensions
+            spreadsheet = await asyncio.to_thread(
+                service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+            )
+            for sheet in spreadsheet.get("sheets", []):
+                if sheet.get("properties", {}).get("sheetId") == resolved_sheet_id:
+                    resolved_end = sheet.get("properties", {}).get(
+                        "gridProperties", {}
+                    ).get("columnCount", 26)
+                    break
+            else:
+                resolved_end = 26  # Default if not found
+    else:
+        # For rows, use 1-indexed start_index and end_index
+        if start_index is not None:
+            if start_index < 1:
+                raise ValueError("start_index for rows must be 1 or greater (1-indexed)")
+            resolved_start = start_index - 1  # Convert to 0-indexed
+        else:
+            resolved_start = 0  # Default to first row
+
+        if end_index is not None:
+            if end_index < start_index if start_index else 1:
+                raise ValueError("end_index must be >= start_index")
+            resolved_end = end_index  # Already 1-indexed, use as exclusive end in 0-indexed terms
+        else:
+            # Auto-resize all rows - need to get sheet dimensions
+            spreadsheet = await asyncio.to_thread(
+                service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+            )
+            for sheet in spreadsheet.get("sheets", []):
+                if sheet.get("properties", {}).get("sheetId") == resolved_sheet_id:
+                    resolved_end = sheet.get("properties", {}).get(
+                        "gridProperties", {}
+                    ).get("rowCount", 1000)
+                    break
+            else:
+                resolved_end = 1000  # Default if not found
+
+    # Build the auto-resize request
+    request_body = {
+        "requests": [
+            {
+                "autoResizeDimensions": {
+                    "dimensions": {
+                        "sheetId": resolved_sheet_id,
+                        "dimension": dimension_upper,
+                        "startIndex": resolved_start,
+                        "endIndex": resolved_end,
+                    }
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Build summary
+    if dimension_upper == "COLUMNS":
+        if start_column and end_column:
+            range_desc = f"columns {start_column}-{end_column}"
+        elif start_column:
+            range_desc = f"columns starting from {start_column}"
+        else:
+            range_desc = "all columns"
+    else:
+        if start_index and end_index:
+            range_desc = f"rows {start_index}-{end_index}"
+        elif start_index:
+            range_desc = f"rows starting from {start_index}"
+        else:
+            range_desc = "all rows"
+
+    text_output = (
+        f"Successfully auto-resized {range_desc} to fit content "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully auto-resized dimensions for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("clear_conditional_formatting", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def clear_conditional_formatting(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    range_name: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Clears all conditional formatting rules that overlap with a range in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        range_name (str): The range to clear formatting from (e.g., "A1:D10"). Required.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful conditional formatting removal.
+    """
+    logger.info(
+        f"[clear_conditional_formatting] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+    )
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse range
+    grid_range = _parse_range_to_grid(range_name)
+    grid_range["sheetId"] = resolved_sheet_id
+
+    # Get existing conditional format rules to find overlapping ones
+    spreadsheet = await asyncio.to_thread(
+        service.spreadsheets()
+        .get(
+            spreadsheetId=spreadsheet_id,
+            fields="sheets.conditionalFormats,sheets.properties.sheetId",
+        )
+        .execute
+    )
+
+    # Find rules that overlap with our range
+    rules_to_delete = []
+    for sheet in spreadsheet.get("sheets", []):
+        if sheet.get("properties", {}).get("sheetId") != resolved_sheet_id:
+            continue
+        for i, rule in enumerate(sheet.get("conditionalFormats", [])):
+            for rule_range in rule.get("ranges", []):
+                # Check if ranges overlap
+                if (
+                    rule_range.get("sheetId", 0) == resolved_sheet_id
+                    and rule_range.get("startRowIndex", 0) < grid_range["endRowIndex"]
+                    and rule_range.get("endRowIndex", float("inf"))
+                    > grid_range["startRowIndex"]
+                    and rule_range.get("startColumnIndex", 0)
+                    < grid_range["endColumnIndex"]
+                    and rule_range.get("endColumnIndex", float("inf"))
+                    > grid_range["startColumnIndex"]
+                ):
+                    rules_to_delete.append(i)
+                    break
+
+    if not rules_to_delete:
+        return (
+            f"No conditional formatting rules found overlapping range '{range_name}'."
+        )
+
+    # Delete rules in reverse order to maintain indices
+    requests = [
+        {"deleteConditionalFormatRule": {"sheetId": resolved_sheet_id, "index": i}}
+        for i in sorted(rules_to_delete, reverse=True)
+    ]
+
+    request_body = {"requests": requests}
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully cleared {len(rules_to_delete)} conditional formatting rule(s) from range '{range_name}' "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully cleared conditional formatting for {user_google_email}.")
+    return text_output
