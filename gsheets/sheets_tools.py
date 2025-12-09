@@ -1246,6 +1246,140 @@ async def copy_sheet(
     return text_output
 
 
+@server.tool()
+@handle_http_errors("append_rows", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def append_rows(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    values: Union[str, List[List[str]]],
+    range_name: str = "A:A",
+    value_input_option: str = "USER_ENTERED",
+    insert_data_option: str = "INSERT_ROWS",
+) -> str:
+    """
+    Appends rows of data to the end of existing data in a Google Sheet.
+
+    This tool automatically finds the end of existing data in the specified range
+    and appends new rows there, without requiring you to know the current row count.
+    This is ideal for adding new records to an existing table or dataset.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        values (Union[str, List[List[str]]]): 2D array of values to append.
+            Each inner array represents a row. Can be a JSON string or Python list.
+            Required.
+        range_name (str): The range to search for existing data (e.g., "Sheet1!A:A",
+            "A:C", "Sheet1!A:Z"). The API will find the last row of data within this
+            range and append after it. Defaults to "A:A".
+        value_input_option (str): How to interpret input values. Defaults to "USER_ENTERED".
+            - "USER_ENTERED": Values are parsed as if entered by a user (formulas executed).
+            - "RAW": Values are stored as-is without parsing.
+        insert_data_option (str): How to handle existing data. Defaults to "INSERT_ROWS".
+            - "INSERT_ROWS": Inserts new rows for the appended data.
+            - "OVERWRITE": Overwrites existing data after the table (rarely needed).
+
+    Returns:
+        str: Confirmation message with details about the appended data (number of rows,
+             updated range, etc.).
+
+    Example:
+        Append 2 rows to a sheet:
+        >>> append_rows(
+        ...     spreadsheet_id="...",
+        ...     values=[["Alice", "30", "Engineer"], ["Bob", "25", "Designer"]],
+        ...     range_name="Sheet1!A:C"
+        ... )
+
+        Append data to the first sheet (auto-detected):
+        >>> append_rows(
+        ...     spreadsheet_id="...",
+        ...     values=[["New Row 1"], ["New Row 2"]],
+        ...     range_name="A:A"
+        ... )
+    """
+    logger.info(
+        f"[append_rows] Invoked. Email: '{user_google_email}', "
+        f"Spreadsheet: {spreadsheet_id}, Range: {range_name}, "
+        f"insert_data_option: {insert_data_option}"
+    )
+
+    # Parse values if it's a JSON string (MCP passes parameters as JSON strings)
+    if isinstance(values, str):
+        try:
+            parsed_values = json.loads(values)
+            if not isinstance(parsed_values, list):
+                raise ValueError(
+                    f"Values must be a list, got {type(parsed_values).__name__}"
+                )
+            # Validate it's a list of lists
+            for i, row in enumerate(parsed_values):
+                if not isinstance(row, list):
+                    raise ValueError(
+                        f"Row {i} must be a list, got {type(row).__name__}"
+                    )
+            values = parsed_values
+            logger.info(
+                f"[append_rows] Parsed JSON string to Python list with {len(values)} rows"
+            )
+        except json.JSONDecodeError as e:
+            raise Exception(f"Invalid JSON format for values: {e}")
+        except ValueError as e:
+            raise Exception(f"Invalid values structure: {e}")
+
+    if not values:
+        raise Exception("Values must be provided and non-empty.")
+
+    if value_input_option not in ("USER_ENTERED", "RAW"):
+        raise Exception(
+            f"Invalid value_input_option: {value_input_option}. "
+            f"Must be 'USER_ENTERED' or 'RAW'."
+        )
+
+    if insert_data_option not in ("INSERT_ROWS", "OVERWRITE"):
+        raise Exception(
+            f"Invalid insert_data_option: {insert_data_option}. "
+            f"Must be 'INSERT_ROWS' or 'OVERWRITE'."
+        )
+
+    body = {"values": values}
+
+    result = await asyncio.to_thread(
+        service.spreadsheets()
+        .values()
+        .append(
+            spreadsheetId=spreadsheet_id,
+            range=range_name,
+            valueInputOption=value_input_option,
+            insertDataOption=insert_data_option,
+            body=body,
+        )
+        .execute
+    )
+
+    # Extract result information
+    updates = result.get("updates", {})
+    updated_range = updates.get("updatedRange", "unknown range")
+    updated_rows = updates.get("updatedRows", len(values))
+    updated_columns = updates.get("updatedColumns", 0)
+    updated_cells = updates.get("updatedCells", 0)
+
+    text_output = (
+        f"Successfully appended {updated_rows} row(s) to spreadsheet {spreadsheet_id} "
+        f"for {user_google_email}. "
+        f"Updated range: {updated_range}. "
+        f"Cells updated: {updated_cells} ({updated_columns} columns)."
+    )
+
+    logger.info(
+        f"Successfully appended {updated_rows} row(s) for {user_google_email} "
+        f"to range {updated_range}."
+    )
+    return text_output
+
+
 # Create comment management tools for sheets
 _comment_tools = create_comment_tools("spreadsheet", "spreadsheet_id")
 
