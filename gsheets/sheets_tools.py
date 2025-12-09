@@ -8,7 +8,7 @@ import logging
 import asyncio
 import json
 import re
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 
 from auth.service_decorator import require_google_service
@@ -218,6 +218,9 @@ async def read_sheet_values(
     range_name: str = "A1:Z1000",
     sheet_name: Optional[str] = None,
     sheet_id: Optional[int] = None,
+    value_render_option: Literal[
+        "FORMATTED_VALUE", "UNFORMATTED_VALUE", "FORMULA"
+    ] = "FORMATTED_VALUE",
 ) -> str:
     """
     Reads values from a specific range in a Google Sheet.
@@ -233,12 +236,17 @@ async def read_sheet_values(
             For sheet names with spaces, this avoids needing to escape quotes.
         sheet_id (Optional[int]): Numeric ID of the sheet to read from. Alternative to sheet_name.
             Takes precedence over sheet_name if both are provided.
+        value_render_option (Literal["FORMATTED_VALUE", "UNFORMATTED_VALUE", "FORMULA"]):
+            How values should be represented in the output. Defaults to "FORMATTED_VALUE".
+            - FORMATTED_VALUE: Values are formatted according to cell formatting (e.g., "100%" for 1.0 in a percentage cell).
+            - UNFORMATTED_VALUE: Values are returned as raw underlying values (e.g., 1.0 instead of "100%").
+            - FORMULA: Returns the formula in the cell (e.g., "=A1+B1" instead of the calculated result).
 
     Returns:
         str: The formatted values from the specified range.
     """
     logger.info(
-        f"[read_sheet_values] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}, Sheet: {sheet_name}, SheetId: {sheet_id}"
+        f"[read_sheet_values] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}, Sheet: {sheet_name}, SheetId: {sheet_id}, ValueRenderOption: {value_render_option}"
     )
 
     # Build the full range with sheet reference if sheet_name or sheet_id is provided
@@ -249,7 +257,11 @@ async def read_sheet_values(
     result = await asyncio.to_thread(
         service.spreadsheets()
         .values()
-        .get(spreadsheetId=spreadsheet_id, range=full_range)
+        .get(
+            spreadsheetId=spreadsheet_id,
+            range=full_range,
+            valueRenderOption=value_render_option,
+        )
         .execute
     )
 
@@ -264,8 +276,15 @@ async def read_sheet_values(
         padded_row = row + [""] * max(0, len(values[0]) - len(row)) if values else row
         formatted_rows.append(f"Row {i:2d}: {padded_row}")
 
+    # Build render option context for output message
+    render_context = ""
+    if value_render_option == "FORMULA":
+        render_context = " (showing formulas)"
+    elif value_render_option == "UNFORMATTED_VALUE":
+        render_context = " (unformatted values)"
+
     text_output = (
-        f"Successfully read {len(values)} rows from range '{range_name}' in spreadsheet {spreadsheet_id} for {user_google_email}:\n"
+        f"Successfully read {len(values)} rows from range '{range_name}' in spreadsheet {spreadsheet_id} for {user_google_email}{render_context}:\n"
         + "\n".join(formatted_rows[:50])  # Limit to first 50 rows for readability
         + (f"\n... and {len(values) - 50} more rows" if len(values) > 50 else "")
     )
