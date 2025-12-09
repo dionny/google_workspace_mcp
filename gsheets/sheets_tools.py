@@ -409,6 +409,130 @@ async def modify_sheet_values(
 
 
 @server.tool()
+@handle_http_errors("append_sheet_values", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def append_sheet_values(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    range_name: str,
+    values: Union[str, List[List[str]]],
+    value_input_option: str = "USER_ENTERED",
+    insert_data_option: Literal["INSERT_ROWS", "OVERWRITE"] = "INSERT_ROWS",
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Appends values after existing data in a Google Sheet.
+
+    This tool automatically finds the end of existing data in the specified range
+    and appends the new values there. This is ideal for adding new rows to data
+    tables without needing to know the exact row number.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        range_name (str): The range to search for a table to append to (e.g., "A:D" or "Sheet1!A:D").
+            The API searches this range to find existing data and appends after it.
+            Can include sheet name prefix, but this is optional if sheet_name or sheet_id is provided. Required.
+        values (Union[str, List[List[str]]]): 2D array of values to append. Can be a JSON string
+            (e.g., '[["row1col1", "row1col2"], ["row2col1", "row2col2"]]') or Python list. Required.
+        value_input_option (str): How to interpret input values. Defaults to "USER_ENTERED".
+            - "USER_ENTERED": Values are parsed as if typed by the user (formulas evaluated, numbers parsed).
+            - "RAW": Values are stored exactly as provided.
+        insert_data_option (Literal["INSERT_ROWS", "OVERWRITE"]): How to insert data. Defaults to "INSERT_ROWS".
+            - "INSERT_ROWS": Insert new rows for the new data.
+            - "OVERWRITE": Overwrite existing data in the area where new data is written.
+        sheet_name (Optional[str]): Name of the sheet to append to. If provided, the range_name
+            only needs the cell range (e.g., "A:D" instead of "Sheet1!A:D").
+        sheet_id (Optional[int]): Numeric ID of the sheet to append to. Alternative to sheet_name.
+            Takes precedence over sheet_name if both are provided.
+
+    Returns:
+        str: Confirmation message including the range where data was actually appended
+             and the number of updated cells, rows, and columns.
+
+    Example:
+        # Append two rows to a sheet
+        append_sheet_values(
+            user_google_email="user@example.com",
+            spreadsheet_id="abc123",
+            range_name="A:C",
+            values=[["Alice", "Engineer", "2024"], ["Bob", "Designer", "2023"]]
+        )
+    """
+    logger.info(
+        f"[append_sheet_values] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"Range: {range_name}, Sheet: {sheet_name}, SheetId: {sheet_id}, InsertDataOption: {insert_data_option}"
+    )
+
+    # Parse values if it's a JSON string (MCP passes parameters as JSON strings)
+    if isinstance(values, str):
+        try:
+            parsed_values = json.loads(values)
+            if not isinstance(parsed_values, list):
+                raise ValueError(
+                    f"Values must be a list, got {type(parsed_values).__name__}"
+                )
+            # Validate it's a list of lists
+            for i, row in enumerate(parsed_values):
+                if not isinstance(row, list):
+                    raise ValueError(
+                        f"Row {i} must be a list, got {type(row).__name__}"
+                    )
+            values = parsed_values
+            logger.info(
+                f"[append_sheet_values] Parsed JSON string to Python list with {len(values)} rows"
+            )
+        except json.JSONDecodeError as e:
+            raise Exception(f"Invalid JSON format for values: {e}")
+        except ValueError as e:
+            raise Exception(f"Invalid values structure: {e}")
+
+    if not values:
+        raise Exception("Values cannot be empty. Provide at least one row to append.")
+
+    # Build the full range with sheet reference if sheet_name or sheet_id is provided
+    full_range = await _build_full_range(
+        service, spreadsheet_id, range_name, sheet_name, sheet_id
+    )
+
+    body = {"values": values}
+
+    result = await asyncio.to_thread(
+        service.spreadsheets()
+        .values()
+        .append(
+            spreadsheetId=spreadsheet_id,
+            range=full_range,
+            valueInputOption=value_input_option,
+            insertDataOption=insert_data_option,
+            body=body,
+        )
+        .execute
+    )
+
+    # Extract update information from the response
+    updates = result.get("updates", {})
+    updated_range = updates.get("updatedRange", range_name)
+    updated_cells = updates.get("updatedCells", 0)
+    updated_rows = updates.get("updatedRows", 0)
+    updated_columns = updates.get("updatedColumns", 0)
+
+    text_output = (
+        f"Successfully appended data to spreadsheet {spreadsheet_id} for {user_google_email}. "
+        f"Range: {updated_range} | "
+        f"Updated: {updated_rows} rows, {updated_columns} columns, {updated_cells} cells."
+    )
+
+    logger.info(
+        f"Successfully appended {updated_rows} rows ({updated_cells} cells) to range '{updated_range}' for {user_google_email}."
+    )
+
+    return text_output
+
+
+@server.tool()
 @handle_http_errors("create_spreadsheet", service_type="sheets")
 @require_google_service("sheets", "sheets_write")
 async def create_spreadsheet(

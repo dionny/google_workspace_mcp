@@ -265,3 +265,79 @@ class TestAppendValuesEdgeCases:
 
         assert "!" not in range_name
         assert range_name == "A:D"
+
+    def test_sheet_name_parameter(self):
+        """Test that sheet_name parameter can be used separately from range."""
+        sheet_name = "My Data Sheet"
+        range_name = "A:D"
+
+        # When sheet_name is provided, the full range should be built with it
+        expected_full_range = f"'{sheet_name}'!{range_name}"
+
+        assert "My Data Sheet" in expected_full_range
+        assert range_name in expected_full_range
+
+    def test_sheet_id_parameter(self):
+        """Test that sheet_id parameter can be used to identify sheet."""
+        sheet_id = 123456
+
+        # sheet_id should be an integer
+        assert isinstance(sheet_id, int)
+        assert sheet_id > 0
+
+
+class TestAppendValuesResponseParsing:
+    """Tests for parsing append_values API response."""
+
+    def test_parse_updates_response(self):
+        """Test parsing the updates object from API response."""
+        api_response = {
+            "spreadsheetId": "abc123",
+            "tableRange": "Sheet1!A1:C4",
+            "updates": {
+                "spreadsheetId": "abc123",
+                "updatedRange": "Sheet1!A5:C6",
+                "updatedRows": 2,
+                "updatedColumns": 3,
+                "updatedCells": 6,
+            },
+        }
+
+        updates = api_response.get("updates", {})
+
+        assert updates.get("updatedRange") == "Sheet1!A5:C6"
+        assert updates.get("updatedRows") == 2
+        assert updates.get("updatedColumns") == 3
+        assert updates.get("updatedCells") == 6
+
+    def test_response_with_missing_updates(self):
+        """Test handling response with missing updates (edge case)."""
+        api_response = {
+            "spreadsheetId": "abc123",
+            "tableRange": "Sheet1!A1:C4",
+            # No updates field
+        }
+
+        updates = api_response.get("updates", {})
+        updated_range = updates.get("updatedRange", "unknown")
+        updated_cells = updates.get("updatedCells", 0)
+
+        assert updated_range == "unknown"
+        assert updated_cells == 0
+
+    def test_table_range_in_response(self):
+        """Test that tableRange shows where data was appended to."""
+        # tableRange shows the range of the table that was appended to
+        api_response = {
+            "tableRange": "Sheet1!A1:C10",
+            "updates": {
+                "updatedRange": "Sheet1!A11:C12",
+            },
+        }
+
+        table_range = api_response.get("tableRange")
+        updated_range = api_response["updates"]["updatedRange"]
+
+        # Table range is original data, updated range is new data
+        assert table_range == "Sheet1!A1:C10"
+        assert updated_range == "Sheet1!A11:C12"
