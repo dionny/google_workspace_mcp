@@ -125,6 +125,88 @@ async def get_spreadsheet_info(
     return text_output
 
 
+async def _get_sheet_name_by_id(service, spreadsheet_id: str, sheet_id: int) -> str:
+    """
+    Get the sheet name from a sheet ID.
+
+    Args:
+        service: Authenticated Sheets service
+        spreadsheet_id: The spreadsheet ID
+        sheet_id: Numeric ID of the sheet
+
+    Returns:
+        The sheet name (string)
+
+    Raises:
+        ValueError if sheet not found
+    """
+    spreadsheet = await asyncio.to_thread(
+        service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+    )
+
+    for sheet in spreadsheet.get("sheets", []):
+        props = sheet.get("properties", {})
+        if props.get("sheetId") == sheet_id:
+            return props.get("title")
+
+    available_sheets = [
+        f"{s.get('properties', {}).get('title')} (ID: {s.get('properties', {}).get('sheetId')})"
+        for s in spreadsheet.get("sheets", [])
+    ]
+    raise ValueError(
+        f"Sheet with ID {sheet_id} not found. Available sheets: {available_sheets}"
+    )
+
+
+async def _build_full_range(
+    service,
+    spreadsheet_id: str,
+    range_name: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Build a full range string with sheet reference if needed.
+
+    If the range_name already contains a sheet reference (contains '!'),
+    it is returned as-is. Otherwise, if sheet_name or sheet_id is provided,
+    the sheet reference is prepended.
+
+    Args:
+        service: Authenticated Sheets service
+        spreadsheet_id: The spreadsheet ID
+        range_name: The cell range (e.g., "A1:D10" or "Sheet1!A1:D10")
+        sheet_name: Optional sheet name
+        sheet_id: Optional sheet ID (takes precedence over sheet_name)
+
+    Returns:
+        Full range string with sheet reference
+    """
+    # If range already has a sheet reference, use it as-is
+    if "!" in range_name:
+        return range_name
+
+    # If sheet_id is provided, look up the sheet name
+    if sheet_id is not None:
+        resolved_sheet_name = await _get_sheet_name_by_id(
+            service, spreadsheet_id, sheet_id
+        )
+    elif sheet_name is not None:
+        resolved_sheet_name = sheet_name
+    else:
+        # No sheet specified, return range as-is (will use first sheet)
+        return range_name
+
+    # Quote sheet name if it contains spaces or special characters
+    if " " in resolved_sheet_name or any(
+        c in resolved_sheet_name for c in ["'", "!", ":", "[", "]"]
+    ):
+        escaped_name = resolved_sheet_name.replace("'", "''")
+        return f"'{escaped_name}'!{range_name}"
+    else:
+        return f"{resolved_sheet_name}!{range_name}"
+
+
 @server.tool()
 @handle_http_errors("read_sheet_values", is_read_only=True, service_type="sheets")
 @require_google_service("sheets", "sheets_read")
@@ -133,6 +215,8 @@ async def read_sheet_values(
     user_google_email: str,
     spreadsheet_id: str,
     range_name: str = "A1:Z1000",
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
 ) -> str:
     """
     Reads values from a specific range in a Google Sheet.
@@ -140,19 +224,31 @@ async def read_sheet_values(
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        range_name (str): The range to read (e.g., "Sheet1!A1:D10", "A1:D10"). Defaults to "A1:Z1000".
+        range_name (str): The range to read (e.g., "A1:D10"). Can include sheet name prefix
+            like "Sheet1!A1:D10" but this is optional if sheet_name or sheet_id is provided.
+            Defaults to "A1:Z1000".
+        sheet_name (Optional[str]): Name of the sheet to read from. If provided, the range_name
+            only needs the cell range (e.g., "A1:D10" instead of "Sheet1!A1:D10").
+            For sheet names with spaces, this avoids needing to escape quotes.
+        sheet_id (Optional[int]): Numeric ID of the sheet to read from. Alternative to sheet_name.
+            Takes precedence over sheet_name if both are provided.
 
     Returns:
         str: The formatted values from the specified range.
     """
     logger.info(
-        f"[read_sheet_values] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+        f"[read_sheet_values] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}, Sheet: {sheet_name}, SheetId: {sheet_id}"
+    )
+
+    # Build the full range with sheet reference if sheet_name or sheet_id is provided
+    full_range = await _build_full_range(
+        service, spreadsheet_id, range_name, sheet_name, sheet_id
     )
 
     result = await asyncio.to_thread(
         service.spreadsheets()
         .values()
-        .get(spreadsheetId=spreadsheet_id, range=range_name)
+        .get(spreadsheetId=spreadsheet_id, range=full_range)
         .execute
     )
 
@@ -188,6 +284,8 @@ async def modify_sheet_values(
     values: Optional[Union[str, List[List[str]]]] = None,
     value_input_option: str = "USER_ENTERED",
     clear_values: bool = False,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
 ) -> str:
     """
     Modifies values in a specific range of a Google Sheet - can write, update, or clear values.
@@ -195,17 +293,23 @@ async def modify_sheet_values(
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        range_name (str): The range to modify (e.g., "Sheet1!A1:D10", "A1:D10"). Required.
+        range_name (str): The range to modify (e.g., "A1:D10"). Can include sheet name prefix
+            like "Sheet1!A1:D10" but this is optional if sheet_name or sheet_id is provided. Required.
         values (Optional[Union[str, List[List[str]]]]): 2D array of values to write/update. Can be a JSON string or Python list. Required unless clear_values=True.
         value_input_option (str): How to interpret input values ("RAW" or "USER_ENTERED"). Defaults to "USER_ENTERED".
         clear_values (bool): If True, clears the range instead of writing values. Defaults to False.
+        sheet_name (Optional[str]): Name of the sheet to modify. If provided, the range_name
+            only needs the cell range (e.g., "A1:D10" instead of "Sheet1!A1:D10").
+            For sheet names with spaces, this avoids needing to escape quotes.
+        sheet_id (Optional[int]): Numeric ID of the sheet to modify. Alternative to sheet_name.
+            Takes precedence over sheet_name if both are provided.
 
     Returns:
         str: Confirmation message of the successful modification operation.
     """
     operation = "clear" if clear_values else "write"
     logger.info(
-        f"[modify_sheet_values] Invoked. Operation: {operation}, Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+        f"[modify_sheet_values] Invoked. Operation: {operation}, Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}, Sheet: {sheet_name}, SheetId: {sheet_id}"
     )
 
     # Parse values if it's a JSON string (MCP passes parameters as JSON strings)
@@ -236,11 +340,16 @@ async def modify_sheet_values(
             "Either 'values' must be provided or 'clear_values' must be True."
         )
 
+    # Build the full range with sheet reference if sheet_name or sheet_id is provided
+    full_range = await _build_full_range(
+        service, spreadsheet_id, range_name, sheet_name, sheet_id
+    )
+
     if clear_values:
         result = await asyncio.to_thread(
             service.spreadsheets()
             .values()
-            .clear(spreadsheetId=spreadsheet_id, range=range_name)
+            .clear(spreadsheetId=spreadsheet_id, range=full_range)
             .execute
         )
 
@@ -257,7 +366,7 @@ async def modify_sheet_values(
             .values()
             .update(
                 spreadsheetId=spreadsheet_id,
-                range=range_name,
+                range=full_range,
                 valueInputOption=value_input_option,
                 body=body,
             )
