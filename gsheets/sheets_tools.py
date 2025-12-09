@@ -1577,6 +1577,21 @@ async def add_conditional_formatting(
         f"[add_conditional_formatting] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}, Type: {rule_type}"
     )
 
+    # Parse condition_values if it's a JSON string (MCP passes parameters as JSON strings)
+    if condition_values is not None and isinstance(condition_values, str):
+        try:
+            parsed_values = json.loads(condition_values)
+            if not isinstance(parsed_values, list):
+                raise ValueError(
+                    f"condition_values must be a list, got {type(parsed_values).__name__}"
+                )
+            condition_values = parsed_values
+            logger.info(
+                f"[add_conditional_formatting] Parsed JSON string to Python list with {len(condition_values)} values"
+            )
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON format for condition_values: {e}")
+
     # Validate rule type
     rule_type_upper = rule_type.upper()
     if rule_type_upper not in ["BOOLEAN", "GRADIENT"]:
