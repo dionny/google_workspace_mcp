@@ -3034,3 +3034,139 @@ async def clear_conditional_formatting(
 
     logger.info(f"Successfully cleared conditional formatting for {user_google_email}.")
     return text_output
+
+
+@server.tool()
+@handle_http_errors("copy_range", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def copy_range(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    source_range: str,
+    destination_range: str,
+    source_sheet_name: Optional[str] = None,
+    source_sheet_id: Optional[int] = None,
+    destination_sheet_name: Optional[str] = None,
+    destination_sheet_id: Optional[int] = None,
+    paste_type: Literal[
+        "PASTE_NORMAL",
+        "PASTE_VALUES",
+        "PASTE_FORMAT",
+        "PASTE_NO_BORDERS",
+        "PASTE_FORMULA",
+        "PASTE_DATA_VALIDATION",
+        "PASTE_CONDITIONAL_FORMATTING",
+    ] = "PASTE_NORMAL",
+    transpose: bool = False,
+) -> str:
+    """
+    Copies data from one range to another within a spreadsheet.
+
+    This tool copies data from a source range to a destination range. It supports copying
+    within the same sheet or between different sheets in the same spreadsheet. You can
+    control what content is copied (values, formulas, formatting, etc.) and optionally
+    transpose the data.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        source_range (str): The range to copy from (e.g., "A1:D10", "Sheet1!A1:D10"). Required.
+        destination_range (str): The range to paste to (e.g., "F1:I10", "Sheet2!A1"). Required.
+            Only the starting cell matters - the destination size is determined by the source.
+        source_sheet_name (Optional[str]): Name of the source sheet. If not provided, extracted
+            from source_range or uses first sheet.
+        source_sheet_id (Optional[int]): Numeric ID of the source sheet. Alternative to
+            source_sheet_name.
+        destination_sheet_name (Optional[str]): Name of the destination sheet. If not provided,
+            extracted from destination_range or uses same sheet as source.
+        destination_sheet_id (Optional[int]): Numeric ID of the destination sheet. Alternative
+            to destination_sheet_name.
+        paste_type (str): What to paste. Options:
+            - "PASTE_NORMAL": Values, formulas, formats, and merges (default)
+            - "PASTE_VALUES": Values only (no formulas or formatting)
+            - "PASTE_FORMAT": Formatting and data validation only
+            - "PASTE_NO_BORDERS": Like PASTE_NORMAL but excludes borders
+            - "PASTE_FORMULA": Formulas only
+            - "PASTE_DATA_VALIDATION": Data validation rules only
+            - "PASTE_CONDITIONAL_FORMATTING": Conditional formatting rules only
+        transpose (bool): If True, rows become columns and columns become rows. Defaults to False.
+
+    Returns:
+        str: Confirmation message of the successful copy operation.
+    """
+    logger.info(
+        f"[copy_range] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"Source: {source_range}, Destination: {destination_range}, PasteType: {paste_type}"
+    )
+
+    # Extract sheet names from ranges if present
+    extracted_source_sheet, clean_source_range = _strip_sheet_prefix(source_range)
+    extracted_dest_sheet, clean_dest_range = _strip_sheet_prefix(destination_range)
+
+    # Determine effective sheet names
+    effective_source_sheet = (
+        source_sheet_name if source_sheet_name is not None else extracted_source_sheet
+    )
+    effective_dest_sheet = (
+        destination_sheet_name
+        if destination_sheet_name is not None
+        else extracted_dest_sheet
+    )
+
+    # Resolve source sheet ID
+    resolved_source_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, effective_source_sheet, source_sheet_id
+    )
+
+    # Resolve destination sheet ID (defaults to source sheet if not specified)
+    if (
+        destination_sheet_id is None
+        and destination_sheet_name is None
+        and extracted_dest_sheet is None
+    ):
+        # No destination sheet specified - use source sheet
+        resolved_dest_sheet_id = resolved_source_sheet_id
+    else:
+        resolved_dest_sheet_id = await _resolve_sheet_id(
+            service, spreadsheet_id, effective_dest_sheet, destination_sheet_id
+        )
+
+    # Parse source and destination ranges to grid coordinates
+    source_grid = _parse_range_to_grid(clean_source_range)
+    source_grid["sheetId"] = resolved_source_sheet_id
+
+    dest_grid = _parse_range_to_grid(clean_dest_range)
+    dest_grid["sheetId"] = resolved_dest_sheet_id
+
+    # Build the copyPaste request
+    request_body = {
+        "requests": [
+            {
+                "copyPaste": {
+                    "source": source_grid,
+                    "destination": dest_grid,
+                    "pasteType": paste_type,
+                    "pasteOrientation": "TRANSPOSE" if transpose else "NORMAL",
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Build descriptive output message
+    transpose_text = " (transposed)" if transpose else ""
+    paste_type_text = paste_type.replace("PASTE_", "").replace("_", " ").lower()
+
+    text_output = (
+        f"Successfully copied range '{source_range}' to '{destination_range}'{transpose_text} "
+        f"with paste type '{paste_type_text}' in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully copied range for {user_google_email}.")
+    return text_output
