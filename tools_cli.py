@@ -85,9 +85,10 @@ class ToolTester:
         """Collect all registered tools from the server."""
         tools = {}
         if hasattr(self.server, '_tool_manager'):
-            tool_list = await self.server._tool_manager.list_tools()
-            for tool in tool_list:
-                tools[tool.name] = tool
+            tool_manager = self.server._tool_manager
+            if hasattr(tool_manager, '_tools'):
+                # FastMCP stores tools in _tools dict directly, no list_tools() method
+                tools = dict(tool_manager._tools)
         return tools
     
     async def init_tools(self):
