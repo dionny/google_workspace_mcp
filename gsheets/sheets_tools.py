@@ -7,7 +7,8 @@ This module provides MCP tools for interacting with Google Sheets API.
 import logging
 import asyncio
 import json
-from typing import List, Optional, Union
+import re
+from typing import Any, Dict, List, Optional, Union
 
 
 from auth.service_decorator import require_google_service
@@ -801,4 +802,982 @@ async def clear_cell_note(
     )
 
     logger.info(f"Successfully cleared cell note for {user_google_email}.")
+    return text_output
+
+
+def _parse_range_to_grid(range_str: str) -> Dict[str, int]:
+    """
+    Parse a range string like 'A1:D10' into GridRange coordinates.
+
+    Args:
+        range_str: Range in A1 notation (e.g., 'A1:D10', 'B2:C5')
+
+    Returns:
+        Dict with startRowIndex, endRowIndex, startColumnIndex, endColumnIndex (all 0-indexed)
+    """
+    # Handle single cell vs range
+    if ":" in range_str:
+        start_cell, end_cell = range_str.split(":")
+    else:
+        start_cell = end_cell = range_str
+
+    start_row, start_col = _parse_cell_reference(start_cell)
+    end_row, end_col = _parse_cell_reference(end_cell)
+
+    return {
+        "startRowIndex": start_row,
+        "endRowIndex": end_row + 1,  # API uses exclusive end
+        "startColumnIndex": start_col,
+        "endColumnIndex": end_col + 1,  # API uses exclusive end
+    }
+
+
+def _parse_color(color_str: str) -> Dict[str, float]:
+    """
+    Parse a color string (hex or name) into RGBA dict for Sheets API.
+
+    Args:
+        color_str: Color in hex format (#RRGGBB or #RGB) or common color name
+
+    Returns:
+        Dict with red, green, blue values (0-1 float range)
+    """
+    color_names = {
+        "black": "#000000",
+        "white": "#FFFFFF",
+        "red": "#FF0000",
+        "green": "#00FF00",
+        "blue": "#0000FF",
+        "yellow": "#FFFF00",
+        "cyan": "#00FFFF",
+        "magenta": "#FF00FF",
+        "orange": "#FFA500",
+        "purple": "#800080",
+        "pink": "#FFC0CB",
+        "gray": "#808080",
+        "grey": "#808080",
+        "lightgray": "#D3D3D3",
+        "lightgrey": "#D3D3D3",
+        "darkgray": "#A9A9A9",
+        "darkgrey": "#A9A9A9",
+    }
+
+    # Convert color name to hex
+    color_lower = color_str.lower().strip()
+    if color_lower in color_names:
+        color_str = color_names[color_lower]
+
+    # Parse hex color
+    hex_match = re.match(r"^#?([0-9A-Fa-f]{6})$", color_str)
+    if hex_match:
+        hex_val = hex_match.group(1)
+        return {
+            "red": int(hex_val[0:2], 16) / 255.0,
+            "green": int(hex_val[2:4], 16) / 255.0,
+            "blue": int(hex_val[4:6], 16) / 255.0,
+        }
+
+    # Try short hex (#RGB)
+    short_hex_match = re.match(r"^#?([0-9A-Fa-f]{3})$", color_str)
+    if short_hex_match:
+        hex_val = short_hex_match.group(1)
+        return {
+            "red": int(hex_val[0] * 2, 16) / 255.0,
+            "green": int(hex_val[1] * 2, 16) / 255.0,
+            "blue": int(hex_val[2] * 2, 16) / 255.0,
+        }
+
+    raise ValueError(
+        f"Invalid color format: '{color_str}'. Use hex (#RRGGBB or #RGB) or color name (red, blue, etc.)"
+    )
+
+
+async def _resolve_sheet_id(
+    service, spreadsheet_id: str, sheet_name: Optional[str], sheet_id: Optional[int]
+) -> int:
+    """
+    Resolve to a sheet ID, looking up from name if needed.
+
+    Args:
+        service: Authenticated Sheets service
+        spreadsheet_id: The spreadsheet ID
+        sheet_name: Optional sheet name
+        sheet_id: Optional sheet ID (takes precedence)
+
+    Returns:
+        The resolved sheet ID
+    """
+    if sheet_id is not None:
+        return sheet_id
+
+    if sheet_name is not None:
+        return await _get_sheet_id_by_name(service, spreadsheet_id, sheet_name)
+
+    # Get first sheet
+    spreadsheet = await asyncio.to_thread(
+        service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+    )
+    sheets = spreadsheet.get("sheets", [])
+    if not sheets:
+        raise ValueError("Spreadsheet has no sheets.")
+    return sheets[0].get("properties", {}).get("sheetId")
+
+
+@server.tool()
+@handle_http_errors("format_cells", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def format_cells(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    range_name: str,
+    bold: Optional[bool] = None,
+    italic: Optional[bool] = None,
+    underline: Optional[bool] = None,
+    strikethrough: Optional[bool] = None,
+    font_size: Optional[int] = None,
+    font_family: Optional[str] = None,
+    font_color: Optional[str] = None,
+    background_color: Optional[str] = None,
+    horizontal_alignment: Optional[str] = None,
+    vertical_alignment: Optional[str] = None,
+    wrap_strategy: Optional[str] = None,
+    number_format_type: Optional[str] = None,
+    number_format_pattern: Optional[str] = None,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Applies formatting to a range of cells in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        range_name (str): The range to format (e.g., "A1:D10", "B2:C5"). Required.
+        bold (Optional[bool]): Set text bold.
+        italic (Optional[bool]): Set text italic.
+        underline (Optional[bool]): Set text underline.
+        strikethrough (Optional[bool]): Set text strikethrough.
+        font_size (Optional[int]): Font size in points (e.g., 10, 12, 14).
+        font_family (Optional[str]): Font family name (e.g., "Arial", "Times New Roman", "Courier New").
+        font_color (Optional[str]): Text color - hex (#RRGGBB) or name (red, blue, etc.).
+        background_color (Optional[str]): Cell background color - hex (#RRGGBB) or name (red, blue, etc.).
+        horizontal_alignment (Optional[str]): Horizontal alignment - LEFT, CENTER, or RIGHT.
+        vertical_alignment (Optional[str]): Vertical alignment - TOP, MIDDLE, or BOTTOM.
+        wrap_strategy (Optional[str]): Text wrapping - OVERFLOW_CELL, CLIP, or WRAP.
+        number_format_type (Optional[str]): Number format type - TEXT, NUMBER, CURRENCY, PERCENT, DATE, TIME, DATE_TIME, SCIENTIFIC.
+        number_format_pattern (Optional[str]): Custom number format pattern (e.g., "#,##0.00", "$#,##0", "yyyy-mm-dd").
+        sheet_name (Optional[str]): Name of the sheet. If not provided with range, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful formatting operation.
+    """
+    logger.info(
+        f"[format_cells] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+    )
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse range
+    grid_range = _parse_range_to_grid(range_name)
+    grid_range["sheetId"] = resolved_sheet_id
+
+    # Build cell format
+    cell_format: Dict[str, Any] = {}
+    fields = []
+
+    # Text format properties
+    text_format: Dict[str, Any] = {}
+    if bold is not None:
+        text_format["bold"] = bold
+        fields.append("userEnteredFormat.textFormat.bold")
+    if italic is not None:
+        text_format["italic"] = italic
+        fields.append("userEnteredFormat.textFormat.italic")
+    if underline is not None:
+        text_format["underline"] = underline
+        fields.append("userEnteredFormat.textFormat.underline")
+    if strikethrough is not None:
+        text_format["strikethrough"] = strikethrough
+        fields.append("userEnteredFormat.textFormat.strikethrough")
+    if font_size is not None:
+        text_format["fontSize"] = font_size
+        fields.append("userEnteredFormat.textFormat.fontSize")
+    if font_family is not None:
+        text_format["fontFamily"] = font_family
+        fields.append("userEnteredFormat.textFormat.fontFamily")
+    if font_color is not None:
+        text_format["foregroundColor"] = _parse_color(font_color)
+        fields.append("userEnteredFormat.textFormat.foregroundColor")
+
+    if text_format:
+        cell_format["textFormat"] = text_format
+
+    # Background color
+    if background_color is not None:
+        cell_format["backgroundColor"] = _parse_color(background_color)
+        fields.append("userEnteredFormat.backgroundColor")
+
+    # Alignment
+    if horizontal_alignment is not None:
+        valid_h_align = ["LEFT", "CENTER", "RIGHT"]
+        h_align_upper = horizontal_alignment.upper()
+        if h_align_upper not in valid_h_align:
+            raise ValueError(
+                f"Invalid horizontal_alignment: '{horizontal_alignment}'. Must be one of: {valid_h_align}"
+            )
+        cell_format["horizontalAlignment"] = h_align_upper
+        fields.append("userEnteredFormat.horizontalAlignment")
+
+    if vertical_alignment is not None:
+        valid_v_align = ["TOP", "MIDDLE", "BOTTOM"]
+        v_align_upper = vertical_alignment.upper()
+        if v_align_upper not in valid_v_align:
+            raise ValueError(
+                f"Invalid vertical_alignment: '{vertical_alignment}'. Must be one of: {valid_v_align}"
+            )
+        cell_format["verticalAlignment"] = v_align_upper
+        fields.append("userEnteredFormat.verticalAlignment")
+
+    # Text wrapping
+    if wrap_strategy is not None:
+        valid_wrap = ["OVERFLOW_CELL", "CLIP", "WRAP"]
+        wrap_upper = wrap_strategy.upper()
+        if wrap_upper not in valid_wrap:
+            raise ValueError(
+                f"Invalid wrap_strategy: '{wrap_strategy}'. Must be one of: {valid_wrap}"
+            )
+        cell_format["wrapStrategy"] = wrap_upper
+        fields.append("userEnteredFormat.wrapStrategy")
+
+    # Number format
+    if number_format_type is not None or number_format_pattern is not None:
+        number_format: Dict[str, Any] = {}
+        if number_format_type is not None:
+            valid_types = [
+                "TEXT",
+                "NUMBER",
+                "CURRENCY",
+                "PERCENT",
+                "DATE",
+                "TIME",
+                "DATE_TIME",
+                "SCIENTIFIC",
+            ]
+            type_upper = number_format_type.upper()
+            if type_upper not in valid_types:
+                raise ValueError(
+                    f"Invalid number_format_type: '{number_format_type}'. Must be one of: {valid_types}"
+                )
+            number_format["type"] = type_upper
+        if number_format_pattern is not None:
+            number_format["pattern"] = number_format_pattern
+        cell_format["numberFormat"] = number_format
+        fields.append("userEnteredFormat.numberFormat")
+
+    if not fields:
+        return "No formatting options specified. Please provide at least one formatting option."
+
+    # Build request
+    request_body = {
+        "requests": [
+            {
+                "repeatCell": {
+                    "range": grid_range,
+                    "cell": {"userEnteredFormat": cell_format},
+                    "fields": ",".join(fields),
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Build summary of applied formatting
+    format_summary = []
+    if bold is not None:
+        format_summary.append(f"bold={bold}")
+    if italic is not None:
+        format_summary.append(f"italic={italic}")
+    if underline is not None:
+        format_summary.append(f"underline={underline}")
+    if strikethrough is not None:
+        format_summary.append(f"strikethrough={strikethrough}")
+    if font_size is not None:
+        format_summary.append(f"font_size={font_size}")
+    if font_family is not None:
+        format_summary.append(f"font_family={font_family}")
+    if font_color is not None:
+        format_summary.append(f"font_color={font_color}")
+    if background_color is not None:
+        format_summary.append(f"background_color={background_color}")
+    if horizontal_alignment is not None:
+        format_summary.append(f"horizontal_alignment={horizontal_alignment}")
+    if vertical_alignment is not None:
+        format_summary.append(f"vertical_alignment={vertical_alignment}")
+    if wrap_strategy is not None:
+        format_summary.append(f"wrap_strategy={wrap_strategy}")
+    if number_format_type is not None:
+        format_summary.append(f"number_format_type={number_format_type}")
+    if number_format_pattern is not None:
+        format_summary.append(f"number_format_pattern={number_format_pattern}")
+
+    text_output = (
+        f"Successfully formatted range '{range_name}' in spreadsheet {spreadsheet_id} for {user_google_email}.\n"
+        f"Applied formatting: {', '.join(format_summary)}"
+    )
+
+    logger.info(f"Successfully formatted cells for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("merge_cells", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def merge_cells(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    range_name: str,
+    merge_type: str = "MERGE_ALL",
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Merges cells in a range in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        range_name (str): The range to merge (e.g., "A1:D4", "B2:C3"). Required.
+        merge_type (str): Type of merge - MERGE_ALL (single merged cell), MERGE_COLUMNS (merge columns, keep rows separate), or MERGE_ROWS (merge rows, keep columns separate). Defaults to MERGE_ALL.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful merge operation.
+    """
+    logger.info(
+        f"[merge_cells] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+    )
+
+    # Validate merge type
+    valid_merge_types = ["MERGE_ALL", "MERGE_COLUMNS", "MERGE_ROWS"]
+    merge_type_upper = merge_type.upper()
+    if merge_type_upper not in valid_merge_types:
+        raise ValueError(
+            f"Invalid merge_type: '{merge_type}'. Must be one of: {valid_merge_types}"
+        )
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse range
+    grid_range = _parse_range_to_grid(range_name)
+    grid_range["sheetId"] = resolved_sheet_id
+
+    # Build request
+    request_body = {
+        "requests": [
+            {"mergeCells": {"range": grid_range, "mergeType": merge_type_upper}}
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully merged cells in range '{range_name}' with type '{merge_type_upper}' "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully merged cells for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("unmerge_cells", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def unmerge_cells(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    range_name: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Unmerges any merged cells in a range in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        range_name (str): The range to unmerge (e.g., "A1:D4", "B2:C3"). Required.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful unmerge operation.
+    """
+    logger.info(
+        f"[unmerge_cells] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+    )
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse range
+    grid_range = _parse_range_to_grid(range_name)
+    grid_range["sheetId"] = resolved_sheet_id
+
+    # Build request
+    request_body = {"requests": [{"unmergeCells": {"range": grid_range}}]}
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully unmerged cells in range '{range_name}' "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully unmerged cells for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("set_frozen_rows_columns", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def set_frozen_rows_columns(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    frozen_rows: Optional[int] = None,
+    frozen_columns: Optional[int] = None,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Sets the number of frozen rows and/or columns in a Google Sheet.
+
+    Frozen rows stay visible at the top when scrolling down.
+    Frozen columns stay visible on the left when scrolling right.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        frozen_rows (Optional[int]): Number of rows to freeze from the top. Use 0 to unfreeze all rows.
+        frozen_columns (Optional[int]): Number of columns to freeze from the left. Use 0 to unfreeze all columns.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful freeze operation.
+    """
+    logger.info(
+        f"[set_frozen_rows_columns] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Rows: {frozen_rows}, Cols: {frozen_columns}"
+    )
+
+    if frozen_rows is None and frozen_columns is None:
+        return "No freeze options specified. Please provide frozen_rows and/or frozen_columns."
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Build properties and fields
+    grid_properties: Dict[str, Any] = {}
+    fields = []
+
+    if frozen_rows is not None:
+        if frozen_rows < 0:
+            raise ValueError("frozen_rows must be 0 or greater")
+        grid_properties["frozenRowCount"] = frozen_rows
+        fields.append("gridProperties.frozenRowCount")
+
+    if frozen_columns is not None:
+        if frozen_columns < 0:
+            raise ValueError("frozen_columns must be 0 or greater")
+        grid_properties["frozenColumnCount"] = frozen_columns
+        fields.append("gridProperties.frozenColumnCount")
+
+    # Build request
+    request_body = {
+        "requests": [
+            {
+                "updateSheetProperties": {
+                    "properties": {
+                        "sheetId": resolved_sheet_id,
+                        "gridProperties": grid_properties,
+                    },
+                    "fields": ",".join(fields),
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Build summary
+    summary_parts = []
+    if frozen_rows is not None:
+        summary_parts.append(
+            f"{frozen_rows} row(s) frozen" if frozen_rows > 0 else "rows unfrozen"
+        )
+    if frozen_columns is not None:
+        summary_parts.append(
+            f"{frozen_columns} column(s) frozen"
+            if frozen_columns > 0
+            else "columns unfrozen"
+        )
+
+    text_output = (
+        f"Successfully updated freeze settings in spreadsheet {spreadsheet_id} for {user_google_email}: "
+        + ", ".join(summary_parts)
+    )
+
+    logger.info(f"Successfully set frozen rows/columns for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("set_column_width", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def set_column_width(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    start_column: str,
+    end_column: Optional[str] = None,
+    width: int = 100,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Sets the width of one or more columns in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        start_column (str): The starting column letter (e.g., "A", "B", "AA"). Required.
+        end_column (Optional[str]): The ending column letter (inclusive). If not provided, only start_column is resized.
+        width (int): The width in pixels. Defaults to 100.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful column width update.
+    """
+    logger.info(
+        f"[set_column_width] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Column: {start_column}-{end_column}, Width: {width}"
+    )
+
+    if width < 0:
+        raise ValueError("width must be 0 or greater")
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse column letters to indices
+    start_col_ref = f"{start_column}1"
+    _, start_col_idx = _parse_cell_reference(start_col_ref)
+
+    if end_column:
+        end_col_ref = f"{end_column}1"
+        _, end_col_idx = _parse_cell_reference(end_col_ref)
+    else:
+        end_col_idx = start_col_idx
+
+    # Build request
+    request_body = {
+        "requests": [
+            {
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": resolved_sheet_id,
+                        "dimension": "COLUMNS",
+                        "startIndex": start_col_idx,
+                        "endIndex": end_col_idx + 1,  # Exclusive end
+                    },
+                    "properties": {"pixelSize": width},
+                    "fields": "pixelSize",
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    col_range = f"{start_column}-{end_column}" if end_column else start_column
+    text_output = (
+        f"Successfully set column(s) {col_range} width to {width}px "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully set column width for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("set_row_height", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def set_row_height(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    start_row: int,
+    end_row: Optional[int] = None,
+    height: int = 21,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Sets the height of one or more rows in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        start_row (int): The starting row number (1-indexed, e.g., 1 for the first row). Required.
+        end_row (Optional[int]): The ending row number (inclusive, 1-indexed). If not provided, only start_row is resized.
+        height (int): The height in pixels. Defaults to 21 (standard row height).
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful row height update.
+    """
+    logger.info(
+        f"[set_row_height] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Row: {start_row}-{end_row}, Height: {height}"
+    )
+
+    if height < 0:
+        raise ValueError("height must be 0 or greater")
+    if start_row < 1:
+        raise ValueError("start_row must be 1 or greater (1-indexed)")
+    if end_row is not None and end_row < start_row:
+        raise ValueError("end_row must be greater than or equal to start_row")
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Convert to 0-indexed
+    start_row_idx = start_row - 1
+    end_row_idx = (end_row - 1) if end_row else start_row_idx
+
+    # Build request
+    request_body = {
+        "requests": [
+            {
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": resolved_sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": start_row_idx,
+                        "endIndex": end_row_idx + 1,  # Exclusive end
+                    },
+                    "properties": {"pixelSize": height},
+                    "fields": "pixelSize",
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    row_range = f"{start_row}-{end_row}" if end_row else str(start_row)
+    text_output = (
+        f"Successfully set row(s) {row_range} height to {height}px "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully set row height for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("add_conditional_formatting", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def add_conditional_formatting(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    range_name: str,
+    rule_type: str,
+    condition_type: Optional[str] = None,
+    condition_values: Optional[List[str]] = None,
+    background_color: Optional[str] = None,
+    font_color: Optional[str] = None,
+    bold: Optional[bool] = None,
+    italic: Optional[bool] = None,
+    min_color: Optional[str] = None,
+    mid_color: Optional[str] = None,
+    max_color: Optional[str] = None,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Adds a conditional formatting rule to a range in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        range_name (str): The range to apply formatting to (e.g., "A1:D10"). Required.
+        rule_type (str): Type of rule - BOOLEAN (condition-based) or GRADIENT (color scale). Required.
+        condition_type (Optional[str]): For BOOLEAN rules - type of condition: NUMBER_GREATER, NUMBER_LESS, NUMBER_EQ, NUMBER_BETWEEN, TEXT_CONTAINS, TEXT_NOT_CONTAINS, TEXT_STARTS_WITH, TEXT_ENDS_WITH, BLANK, NOT_BLANK, CUSTOM_FORMULA.
+        condition_values (Optional[List[str]]): Values for the condition. For NUMBER_BETWEEN provide [min, max]. For CUSTOM_FORMULA provide the formula.
+        background_color (Optional[str]): Background color for BOOLEAN rules - hex (#RRGGBB) or color name.
+        font_color (Optional[str]): Font color for BOOLEAN rules - hex (#RRGGBB) or color name.
+        bold (Optional[bool]): Apply bold for BOOLEAN rules.
+        italic (Optional[bool]): Apply italic for BOOLEAN rules.
+        min_color (Optional[str]): Color for minimum value in GRADIENT rules. Defaults to green.
+        mid_color (Optional[str]): Color for midpoint in GRADIENT rules (optional).
+        max_color (Optional[str]): Color for maximum value in GRADIENT rules. Defaults to red.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful conditional formatting rule creation.
+    """
+    logger.info(
+        f"[add_conditional_formatting] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}, Type: {rule_type}"
+    )
+
+    # Validate rule type
+    rule_type_upper = rule_type.upper()
+    if rule_type_upper not in ["BOOLEAN", "GRADIENT"]:
+        raise ValueError(
+            f"Invalid rule_type: '{rule_type}'. Must be BOOLEAN or GRADIENT."
+        )
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse range
+    grid_range = _parse_range_to_grid(range_name)
+    grid_range["sheetId"] = resolved_sheet_id
+
+    # Build the rule based on type
+    rule: Dict[str, Any] = {"ranges": [grid_range]}
+
+    if rule_type_upper == "BOOLEAN":
+        if not condition_type:
+            raise ValueError("condition_type is required for BOOLEAN rules")
+
+        # Valid condition types
+        valid_conditions = [
+            "NUMBER_GREATER",
+            "NUMBER_GREATER_THAN_EQ",
+            "NUMBER_LESS",
+            "NUMBER_LESS_THAN_EQ",
+            "NUMBER_EQ",
+            "NUMBER_NOT_EQ",
+            "NUMBER_BETWEEN",
+            "NUMBER_NOT_BETWEEN",
+            "TEXT_CONTAINS",
+            "TEXT_NOT_CONTAINS",
+            "TEXT_STARTS_WITH",
+            "TEXT_ENDS_WITH",
+            "TEXT_EQ",
+            "BLANK",
+            "NOT_BLANK",
+            "CUSTOM_FORMULA",
+        ]
+        condition_type_upper = condition_type.upper()
+        if condition_type_upper not in valid_conditions:
+            raise ValueError(
+                f"Invalid condition_type: '{condition_type}'. Must be one of: {valid_conditions}"
+            )
+
+        # Build condition
+        condition: Dict[str, Any] = {"type": condition_type_upper}
+        if condition_values:
+            condition["values"] = [{"userEnteredValue": v} for v in condition_values]
+
+        # Build format
+        cell_format: Dict[str, Any] = {}
+        if background_color:
+            cell_format["backgroundColor"] = _parse_color(background_color)
+        if font_color or bold is not None or italic is not None:
+            text_format: Dict[str, Any] = {}
+            if font_color:
+                text_format["foregroundColor"] = _parse_color(font_color)
+            if bold is not None:
+                text_format["bold"] = bold
+            if italic is not None:
+                text_format["italic"] = italic
+            cell_format["textFormat"] = text_format
+
+        rule["booleanRule"] = {"condition": condition, "format": cell_format}
+
+    else:  # GRADIENT
+        # Build gradient rule
+        gradient_rule: Dict[str, Any] = {
+            "minpoint": {
+                "type": "MIN",
+                "color": _parse_color(min_color or "green"),
+            },
+            "maxpoint": {
+                "type": "MAX",
+                "color": _parse_color(max_color or "red"),
+            },
+        }
+        if mid_color:
+            gradient_rule["midpoint"] = {
+                "type": "PERCENTILE",
+                "value": "50",
+                "color": _parse_color(mid_color),
+            }
+
+        rule["gradientRule"] = gradient_rule
+
+    # Build request
+    request_body = {
+        "requests": [{"addConditionalFormatRule": {"rule": rule, "index": 0}}]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully added {rule_type_upper} conditional formatting rule to range '{range_name}' "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully added conditional formatting for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("clear_conditional_formatting", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def clear_conditional_formatting(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    range_name: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Clears all conditional formatting rules that overlap with a range in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        range_name (str): The range to clear formatting from (e.g., "A1:D10"). Required.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful conditional formatting removal.
+    """
+    logger.info(
+        f"[clear_conditional_formatting] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+    )
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse range
+    grid_range = _parse_range_to_grid(range_name)
+    grid_range["sheetId"] = resolved_sheet_id
+
+    # Get existing conditional format rules to find overlapping ones
+    spreadsheet = await asyncio.to_thread(
+        service.spreadsheets()
+        .get(
+            spreadsheetId=spreadsheet_id,
+            fields="sheets.conditionalFormats,sheets.properties.sheetId",
+        )
+        .execute
+    )
+
+    # Find rules that overlap with our range
+    rules_to_delete = []
+    for sheet in spreadsheet.get("sheets", []):
+        if sheet.get("properties", {}).get("sheetId") != resolved_sheet_id:
+            continue
+        for i, rule in enumerate(sheet.get("conditionalFormats", [])):
+            for rule_range in rule.get("ranges", []):
+                # Check if ranges overlap
+                if (
+                    rule_range.get("sheetId") == resolved_sheet_id
+                    and rule_range.get("startRowIndex", 0) < grid_range["endRowIndex"]
+                    and rule_range.get("endRowIndex", float("inf"))
+                    > grid_range["startRowIndex"]
+                    and rule_range.get("startColumnIndex", 0)
+                    < grid_range["endColumnIndex"]
+                    and rule_range.get("endColumnIndex", float("inf"))
+                    > grid_range["startColumnIndex"]
+                ):
+                    rules_to_delete.append(i)
+                    break
+
+    if not rules_to_delete:
+        return (
+            f"No conditional formatting rules found overlapping range '{range_name}'."
+        )
+
+    # Delete rules in reverse order to maintain indices
+    requests = [
+        {"deleteConditionalFormatRule": {"sheetId": resolved_sheet_id, "index": i}}
+        for i in sorted(rules_to_delete, reverse=True)
+    ]
+
+    request_body = {"requests": requests}
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully cleared {len(rules_to_delete)} conditional formatting rule(s) from range '{range_name}' "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully cleared conditional formatting for {user_google_email}.")
     return text_output
