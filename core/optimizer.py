@@ -10,7 +10,6 @@ Requires: numpy, sentence-transformers
 
 import logging
 from typing import Optional, Any
-import json
 
 try:
     import numpy as np

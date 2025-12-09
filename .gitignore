@@ -31,4 +31,5 @@ mcp_server_debug.log
 /.claude
 PROMPT*
 .beads/
-.coverage
+.coverage.cursor/
+pr_body.txt
