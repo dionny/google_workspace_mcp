@@ -357,6 +357,230 @@ async def create_sheet(
     return text_output
 
 
+async def _resolve_sheet_id(
+    service,
+    spreadsheet_id: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> int:
+    """
+    Resolve sheet_name or sheet_id to the actual sheet ID.
+
+    Args:
+        service: The Google Sheets API service.
+        spreadsheet_id: The ID of the spreadsheet.
+        sheet_name: Optional name of the sheet.
+        sheet_id: Optional ID of the sheet.
+
+    Returns:
+        int: The resolved sheet ID.
+
+    Raises:
+        Exception: If neither sheet_name nor sheet_id is provided, or sheet not found.
+    """
+    if sheet_id is not None:
+        return sheet_id
+
+    if sheet_name is None:
+        # Get the first sheet by default
+        spreadsheet = await asyncio.to_thread(
+            service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+        )
+        sheets = spreadsheet.get("sheets", [])
+        if not sheets:
+            raise Exception(f"Spreadsheet {spreadsheet_id} has no sheets.")
+        return sheets[0].get("properties", {}).get("sheetId", 0)
+
+    # Resolve sheet_name to sheet_id
+    spreadsheet = await asyncio.to_thread(
+        service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+    )
+    sheets = spreadsheet.get("sheets", [])
+
+    for sheet in sheets:
+        props = sheet.get("properties", {})
+        if props.get("title") == sheet_name:
+            return props.get("sheetId", 0)
+
+    raise Exception(f"Sheet '{sheet_name}' not found in spreadsheet {spreadsheet_id}.")
+
+
+@server.tool()
+@handle_http_errors("insert_rows", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def insert_rows(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    start_row: int,
+    num_rows: int = 1,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Inserts blank rows at a specific position in a Google Sheet.
+
+    Existing data at and below the specified position will shift down to make room.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        start_row (int): The 1-indexed row position to insert at. Required.
+            For example, start_row=3 inserts rows starting at row 3.
+        num_rows (int): Number of rows to insert. Defaults to 1.
+        sheet_name (Optional[str]): The name of the sheet. If not provided, uses
+            the first sheet or sheet_id if specified.
+        sheet_id (Optional[int]): The ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful insertion.
+
+    Example:
+        Insert 2 blank rows at row 5 (existing rows 5+ shift to 7+):
+        >>> insert_rows(spreadsheet_id="...", start_row=5, num_rows=2)
+    """
+    logger.info(
+        f"[insert_rows] Invoked. Email: '{user_google_email}', "
+        f"Spreadsheet: {spreadsheet_id}, start_row: {start_row}, num_rows: {num_rows}"
+    )
+
+    if start_row < 1:
+        raise Exception("start_row must be >= 1 (1-indexed).")
+    if num_rows < 1:
+        raise Exception("num_rows must be >= 1.")
+
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Convert 1-indexed to 0-indexed for the API
+    start_index = start_row - 1
+
+    request_body = {
+        "requests": [
+            {
+                "insertDimension": {
+                    "range": {
+                        "sheetId": resolved_sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": start_index,
+                        "endIndex": start_index + num_rows,
+                    },
+                    "inheritFromBefore": start_index > 0,
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    sheet_identifier = sheet_name if sheet_name else f"sheet ID {resolved_sheet_id}"
+    text_output = (
+        f"Successfully inserted {num_rows} row(s) at row {start_row} "
+        f"in '{sheet_identifier}' of spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully inserted {num_rows} row(s) for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("insert_columns", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def insert_columns(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    start_column: int,
+    num_columns: int = 1,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Inserts blank columns at a specific position in a Google Sheet.
+
+    Existing data at and to the right of the specified position will shift right.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        start_column (int): The 1-indexed column position to insert at. Required.
+            For example, start_column=3 inserts columns starting at column C.
+        num_columns (int): Number of columns to insert. Defaults to 1.
+        sheet_name (Optional[str]): The name of the sheet. If not provided, uses
+            the first sheet or sheet_id if specified.
+        sheet_id (Optional[int]): The ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful insertion.
+
+    Example:
+        Insert 2 blank columns at column C (existing columns C+ shift to E+):
+        >>> insert_columns(spreadsheet_id="...", start_column=3, num_columns=2)
+    """
+    logger.info(
+        f"[insert_columns] Invoked. Email: '{user_google_email}', "
+        f"Spreadsheet: {spreadsheet_id}, start_column: {start_column}, num_columns: {num_columns}"
+    )
+
+    if start_column < 1:
+        raise Exception("start_column must be >= 1 (1-indexed).")
+    if num_columns < 1:
+        raise Exception("num_columns must be >= 1.")
+
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Convert 1-indexed to 0-indexed for the API
+    start_index = start_column - 1
+
+    request_body = {
+        "requests": [
+            {
+                "insertDimension": {
+                    "range": {
+                        "sheetId": resolved_sheet_id,
+                        "dimension": "COLUMNS",
+                        "startIndex": start_index,
+                        "endIndex": start_index + num_columns,
+                    },
+                    "inheritFromBefore": start_index > 0,
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Convert column number to letter for user-friendly output
+    def column_to_letter(col_num: int) -> str:
+        result = ""
+        while col_num > 0:
+            col_num -= 1
+            result = chr(col_num % 26 + ord("A")) + result
+            col_num //= 26
+        return result
+
+    column_letter = column_to_letter(start_column)
+    sheet_identifier = sheet_name if sheet_name else f"sheet ID {resolved_sheet_id}"
+    text_output = (
+        f"Successfully inserted {num_columns} column(s) at column {column_letter} (column {start_column}) "
+        f"in '{sheet_identifier}' of spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully inserted {num_columns} column(s) for {user_google_email}.")
+    return text_output
+
+
 # Create comment management tools for sheets
 _comment_tools = create_comment_tools("spreadsheet", "spreadsheet_id")
 
