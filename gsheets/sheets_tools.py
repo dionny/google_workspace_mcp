@@ -1037,6 +1037,145 @@ async def sort_range(
     return text_output
 
 
+@server.tool()
+@handle_http_errors("copy_sheet", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def copy_sheet(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    new_sheet_name: Optional[str] = None,
+    source_sheet_name: Optional[str] = None,
+    source_sheet_id: Optional[int] = None,
+    destination_spreadsheet_id: Optional[str] = None,
+) -> str:
+    """
+    Copies/duplicates a sheet within the same spreadsheet or to another spreadsheet.
+
+    This tool creates a copy of an existing sheet with all its content, formulas,
+    and formatting. Useful for creating templates or backups before making changes.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the source spreadsheet. Required.
+        new_sheet_name (Optional[str]): Name for the copied sheet. If not provided,
+            defaults to "Copy of <original_name>".
+        source_sheet_name (Optional[str]): Name of the sheet to copy. If not provided
+            and source_sheet_id is not set, copies the first sheet.
+        source_sheet_id (Optional[int]): ID of the sheet to copy. Alternative to
+            source_sheet_name. Takes precedence over source_sheet_name.
+        destination_spreadsheet_id (Optional[str]): ID of the destination spreadsheet.
+            If not provided, copies within the same spreadsheet.
+
+    Returns:
+        str: Confirmation message with details about the new sheet (name, ID, location).
+
+    Example:
+        Copy a sheet within the same spreadsheet:
+        >>> copy_sheet(spreadsheet_id="...", source_sheet_name="Template")
+
+        Copy with a custom name:
+        >>> copy_sheet(spreadsheet_id="...", source_sheet_name="Data", new_sheet_name="Data Backup")
+
+        Copy to another spreadsheet:
+        >>> copy_sheet(spreadsheet_id="...", source_sheet_name="Template",
+        ...            destination_spreadsheet_id="other_spreadsheet_id")
+    """
+    logger.info(
+        f"[copy_sheet] Invoked. Email: '{user_google_email}', "
+        f"Spreadsheet: {spreadsheet_id}, source_sheet_name: {source_sheet_name}, "
+        f"source_sheet_id: {source_sheet_id}, new_sheet_name: {new_sheet_name}, "
+        f"destination: {destination_spreadsheet_id or 'same spreadsheet'}"
+    )
+
+    # Resolve the source sheet ID and get its name for the output message
+    resolved_source_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, source_sheet_name, source_sheet_id
+    )
+
+    # Get the source sheet's name for the default copy name and output message
+    spreadsheet = await asyncio.to_thread(
+        service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+    )
+
+    source_sheet_title = None
+    for sheet in spreadsheet.get("sheets", []):
+        props = sheet.get("properties", {})
+        if props.get("sheetId") == resolved_source_sheet_id:
+            source_sheet_title = props.get("title", "Unknown")
+            break
+
+    if source_sheet_title is None:
+        raise Exception(
+            f"Could not find sheet with ID {resolved_source_sheet_id} "
+            f"in spreadsheet {spreadsheet_id}."
+        )
+
+    # Determine the destination spreadsheet
+    dest_spreadsheet_id = destination_spreadsheet_id or spreadsheet_id
+    is_same_spreadsheet = dest_spreadsheet_id == spreadsheet_id
+
+    # Copy the sheet using the copyTo API
+    copy_request_body = {"destinationSpreadsheetId": dest_spreadsheet_id}
+
+    copy_response = await asyncio.to_thread(
+        service.spreadsheets()
+        .sheets()
+        .copyTo(
+            spreadsheetId=spreadsheet_id,
+            sheetId=resolved_source_sheet_id,
+            body=copy_request_body,
+        )
+        .execute
+    )
+
+    # The copyTo API returns the properties of the new sheet
+    new_sheet_id = copy_response.get("sheetId")
+    default_new_name = copy_response.get("title", f"Copy of {source_sheet_title}")
+
+    # If a custom name was requested, rename the sheet
+    final_sheet_name = default_new_name
+    if new_sheet_name and new_sheet_name != default_new_name:
+        rename_request_body = {
+            "requests": [
+                {
+                    "updateSheetProperties": {
+                        "properties": {
+                            "sheetId": new_sheet_id,
+                            "title": new_sheet_name,
+                        },
+                        "fields": "title",
+                    }
+                }
+            ]
+        }
+
+        await asyncio.to_thread(
+            service.spreadsheets()
+            .batchUpdate(spreadsheetId=dest_spreadsheet_id, body=rename_request_body)
+            .execute
+        )
+        final_sheet_name = new_sheet_name
+
+    # Build the success message
+    if is_same_spreadsheet:
+        text_output = (
+            f"Successfully copied sheet '{source_sheet_title}' to '{final_sheet_name}' "
+            f"(ID: {new_sheet_id}) in spreadsheet {spreadsheet_id} for {user_google_email}."
+        )
+    else:
+        text_output = (
+            f"Successfully copied sheet '{source_sheet_title}' from spreadsheet {spreadsheet_id} "
+            f"to '{final_sheet_name}' (ID: {new_sheet_id}) in destination spreadsheet "
+            f"{dest_spreadsheet_id} for {user_google_email}."
+        )
+
+    logger.info(
+        f"Successfully copied sheet for {user_google_email}. New sheet ID: {new_sheet_id}"
+    )
+    return text_output
+
+
 # Create comment management tools for sheets
 _comment_tools = create_comment_tools("spreadsheet", "spreadsheet_id")
 
