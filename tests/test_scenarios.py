@@ -2,6 +2,7 @@
 """
 Manual Testing Script - Final edge cases
 """
+
 import asyncio
 import sys
 import os
@@ -23,7 +24,10 @@ async def main():
         """Call a tool with email and doc_id automatically added"""
         if "user_google_email" not in kwargs:
             kwargs["user_google_email"] = EMAIL
-        if "document_id" not in kwargs and tool_name not in ["search_docs", "create_doc"]:
+        if "document_id" not in kwargs and tool_name not in [
+            "search_docs",
+            "create_doc",
+        ]:
             kwargs["document_id"] = TEST_DOC_ID
 
         tool = tester.tools.get(tool_name)
@@ -39,6 +43,7 @@ async def main():
             return result
         except Exception as e:
             import traceback
+
             print(f"Error calling {tool_name}: {e}")
             traceback.print_exc()
             return None
@@ -46,54 +51,59 @@ async def main():
     print("=" * 60)
     print("TEST 47: line_spacing with correct values (100, 200)")
     print("=" * 60)
-    
-    result = await call("modify_doc_text",
-                        search="=== Long Text Test ===",
-                        position="replace",
-                        text="=== Long Text Test ===",
-                        line_spacing=200)
+
+    result = await call(
+        "modify_doc_text",
+        search="=== Long Text Test ===",
+        position="replace",
+        text="=== Long Text Test ===",
+        line_spacing=200,
+    )
     print("Line spacing 200 (double):", result)
-    
+
     print("\n" + "=" * 60)
     print("TEST 48: Test subscript and superscript")
     print("=" * 60)
-    
-    result = await call("modify_doc_text",
-                        location="end",
-                        text="\n\nH2O uses subscript",
-                        subscript=True)
+
+    result = await call(
+        "modify_doc_text", location="end", text="\n\nH2O uses subscript", subscript=True
+    )
     print("Subscript:", result)
-    
-    result = await call("modify_doc_text",
-                        location="end",
-                        text="\nE=mc2 uses superscript",
-                        superscript=True)
+
+    result = await call(
+        "modify_doc_text",
+        location="end",
+        text="\nE=mc2 uses superscript",
+        superscript=True,
+    )
     print("Superscript:", result)
-    
+
     print("\n" + "=" * 60)
     print("TEST 49: Invalid document ID")
     print("=" * 60)
-    
-    result = await call("modify_doc_text",
-                        document_id="INVALID_DOC_ID_12345",
-                        location="end",
-                        text="test")
+
+    result = await call(
+        "modify_doc_text",
+        document_id="INVALID_DOC_ID_12345",
+        location="end",
+        text="test",
+    )
     print("Invalid doc ID:", result)
-    
+
     print("\n" + "=" * 60)
     print("TEST 50: Extract links from document")
     print("=" * 60)
-    
+
     result = await call("extract_links")
     print("Extract links:", result)
-    
+
     print("\n" + "=" * 60)
     print("TEST 51: Get document section by heading")
     print("=" * 60)
-    
-    result = await call("get_doc_section",
-                        heading="The Problem")
+
+    result = await call("get_doc_section", heading="The Problem")
     print("Get section:", result)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

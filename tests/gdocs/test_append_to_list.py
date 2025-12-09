@@ -11,6 +11,7 @@ These tests verify:
 5. Correct insertion point calculation
 6. Preview mode functionality
 """
+
 from gdocs.docs_helpers import (
     create_insert_text_request,
     create_bullet_list_request,
@@ -193,8 +194,18 @@ class TestListFindingLogic:
     def test_find_list_by_index_first(self):
         """Test finding first list by default index."""
         all_lists = [
-            {"start_index": 10, "end_index": 50, "list_type": "bullet", "items": [{"text": "First"}]},
-            {"start_index": 100, "end_index": 150, "list_type": "numbered", "items": [{"text": "Second"}]},
+            {
+                "start_index": 10,
+                "end_index": 50,
+                "list_type": "bullet",
+                "items": [{"text": "First"}],
+            },
+            {
+                "start_index": 100,
+                "end_index": 150,
+                "list_type": "numbered",
+                "items": [{"text": "Second"}],
+            },
         ]
         list_index = 0
 
@@ -205,8 +216,18 @@ class TestListFindingLogic:
     def test_find_list_by_index_second(self):
         """Test finding second list by index."""
         all_lists = [
-            {"start_index": 10, "end_index": 50, "list_type": "bullet", "items": [{"text": "First"}]},
-            {"start_index": 100, "end_index": 150, "list_type": "numbered", "items": [{"text": "Second"}]},
+            {
+                "start_index": 10,
+                "end_index": 50,
+                "list_type": "bullet",
+                "items": [{"text": "First"}],
+            },
+            {
+                "start_index": 100,
+                "end_index": 150,
+                "list_type": "numbered",
+                "items": [{"text": "Second"}],
+            },
         ]
         list_index = 1
 
@@ -217,14 +238,24 @@ class TestListFindingLogic:
     def test_find_list_by_search(self):
         """Test finding list by search text."""
         all_lists = [
-            {"start_index": 10, "end_index": 50, "list_type": "bullet", "items": [
-                {"text": "Buy groceries"},
-                {"text": "Walk dog"},
-            ]},
-            {"start_index": 100, "end_index": 150, "list_type": "numbered", "items": [
-                {"text": "Step one"},
-                {"text": "Step two"},
-            ]},
+            {
+                "start_index": 10,
+                "end_index": 50,
+                "list_type": "bullet",
+                "items": [
+                    {"text": "Buy groceries"},
+                    {"text": "Walk dog"},
+                ],
+            },
+            {
+                "start_index": 100,
+                "end_index": 150,
+                "list_type": "numbered",
+                "items": [
+                    {"text": "Step one"},
+                    {"text": "Step two"},
+                ],
+            },
         ]
         search = "step"
         search_lower = search.lower()
@@ -277,7 +308,7 @@ class TestInsertionPointCalculation:
         target_list = {
             "start_index": 10,
             "end_index": 50,
-            "items": [{"text": "Item 1"}, {"text": "Item 2"}]
+            "items": [{"text": "Item 1"}, {"text": "Item 2"}],
         }
 
         insertion_index = target_list["end_index"]
@@ -332,9 +363,7 @@ class TestApiRequestGeneration:
         text_length = 8  # "New item" without final newline
 
         request = create_bullet_list_request(
-            insertion_index,
-            insertion_index + text_length,
-            "UNORDERED"
+            insertion_index, insertion_index + text_length, "UNORDERED"
         )
 
         assert "createParagraphBullets" in request
@@ -349,9 +378,7 @@ class TestApiRequestGeneration:
         text_length = 8
 
         request = create_bullet_list_request(
-            insertion_index,
-            insertion_index + text_length,
-            "ORDERED"
+            insertion_index, insertion_index + text_length, "ORDERED"
         )
 
         assert "createParagraphBullets" in request
@@ -389,7 +416,9 @@ class TestPreviewMode:
             "nesting": {
                 "has_nested_items": has_nested,
                 "max_depth": max_level,
-            } if has_nested else None,
+            }
+            if has_nested
+            else None,
             "items_preview": [
                 {"text": item[:50], "nesting_level": level}
                 for item, level in zip(processed_items, item_nesting)
@@ -409,10 +438,14 @@ class TestPreviewMode:
         has_nested = any(level > 0 for level in item_nesting)
         max_level = max(item_nesting) if has_nested else 0
 
-        nesting_info = {
-            "has_nested_items": has_nested,
-            "max_depth": max_level,
-        } if has_nested else None
+        nesting_info = (
+            {
+                "has_nested_items": has_nested,
+                "max_depth": max_level,
+            }
+            if has_nested
+            else None
+        )
 
         assert nesting_info is not None
         assert nesting_info["has_nested_items"] is True

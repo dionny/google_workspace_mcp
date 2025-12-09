@@ -33,13 +33,7 @@ class TestExtractSectionText:
         """Test extracting simple text from header/footer."""
         section_data = {
             "content": [
-                {
-                    "paragraph": {
-                        "elements": [
-                            {"textRun": {"content": "My Header\n"}}
-                        ]
-                    }
-                }
+                {"paragraph": {"elements": [{"textRun": {"content": "My Header\n"}}]}}
             ]
         }
         result = _extract_section_text(section_data)
@@ -49,20 +43,8 @@ class TestExtractSectionText:
         """Test extracting text from multiple paragraphs."""
         section_data = {
             "content": [
-                {
-                    "paragraph": {
-                        "elements": [
-                            {"textRun": {"content": "Line 1\n"}}
-                        ]
-                    }
-                },
-                {
-                    "paragraph": {
-                        "elements": [
-                            {"textRun": {"content": "Line 2\n"}}
-                        ]
-                    }
-                }
+                {"paragraph": {"elements": [{"textRun": {"content": "Line 1\n"}}]}},
+                {"paragraph": {"elements": [{"textRun": {"content": "Line 2\n"}}]}},
             ]
         }
         result = _extract_section_text(section_data)
@@ -76,7 +58,7 @@ class TestExtractSectionText:
                     "paragraph": {
                         "elements": [
                             {"textRun": {"content": "Bold "}},
-                            {"textRun": {"content": "Text\n"}}
+                            {"textRun": {"content": "Text\n"}},
                         ]
                     }
                 }
@@ -88,15 +70,7 @@ class TestExtractSectionText:
     def test_only_newline_returns_empty(self):
         """Test that section with only newline is treated as empty after strip."""
         section_data = {
-            "content": [
-                {
-                    "paragraph": {
-                        "elements": [
-                            {"textRun": {"content": "\n"}}
-                        ]
-                    }
-                }
-            ]
+            "content": [{"paragraph": {"elements": [{"textRun": {"content": "\n"}}]}}]
         }
         result = _extract_section_text(section_data)
         assert result == ""
@@ -108,12 +82,10 @@ class TestExtractSectionText:
                 {"sectionBreak": {}},
                 {
                     "paragraph": {
-                        "elements": [
-                            {"textRun": {"content": "Header text\n"}}
-                        ]
+                        "elements": [{"textRun": {"content": "Header text\n"}}]
                     }
                 },
-                {"table": {}}
+                {"table": {}},
             ]
         }
         result = _extract_section_text(section_data)
@@ -127,7 +99,7 @@ class TestExtractSectionText:
                     "paragraph": {
                         "elements": [
                             {"inlineObjectElement": {"inlineObjectId": "obj1"}},
-                            {"textRun": {"content": "Text after image\n"}}
+                            {"textRun": {"content": "Text after image\n"}},
                         ]
                     }
                 }
@@ -180,9 +152,7 @@ class TestGetDocHeadersFootersResponseStructure:
             "content": [
                 {
                     "paragraph": {
-                        "elements": [
-                            {"textRun": {"content": "Company Name\n"}}
-                        ]
+                        "elements": [{"textRun": {"content": "Company Name\n"}}]
                     }
                 }
             ]
@@ -204,15 +174,7 @@ class TestGetDocHeadersFootersResponseStructure:
     def test_empty_header_is_flagged(self):
         """Test that empty header is correctly flagged."""
         header_data = {
-            "content": [
-                {
-                    "paragraph": {
-                        "elements": [
-                            {"textRun": {"content": "\n"}}
-                        ]
-                    }
-                }
-            ]
+            "content": [{"paragraph": {"elements": [{"textRun": {"content": "\n"}}]}}]
         }
 
         content = _extract_section_text(header_data)
@@ -252,9 +214,7 @@ class TestEdgeCases:
             "content": [
                 {
                     "paragraph": {
-                        "elements": [
-                            {"textRun": {"content": "日本語ヘッダー 🔒\n"}}
-                        ]
+                        "elements": [{"textRun": {"content": "日本語ヘッダー 🔒\n"}}]
                     }
                 }
             ]
@@ -266,27 +226,9 @@ class TestEdgeCases:
         """Test extracting multi-line header/footer content."""
         section_data = {
             "content": [
-                {
-                    "paragraph": {
-                        "elements": [
-                            {"textRun": {"content": "Line 1\n"}}
-                        ]
-                    }
-                },
-                {
-                    "paragraph": {
-                        "elements": [
-                            {"textRun": {"content": "Line 2\n"}}
-                        ]
-                    }
-                },
-                {
-                    "paragraph": {
-                        "elements": [
-                            {"textRun": {"content": "Line 3\n"}}
-                        ]
-                    }
-                }
+                {"paragraph": {"elements": [{"textRun": {"content": "Line 1\n"}}]}},
+                {"paragraph": {"elements": [{"textRun": {"content": "Line 2\n"}}]}},
+                {"paragraph": {"elements": [{"textRun": {"content": "Line 3\n"}}]}},
             ]
         }
         result = _extract_section_text(section_data)
@@ -296,13 +238,7 @@ class TestEdgeCases:
         """Test that whitespace-only content is stripped properly."""
         section_data = {
             "content": [
-                {
-                    "paragraph": {
-                        "elements": [
-                            {"textRun": {"content": "   \t  \n"}}
-                        ]
-                    }
-                }
+                {"paragraph": {"elements": [{"textRun": {"content": "   \t  \n"}}]}}
             ]
         }
         result = _extract_section_text(section_data)

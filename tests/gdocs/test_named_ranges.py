@@ -3,6 +3,7 @@ Unit tests for Named Range functionality.
 
 Tests verify proper handling of named range creation, listing, and deletion requests.
 """
+
 from gdocs.docs_helpers import (
     create_named_range_request,
     create_delete_named_range_request,
@@ -16,9 +17,7 @@ class TestCreateNamedRangeRequest:
     def test_basic_named_range_request(self):
         """Named range request should have correct structure."""
         request = create_named_range_request(
-            name="test_range",
-            start_index=10,
-            end_index=50
+            name="test_range", start_index=10, end_index=50
         )
 
         assert "createNamedRange" in request
@@ -30,9 +29,7 @@ class TestCreateNamedRangeRequest:
     def test_named_range_at_start(self):
         """Named range at document start (index 1)."""
         request = create_named_range_request(
-            name="start_marker",
-            start_index=1,
-            end_index=1
+            name="start_marker", start_index=1, end_index=1
         )
 
         assert request["createNamedRange"]["range"]["startIndex"] == 1
@@ -44,7 +41,7 @@ class TestCreateNamedRangeRequest:
             name="header_section",
             start_index=0,
             end_index=20,
-            segment_id="kix.header123"
+            segment_id="kix.header123",
         )
 
         assert request["createNamedRange"]["range"]["segmentId"] == "kix.header123"
@@ -52,10 +49,7 @@ class TestCreateNamedRangeRequest:
     def test_named_range_with_tab_id(self):
         """Named range with tab ID for multi-tab documents."""
         request = create_named_range_request(
-            name="tab_section",
-            start_index=1,
-            end_index=100,
-            tab_id="tab.abc123"
+            name="tab_section", start_index=1, end_index=100, tab_id="tab.abc123"
         )
 
         assert request["createNamedRange"]["range"]["tabId"] == "tab.abc123"
@@ -67,7 +61,7 @@ class TestCreateNamedRangeRequest:
             start_index=50,
             end_index=150,
             segment_id="kix.segment",
-            tab_id="tab.xyz"
+            tab_id="tab.xyz",
         )
 
         range_obj = request["createNamedRange"]["range"]
@@ -79,9 +73,7 @@ class TestCreateNamedRangeRequest:
     def test_named_range_structure(self):
         """Verify full request structure matches Google Docs API spec."""
         request = create_named_range_request(
-            name="structure_test",
-            start_index=100,
-            end_index=200
+            name="structure_test", start_index=100, end_index=200
         )
 
         # Should have exactly one key at top level
@@ -101,9 +93,7 @@ class TestCreateNamedRangeRequest:
     def test_named_range_name_with_special_characters(self):
         """Named range names can contain special characters."""
         request = create_named_range_request(
-            name="section_v2.0_alpha-test",
-            start_index=1,
-            end_index=10
+            name="section_v2.0_alpha-test", start_index=1, end_index=10
         )
 
         assert request["createNamedRange"]["name"] == "section_v2.0_alpha-test"
@@ -111,9 +101,7 @@ class TestCreateNamedRangeRequest:
     def test_named_range_name_with_unicode(self):
         """Named range names can contain unicode characters."""
         request = create_named_range_request(
-            name="sección_principal",
-            start_index=1,
-            end_index=10
+            name="sección_principal", start_index=1, end_index=10
         )
 
         assert request["createNamedRange"]["name"] == "sección_principal"
@@ -124,9 +112,7 @@ class TestDeleteNamedRangeRequest:
 
     def test_delete_by_id(self):
         """Delete request by named range ID should have correct structure."""
-        request = create_delete_named_range_request(
-            named_range_id="kix.abc123def456"
-        )
+        request = create_delete_named_range_request(named_range_id="kix.abc123def456")
 
         assert "deleteNamedRange" in request
         assert request["deleteNamedRange"]["namedRangeId"] == "kix.abc123def456"
@@ -134,9 +120,7 @@ class TestDeleteNamedRangeRequest:
 
     def test_delete_by_name(self):
         """Delete request by name should have correct structure."""
-        request = create_delete_named_range_request(
-            name="old_marker"
-        )
+        request = create_delete_named_range_request(name="old_marker")
 
         assert "deleteNamedRange" in request
         assert request["deleteNamedRange"]["name"] == "old_marker"
@@ -152,18 +136,17 @@ class TestDeleteNamedRangeRequest:
     def test_delete_with_tabs_criteria(self):
         """Delete request can include tabs criteria."""
         request = create_delete_named_range_request(
-            name="multi_tab_range",
-            tabs_criteria={"tabIds": ["tab1", "tab2"]}
+            name="multi_tab_range", tabs_criteria={"tabIds": ["tab1", "tab2"]}
         )
 
         assert request["deleteNamedRange"]["name"] == "multi_tab_range"
-        assert request["deleteNamedRange"]["tabsCriteria"] == {"tabIds": ["tab1", "tab2"]}
+        assert request["deleteNamedRange"]["tabsCriteria"] == {
+            "tabIds": ["tab1", "tab2"]
+        }
 
     def test_delete_by_id_structure(self):
         """Verify delete by ID request structure matches Google Docs API spec."""
-        request = create_delete_named_range_request(
-            named_range_id="kix.test123"
-        )
+        request = create_delete_named_range_request(named_range_id="kix.test123")
 
         # Should have exactly one key at top level
         assert len(request) == 1
@@ -176,9 +159,7 @@ class TestDeleteNamedRangeRequest:
 
     def test_delete_by_name_structure(self):
         """Verify delete by name request structure matches Google Docs API spec."""
-        request = create_delete_named_range_request(
-            name="test_name"
-        )
+        request = create_delete_named_range_request(name="test_name")
 
         # Should have exactly one key at top level
         assert len(request) == 1
@@ -192,8 +173,7 @@ class TestDeleteNamedRangeRequest:
     def test_id_takes_precedence_over_name(self):
         """When both ID and name are provided, ID should be used."""
         request = create_delete_named_range_request(
-            named_range_id="kix.priority",
-            name="should_be_ignored"
+            named_range_id="kix.priority", name="should_be_ignored"
         )
 
         assert request["deleteNamedRange"]["namedRangeId"] == "kix.priority"

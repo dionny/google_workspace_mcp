@@ -11,6 +11,7 @@ These tests verify:
 5. Correct insertion index calculation
 6. Preview mode functionality
 """
+
 from gdocs.docs_helpers import (
     create_insert_text_request,
     create_bullet_list_request,
@@ -198,7 +199,7 @@ class TestInsertionIndexCalculation:
         target_list = {
             "start_index": 10,
             "end_index": 50,
-            "items": [{"text": "Item 1", "start_index": 10, "end_index": 18}]
+            "items": [{"text": "Item 1", "start_index": 10, "end_index": 18}],
         }
 
         position = "start"
@@ -212,7 +213,7 @@ class TestInsertionIndexCalculation:
         target_list = {
             "start_index": 10,
             "end_index": 50,
-            "items": [{"text": "Item 1"}, {"text": "Item 2"}]
+            "items": [{"text": "Item 1"}, {"text": "Item 2"}],
         }
 
         position = "end"
@@ -348,7 +349,12 @@ class TestListFindingLogic:
         """Test finding first list by default index."""
         all_lists = [
             {"start_index": 10, "end_index": 50, "list_type": "bullet", "items": []},
-            {"start_index": 100, "end_index": 150, "list_type": "numbered", "items": []},
+            {
+                "start_index": 100,
+                "end_index": 150,
+                "list_type": "numbered",
+                "items": [],
+            },
         ]
         list_index = 0
 
@@ -358,12 +364,22 @@ class TestListFindingLogic:
     def test_find_list_by_search(self):
         """Test finding list by search text."""
         all_lists = [
-            {"start_index": 10, "end_index": 50, "list_type": "bullet", "items": [
-                {"text": "Buy groceries"},
-            ]},
-            {"start_index": 100, "end_index": 150, "list_type": "numbered", "items": [
-                {"text": "Step one"},
-            ]},
+            {
+                "start_index": 10,
+                "end_index": 50,
+                "list_type": "bullet",
+                "items": [
+                    {"text": "Buy groceries"},
+                ],
+            },
+            {
+                "start_index": 100,
+                "end_index": 150,
+                "list_type": "numbered",
+                "items": [
+                    {"text": "Step one"},
+                ],
+            },
         ]
         search = "step"
         search_lower = search.lower()
@@ -458,9 +474,7 @@ class TestApiRequestGeneration:
         text_length = 8  # "New item" without final newline
 
         request = create_bullet_list_request(
-            insertion_index,
-            insertion_index + text_length,
-            "UNORDERED"
+            insertion_index, insertion_index + text_length, "UNORDERED"
         )
 
         assert "createParagraphBullets" in request
@@ -475,9 +489,7 @@ class TestApiRequestGeneration:
         text_length = 8
 
         request = create_bullet_list_request(
-            insertion_index,
-            insertion_index + text_length,
-            "ORDERED"
+            insertion_index, insertion_index + text_length, "ORDERED"
         )
 
         assert "createParagraphBullets" in request

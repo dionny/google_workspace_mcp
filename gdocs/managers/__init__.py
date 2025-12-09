@@ -19,14 +19,14 @@ from .history_manager import (
 )
 
 __all__ = [
-    'TableOperationManager',
-    'HeaderFooterManager',
-    'ValidationManager',
-    'BatchOperationManager',
-    'HistoryManager',
-    'OperationSnapshot',
-    'UndoResult',
-    'UndoCapability',
-    'get_history_manager',
-    'reset_history_manager',
+    "TableOperationManager",
+    "HeaderFooterManager",
+    "ValidationManager",
+    "BatchOperationManager",
+    "HistoryManager",
+    "OperationSnapshot",
+    "UndoResult",
+    "UndoCapability",
+    "get_history_manager",
+    "reset_history_manager",
 ]

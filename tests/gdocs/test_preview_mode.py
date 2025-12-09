@@ -4,6 +4,7 @@ Unit tests for Google Docs modify_doc_text preview mode.
 Tests the preview=True parameter functionality that allows users to see
 what would change without actually modifying the document.
 """
+
 from gdocs.docs_helpers import extract_text_at_range
 
 
@@ -20,34 +21,27 @@ def create_mock_document(paragraphs: list[tuple[str, int]]) -> dict:
     content = []
 
     # Initial section break
-    content.append({
-        'sectionBreak': {},
-        'startIndex': 0,
-        'endIndex': 1
-    })
+    content.append({"sectionBreak": {}, "startIndex": 0, "endIndex": 1})
 
     for text, start_index in paragraphs:
         end_index = start_index + len(text)
-        content.append({
-            'startIndex': start_index,
-            'endIndex': end_index,
-            'paragraph': {
-                'elements': [{
-                    'startIndex': start_index,
-                    'endIndex': end_index,
-                    'textRun': {
-                        'content': text
-                    }
-                }]
+        content.append(
+            {
+                "startIndex": start_index,
+                "endIndex": end_index,
+                "paragraph": {
+                    "elements": [
+                        {
+                            "startIndex": start_index,
+                            "endIndex": end_index,
+                            "textRun": {"content": text},
+                        }
+                    ]
+                },
             }
-        })
+        )
 
-    return {
-        'title': 'Test Document',
-        'body': {
-            'content': content
-        }
-    }
+    return {"title": "Test Document", "body": {"content": content}}
 
 
 class TestExtractTextAtRange:
@@ -55,10 +49,12 @@ class TestExtractTextAtRange:
 
     def test_extract_simple_range(self):
         """Can extract text at a simple range."""
-        doc = create_mock_document([
-            ("Hello World\n", 1),
-            ("This is a test.\n", 13),
-        ])
+        doc = create_mock_document(
+            [
+                ("Hello World\n", 1),
+                ("This is a test.\n", 13),
+            ]
+        )
 
         result = extract_text_at_range(doc, 1, 6)
 
@@ -69,10 +65,12 @@ class TestExtractTextAtRange:
 
     def test_extract_with_context(self):
         """Returns surrounding context."""
-        doc = create_mock_document([
-            ("Hello World\n", 1),
-            ("This is a test.\n", 13),
-        ])
+        doc = create_mock_document(
+            [
+                ("Hello World\n", 1),
+                ("This is a test.\n", 13),
+            ]
+        )
 
         result = extract_text_at_range(doc, 7, 12, context_chars=5)
 
@@ -83,9 +81,11 @@ class TestExtractTextAtRange:
 
     def test_extract_at_document_start(self):
         """Can extract text at document start."""
-        doc = create_mock_document([
-            ("Hello World\n", 1),
-        ])
+        doc = create_mock_document(
+            [
+                ("Hello World\n", 1),
+            ]
+        )
 
         result = extract_text_at_range(doc, 1, 4)
 
@@ -95,9 +95,11 @@ class TestExtractTextAtRange:
 
     def test_extract_at_invalid_range_returns_not_found(self):
         """Returns found=False for indices outside text content."""
-        doc = create_mock_document([
-            ("Hello\n", 1),
-        ])
+        doc = create_mock_document(
+            [
+                ("Hello\n", 1),
+            ]
+        )
 
         # Try to get text at index 0 (section break, not text)
         result = extract_text_at_range(doc, 0, 0)
@@ -107,9 +109,11 @@ class TestExtractTextAtRange:
 
     def test_extract_empty_range_for_insert_point(self):
         """For insert operations (same start and end), returns empty text."""
-        doc = create_mock_document([
-            ("Hello World\n", 1),
-        ])
+        doc = create_mock_document(
+            [
+                ("Hello World\n", 1),
+            ]
+        )
 
         result = extract_text_at_range(doc, 6, 6)
 
@@ -133,13 +137,10 @@ class TestPreviewResponseStructure:
             "position_shift": 0,
             "current_content": "old text",
             "new_content": "new text",
-            "context": {
-                "before": "...before...",
-                "after": "...after..."
-            },
+            "context": {"before": "...before...", "after": "...after..."},
             "positioning_info": {},
             "message": "Would replace 8 characters with 8 characters at index 100",
-            "link": "https://docs.google.com/document/d/test/edit"
+            "link": "https://docs.google.com/document/d/test/edit",
         }
 
         # Verify structure
@@ -162,7 +163,7 @@ class TestPreviewResponseStructure:
             "affected_range": {"start": 100, "end": 100},
             "position_shift": 10,  # Text of 10 chars would shift everything right
             "new_content": "new text!.",
-            "message": "Would insert 10 characters at index 100"
+            "message": "Would insert 10 characters at index 100",
         }
 
         assert preview_response["position_shift"] == 10
@@ -181,10 +182,13 @@ class TestPreviewResponseStructure:
             "new_length": 7,
             "current_content": "hello",
             "new_content": "goodbye",
-            "message": "Would replace 5 characters with 7 characters at index 10"
+            "message": "Would replace 5 characters with 7 characters at index 10",
         }
 
-        assert preview_response["position_shift"] == preview_response["new_length"] - preview_response["original_length"]
+        assert (
+            preview_response["position_shift"]
+            == preview_response["new_length"] - preview_response["original_length"]
+        )
 
     def test_preview_for_format_has_zero_shift(self):
         """Format preview should have zero position shift."""
@@ -196,7 +200,7 @@ class TestPreviewResponseStructure:
             "position_shift": 0,  # Formatting doesn't change positions
             "styles_to_apply": ["bold", "italic"],
             "current_content": "some text.",
-            "message": "Would apply formatting (bold, italic) to range 10-20"
+            "message": "Would apply formatting (bold, italic) to range 10-20",
         }
 
         assert preview_response["position_shift"] == 0
@@ -229,8 +233,8 @@ class TestPreviewModeDocumentation:
                 "position": "replace",
                 "occurrence": 2,
                 "found_at_index": 150,
-                "message": "Found at index 150"
-            }
+                "message": "Found at index 150",
+            },
         }
 
         assert "positioning_info" in preview_response
@@ -252,11 +256,8 @@ class TestPreviewDeleteOperation:
             "position_shift": -8,  # Deleting shifts everything left
             "deleted_length": 8,
             "current_content": "[DELETE]",
-            "context": {
-                "before": "text before ",
-                "after": " text after"
-            },
-            "message": "Would delete 8 characters from index 100 to 108"
+            "context": {"before": "text before ", "after": " text after"},
+            "message": "Would delete 8 characters from index 100 to 108",
         }
 
         assert preview_response["position_shift"] == -8
@@ -273,7 +274,7 @@ class TestPreviewDeleteOperation:
             "position_shift": -5,
             "deleted_length": 5,
             "current_content": "Hello",
-            "message": "Would delete 5 characters from index 50 to 55"
+            "message": "Would delete 5 characters from index 50 to 55",
         }
 
         assert "current_content" in preview_response
@@ -298,25 +299,25 @@ class TestFindAndReplacePreviewResponseStructure:
                     "index": 1,
                     "range": {"start": 15, "end": 19},
                     "text": "TODO",
-                    "context": {"before": "...", "after": "..."}
+                    "context": {"before": "...", "after": "..."},
                 },
                 {
                     "index": 2,
                     "range": {"start": 50, "end": 54},
                     "text": "TODO",
-                    "context": {"before": "...", "after": "..."}
+                    "context": {"before": "...", "after": "..."},
                 },
                 {
                     "index": 3,
                     "range": {"start": 100, "end": 104},
                     "text": "TODO",
-                    "context": {"before": "...", "after": "..."}
+                    "context": {"before": "...", "after": "..."},
                 },
             ],
             "position_shift_per_replacement": 0,
             "total_position_shift": 0,
             "link": "https://docs.google.com/document/d/test/edit",
-            "message": "Would replace 3 occurrence(s) of 'TODO' with 'DONE'"
+            "message": "Would replace 3 occurrence(s) of 'TODO' with 'DONE'",
         }
 
         # Verify structure
@@ -346,8 +347,14 @@ class TestFindAndReplacePreviewResponseStructure:
             "total_position_shift": 12,  # 3 * 4 = 12
         }
 
-        assert preview_response["position_shift_per_replacement"] == len("foobar") - len("foo")
-        assert preview_response["total_position_shift"] == preview_response["position_shift_per_replacement"] * preview_response["occurrences_found"]
+        assert preview_response["position_shift_per_replacement"] == len(
+            "foobar"
+        ) - len("foo")
+        assert (
+            preview_response["total_position_shift"]
+            == preview_response["position_shift_per_replacement"]
+            * preview_response["occurrences_found"]
+        )
 
     def test_preview_with_no_matches_shows_would_not_modify(self):
         """Preview with no matches should show would_modify=False."""
@@ -360,7 +367,7 @@ class TestFindAndReplacePreviewResponseStructure:
             "matches": [],
             "position_shift_per_replacement": 9,  # len("something") - len("nonexistent") = -2
             "total_position_shift": 0,  # 0 occurrences = 0 total shift
-            "message": "No occurrences of 'nonexistent' found in document"
+            "message": "No occurrences of 'nonexistent' found in document",
         }
 
         assert preview_response["would_modify"] is False
@@ -374,10 +381,7 @@ class TestFindAndReplacePreviewResponseStructure:
             "index": 1,
             "range": {"start": 25, "end": 30},
             "text": "hello",
-            "context": {
-                "before": "say ",
-                "after": " world"
-            }
+            "context": {"before": "say ", "after": " world"},
         }
 
         assert "index" in match
@@ -421,7 +425,7 @@ class TestRangeInspectionPreview:
             "content_length": 150,
             "context": {
                 "before": "...text before the range...",
-                "after": "...text after the range..."
+                "after": "...text after the range...",
             },
             "positioning_info": {
                 "range": {"section": "The Problem", "include_heading": False},
@@ -429,7 +433,7 @@ class TestRangeInspectionPreview:
                 "resolved_end": 250,
             },
             "message": "Range inspection: resolved to indices 100-250",
-            "link": "https://docs.google.com/document/d/test/edit"
+            "link": "https://docs.google.com/document/d/test/edit",
         }
 
         # Verify structure
@@ -459,7 +463,7 @@ class TestRangeInspectionPreview:
             "content_length": 57,
             "context": {
                 "before": "The Problem\n",  # The heading
-                "after": "\nNext Section..."
+                "after": "\nNext Section...",
             },
             "positioning_info": {
                 "range": {"section": "The Problem", "include_heading": False},
@@ -467,7 +471,7 @@ class TestRangeInspectionPreview:
                 "resolved_end": 200,
                 "section_name": "The Problem",
             },
-            "message": "Range inspection: resolved to indices 50-200"
+            "message": "Range inspection: resolved to indices 50-200",
         }
 
         assert preview_response["would_modify"] is False
@@ -484,16 +488,13 @@ class TestRangeInspectionPreview:
             "position_shift": 0,
             "current_content": "important keyword",
             "content_length": 17,
-            "context": {
-                "before": "text with an ",
-                "after": " in it"
-            },
+            "context": {"before": "text with an ", "after": " in it"},
             "positioning_info": {
                 "search": "important keyword",
                 "resolved_start": 75,
                 "resolved_end": 90,
             },
-            "message": "Search 'important keyword' found at indices 75-90"
+            "message": "Search 'important keyword' found at indices 75-90",
         }
 
         assert preview_response["would_modify"] is False
@@ -505,21 +506,21 @@ class TestRangeInspectionPreview:
             "preview": True,
             "would_modify": False,
             "operation": "range_inspection",
-            "affected_range": {"start": 100, "end": 100},  # Same start/end = insertion point
+            "affected_range": {
+                "start": 100,
+                "end": 100,
+            },  # Same start/end = insertion point
             "position_shift": 0,
             "current_content": "",
             "content_length": 0,
-            "context": {
-                "before": "Section heading\n",
-                "after": "Content after..."
-            },
+            "context": {"before": "Section heading\n", "after": "Content after..."},
             "note": "This is an insertion point, not a range selection",
             "positioning_info": {
                 "heading": "Section heading",
                 "section_position": "start",
                 "insertion_index": 100,
             },
-            "message": "Heading 'Section heading' section start: insertion point at index 100"
+            "message": "Heading 'Section heading' section start: insertion point at index 100",
         }
 
         assert preview_response["would_modify"] is False
@@ -580,11 +581,13 @@ class TestFindAndReplaceExecuteResponseStructure:
                 {"index": 5, "original_range": {"start": 200, "end": 204}},
             ],
             "message": "Replaced 5 occurrence(s) of 'TODO' with 'DONE'",
-            "link": "https://docs.google.com/document/d/test/edit"
+            "link": "https://docs.google.com/document/d/test/edit",
         }
 
         # The critical assertion: occurrences_replaced must equal len(affected_ranges)
-        assert execute_response["occurrences_replaced"] == len(execute_response["affected_ranges"])
+        assert execute_response["occurrences_replaced"] == len(
+            execute_response["affected_ranges"]
+        )
 
     def test_execute_response_has_required_fields(self):
         """Execute response should contain all required fields."""
@@ -603,7 +606,7 @@ class TestFindAndReplaceExecuteResponseStructure:
                 {"index": 3, "original_range": {"start": 100, "end": 104}},
             ],
             "message": "Replaced 3 occurrence(s) of 'TODO' with 'DONE'",
-            "link": "https://docs.google.com/document/d/test/edit"
+            "link": "https://docs.google.com/document/d/test/edit",
         }
 
         # Verify structure
@@ -639,7 +642,15 @@ class TestFindAndReplaceExecuteResponseStructure:
             ],
         }
 
-        assert execute_response["position_shift_per_replacement"] == len("foobar") - len("foo")
-        assert execute_response["total_position_shift"] == execute_response["position_shift_per_replacement"] * execute_response["occurrences_replaced"]
+        assert execute_response["position_shift_per_replacement"] == len(
+            "foobar"
+        ) - len("foo")
+        assert (
+            execute_response["total_position_shift"]
+            == execute_response["position_shift_per_replacement"]
+            * execute_response["occurrences_replaced"]
+        )
         # And verify consistency
-        assert execute_response["occurrences_replaced"] == len(execute_response["affected_ranges"])
+        assert execute_response["occurrences_replaced"] == len(
+            execute_response["affected_ranges"]
+        )

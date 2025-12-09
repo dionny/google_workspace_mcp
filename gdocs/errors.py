@@ -5,6 +5,7 @@ This module provides structured, actionable error messages for Google Docs opera
 Errors are designed to be self-documenting and help both humans and AI agents
 understand what went wrong and how to fix it.
 """
+
 import json
 import logging
 from enum import Enum
@@ -61,6 +62,7 @@ class ErrorCode(str, Enum):
 @dataclass
 class ErrorContext:
     """Additional context for error messages."""
+
     received: Optional[Dict[str, Any]] = None
     expected: Optional[Dict[str, Any]] = None
     document_length: Optional[int] = None
@@ -87,6 +89,7 @@ class StructuredError:
         context: Additional context like received values, document length, etc.
         docs_url: Optional URL to relevant documentation
     """
+
     error: bool = True
     code: str = ""
     message: str = ""
@@ -139,10 +142,16 @@ class DocsErrorBuilder:
     def formatting_requires_range(
         start_index: int,
         has_text: bool = False,
-        formatting_params: Optional[List[str]] = None
+        formatting_params: Optional[List[str]] = None,
     ) -> StructuredError:
         """Error when formatting is requested without an end_index."""
-        params = formatting_params or ["bold", "italic", "underline", "font_size", "font_family"]
+        params = formatting_params or [
+            "bold",
+            "italic",
+            "underline",
+            "font_size",
+            "font_family",
+        ]
 
         if has_text:
             suggestion = (
@@ -153,7 +162,7 @@ class DocsErrorBuilder:
                 "correct_usage": {
                     "description": "Insert and format in one call",
                     "call": f"modify_doc_text(document_id='...', start_index={start_index}, "
-                           f"text='IMPORTANT:', bold=True)"
+                    f"text='IMPORTANT:', bold=True)",
                 }
             }
         else:
@@ -165,14 +174,14 @@ class DocsErrorBuilder:
                 "option_1": {
                     "description": "Format existing text",
                     "call": f"modify_doc_text(document_id='...', start_index={start_index}, "
-                           f"end_index={start_index + 10}, bold=True)"
+                    f"end_index={start_index + 10}, bold=True)",
                 },
                 "option_2": {
                     "description": "Insert then format (two calls)",
                     "step1": f"modify_doc_text(document_id='...', start_index={start_index}, text='new text')",
                     "step2": f"modify_doc_text(document_id='...', start_index={start_index}, "
-                            f"end_index={start_index + 8}, bold=True)"
-                }
+                    f"end_index={start_index + 8}, bold=True)",
+                },
             }
 
         return StructuredError(
@@ -185,15 +194,17 @@ class DocsErrorBuilder:
             suggestion=suggestion,
             example=example,
             context=ErrorContext(
-                received={"start_index": start_index, "formatting": params, "text": None if not has_text else "(provided)"}
-            )
+                received={
+                    "start_index": start_index,
+                    "formatting": params,
+                    "text": None if not has_text else "(provided)",
+                }
+            ),
         )
 
     @staticmethod
     def index_out_of_bounds(
-        index_name: str,
-        index_value: int,
-        document_length: int
+        index_name: str, index_value: int, document_length: int
     ) -> StructuredError:
         """Error when an index exceeds document length."""
         return StructuredError(
@@ -206,19 +217,15 @@ class DocsErrorBuilder:
             suggestion="Use get_doc_info or get_doc_content to check document length before editing.",
             example={
                 "check_length": "get_doc_info(document_id='...')",
-                "valid_range": f"Use indices between 1 and {document_length - 1}"
+                "valid_range": f"Use indices between 1 and {document_length - 1}",
             },
             context=ErrorContext(
-                document_length=document_length,
-                received={index_name: index_value}
-            )
+                document_length=document_length, received={index_name: index_value}
+            ),
         )
 
     @staticmethod
-    def invalid_index_range(
-        start_index: int,
-        end_index: int
-    ) -> StructuredError:
+    def invalid_index_range(start_index: int, end_index: int) -> StructuredError:
         """Error when start_index >= end_index."""
         return StructuredError(
             code=ErrorCode.INVALID_INDEX_RANGE.value,
@@ -227,8 +234,11 @@ class DocsErrorBuilder:
             suggestion="Swap the values or correct the range specification.",
             context=ErrorContext(
                 received={"start_index": start_index, "end_index": end_index},
-                expected={"start_index": min(start_index, end_index), "end_index": max(start_index, end_index)}
-            )
+                expected={
+                    "start_index": min(start_index, end_index),
+                    "end_index": max(start_index, end_index),
+                },
+            ),
         )
 
     @staticmethod
@@ -241,20 +251,22 @@ class DocsErrorBuilder:
             suggestion="Provide a non-empty search string to locate text in the document.",
             example={
                 "search_mode": "modify_doc_text(document_id='...', search='target text', position='after', text='new text')",
-                "find_and_replace": "find_and_replace_doc(document_id='...', find_text='old', replace_text='new')"
-            }
+                "find_and_replace": "find_and_replace_doc(document_id='...', find_text='old', replace_text='new')",
+            },
         )
 
     @staticmethod
     def search_text_not_found(
         search_text: str,
         similar_found: Optional[List[str]] = None,
-        match_case: bool = True
+        match_case: bool = True,
     ) -> StructuredError:
         """Error when search text is not found in document."""
         suggestions = ["Check spelling and try a shorter, unique phrase"]
         if match_case:
-            suggestions.append("Try setting match_case=False for case-insensitive search")
+            suggestions.append(
+                "Try setting match_case=False for case-insensitive search"
+            )
 
         context = ErrorContext(
             received={"search": search_text, "match_case": match_case}
@@ -269,16 +281,14 @@ class DocsErrorBuilder:
             suggestion=". ".join(suggestions) + ".",
             example={
                 "case_insensitive": f"modify_doc_text(document_id='...', search='{search_text}', "
-                                   f"position='after', match_case=False, text='new text')"
+                f"position='after', match_case=False, text='new text')"
             },
-            context=context
+            context=context,
         )
 
     @staticmethod
     def ambiguous_search(
-        search_text: str,
-        occurrences: List[Dict[str, Any]],
-        total_count: int
+        search_text: str, occurrences: List[Dict[str, Any]], total_count: int
     ) -> StructuredError:
         """Error when multiple occurrences found but no specific one selected."""
         return StructuredError(
@@ -291,22 +301,20 @@ class DocsErrorBuilder:
             ),
             example={
                 "first_occurrence": f"modify_doc_text(document_id='...', search='{search_text}', "
-                                   f"position='replace', occurrence=1, text='replacement')",
+                f"position='replace', occurrence=1, text='replacement')",
                 "last_occurrence": f"modify_doc_text(document_id='...', search='{search_text}', "
-                                  f"position='replace', occurrence=-1, text='replacement')",
+                f"position='replace', occurrence=-1, text='replacement')",
                 "specific_occurrence": f"modify_doc_text(document_id='...', search='{search_text}', "
-                                      f"position='replace', occurrence=2, text='replacement')"
+                f"position='replace', occurrence=2, text='replacement')",
             },
             context=ErrorContext(
                 occurrences=occurrences[:5]  # Limit to first 5
-            )
+            ),
         )
 
     @staticmethod
     def invalid_occurrence(
-        occurrence: int,
-        total_found: int,
-        search_text: str
+        occurrence: int, total_found: int, search_text: str
     ) -> StructuredError:
         """Error when requested occurrence doesn't exist."""
         return StructuredError(
@@ -316,20 +324,20 @@ class DocsErrorBuilder:
             suggestion=f"Use occurrence between 1 and {total_found}, or -1 for the last occurrence.",
             context=ErrorContext(
                 received={"occurrence": occurrence, "search": search_text},
-                expected={"occurrence": f"1 to {total_found} (or -1 for last)"}
-            )
+                expected={"occurrence": f"1 to {total_found} (or -1 for last)"},
+            ),
         )
 
     @staticmethod
     def heading_not_found(
-        heading: str,
-        available_headings: List[str],
-        match_case: bool = True
+        heading: str, available_headings: List[str], match_case: bool = True
     ) -> StructuredError:
         """Error when a heading is not found in the document."""
         suggestions = ["Check spelling of the heading text"]
         if match_case:
-            suggestions.append("Try setting match_case=False for case-insensitive search")
+            suggestions.append(
+                "Try setting match_case=False for case-insensitive search"
+            )
 
         # Truncate available headings list for display
         display_headings = available_headings[:10]
@@ -346,14 +354,12 @@ class DocsErrorBuilder:
             },
             context=ErrorContext(
                 received={"heading": heading, "match_case": match_case},
-                available_headings=display_headings
-            )
+                available_headings=display_headings,
+            ),
         )
 
     @staticmethod
-    def document_not_found(
-        document_id: str
-    ) -> StructuredError:
+    def document_not_found(document_id: str) -> StructuredError:
         """Error when a document cannot be found or accessed."""
         return StructuredError(
             code=ErrorCode.DOCUMENT_NOT_FOUND.value,
@@ -366,16 +372,16 @@ class DocsErrorBuilder:
                     "Document ID is incorrect",
                     "Document was deleted",
                     "You don't have permission to access this document",
-                    "Document ID includes extra characters (quotes, spaces)"
-                ]
-            )
+                    "Document ID includes extra characters (quotes, spaces)",
+                ],
+            ),
         )
 
     @staticmethod
     def permission_denied(
         document_id: str,
         current_permission: str = "viewer",
-        required_permission: str = "editor"
+        required_permission: str = "editor",
     ) -> StructuredError:
         """Error when user lacks permission to edit."""
         return StructuredError(
@@ -386,8 +392,8 @@ class DocsErrorBuilder:
             context=ErrorContext(
                 received={"document_id": document_id},
                 current_permission=current_permission,
-                required_permission=required_permission
-            )
+                required_permission=required_permission,
+            ),
         )
 
     @staticmethod
@@ -395,7 +401,7 @@ class DocsErrorBuilder:
         issue: str,
         row_index: Optional[int] = None,
         col_index: Optional[int] = None,
-        value: Optional[Any] = None
+        value: Optional[Any] = None,
     ) -> StructuredError:
         """Error when table data format is invalid."""
         context_received = {"issue": issue}
@@ -413,36 +419,39 @@ class DocsErrorBuilder:
             suggestion="Ensure all rows have the same number of columns and all cells are strings (use '' for empty cells).",
             example={
                 "correct_format": "[['Header1', 'Header2'], ['Data1', 'Data2'], ['', 'Data3']]",
-                "create_table": "create_table_with_data(document_id='...', index=..., table_data=[[...], [...]])"
+                "create_table": "create_table_with_data(document_id='...', index=..., table_data=[[...], [...]])",
             },
-            context=ErrorContext(received=context_received)
+            context=ErrorContext(received=context_received),
         )
 
     @staticmethod
-    def table_not_found(
-        table_index: int,
-        total_tables: int
-    ) -> StructuredError:
+    def table_not_found(table_index: int, total_tables: int) -> StructuredError:
         """Error when requested table doesn't exist."""
         return StructuredError(
             code=ErrorCode.TABLE_NOT_FOUND.value,
             message=f"Table index {table_index} not found. Document has {total_tables} table(s)",
-            reason=f"Table indices are 0-based. Valid indices are 0 to {total_tables - 1}." if total_tables > 0 else "The document contains no tables.",
+            reason=f"Table indices are 0-based. Valid indices are 0 to {total_tables - 1}."
+            if total_tables > 0
+            else "The document contains no tables.",
             suggestion="Use get_doc_info to see all tables and their indices.",
             example={
                 "inspect_tables": "get_doc_info(document_id='...', detail='tables')"
             },
             context=ErrorContext(
                 received={"table_index": table_index},
-                expected={"valid_indices": f"0 to {total_tables - 1}" if total_tables > 0 else "No tables available"}
-            )
+                expected={
+                    "valid_indices": f"0 to {total_tables - 1}"
+                    if total_tables > 0
+                    else "No tables available"
+                },
+            ),
         )
 
     @staticmethod
     def missing_required_param(
         param_name: str,
         context_description: str,
-        valid_values: Optional[List[str]] = None
+        valid_values: Optional[List[str]] = None,
     ) -> StructuredError:
         """Error when a required parameter is missing."""
         suggestion = f"Provide the '{param_name}' parameter"
@@ -456,7 +465,7 @@ class DocsErrorBuilder:
             suggestion=suggestion,
             context=ErrorContext(
                 expected={param_name: valid_values[0] if valid_values else "(required)"}
-            )
+            ),
         )
 
     @staticmethod
@@ -464,7 +473,7 @@ class DocsErrorBuilder:
         param_name: str,
         received_value: Any,
         valid_values: List[str],
-        context_description: str = ""
+        context_description: str = "",
     ) -> StructuredError:
         """Error when a parameter has an invalid value."""
         return StructuredError(
@@ -474,17 +483,27 @@ class DocsErrorBuilder:
             suggestion=f"Use one of: {', '.join(valid_values)}",
             context=ErrorContext(
                 received={param_name: received_value},
-                expected={param_name: valid_values}
-            )
+                expected={param_name: valid_values},
+            ),
         )
 
     @staticmethod
     def invalid_color_format(
-        color_value: str,
-        param_name: str = "color"
+        color_value: str, param_name: str = "color"
     ) -> StructuredError:
         """Error when a color value has an invalid format."""
-        named_colors = ["red", "green", "blue", "yellow", "orange", "purple", "black", "white", "gray", "grey"]
+        named_colors = [
+            "red",
+            "green",
+            "blue",
+            "yellow",
+            "orange",
+            "purple",
+            "black",
+            "white",
+            "gray",
+            "grey",
+        ]
         return StructuredError(
             code=ErrorCode.INVALID_COLOR_FORMAT.value,
             message=f"Invalid color format for '{param_name}': '{color_value}'",
@@ -494,19 +513,16 @@ class DocsErrorBuilder:
                 "hex_color": "#FF0000",
                 "short_hex": "#F00",
                 "named_color": "red",
-                "usage": f"modify_doc_text(document_id='...', search='text', position='replace', {param_name}='#FF0000', text='colored text')"
+                "usage": f"modify_doc_text(document_id='...', search='text', position='replace', {param_name}='#FF0000', text='colored text')",
             },
             context=ErrorContext(
                 received={param_name: color_value},
-                expected={"format": "hex (#RRGGBB or #RGB) or named color"}
-            )
+                expected={"format": "hex (#RRGGBB or #RGB) or named color"},
+            ),
         )
 
     @staticmethod
-    def conflicting_params(
-        params: List[str],
-        message: str
-    ) -> StructuredError:
+    def conflicting_params(params: List[str], message: str) -> StructuredError:
         """Error when conflicting parameters are provided."""
         return StructuredError(
             code=ErrorCode.CONFLICTING_PARAMS.value,
@@ -516,29 +532,25 @@ class DocsErrorBuilder:
             example={
                 "heading_mode": "modify_doc_text(document_id='...', heading='Section', section_position='end', text='...')",
                 "search_mode": "modify_doc_text(document_id='...', search='text', position='after', text='...')",
-                "index_mode": "modify_doc_text(document_id='...', start_index=100, text='...')"
-            }
+                "index_mode": "modify_doc_text(document_id='...', start_index=100, text='...')",
+            },
         )
 
     @staticmethod
     def operation_needs_action(
-        operation: str,
-        current_state: str,
-        required_action: str
+        operation: str, current_state: str, required_action: str
     ) -> StructuredError:
         """Error when an operation requires a prerequisite action."""
         return StructuredError(
             code=ErrorCode.OPERATION_FAILED.value,
             message=f"Cannot {operation}: {current_state}",
             reason=f"The operation requires: {required_action}",
-            suggestion=required_action
+            suggestion=required_action,
         )
 
     @staticmethod
     def api_error(
-        operation: str,
-        error_message: str,
-        document_id: Optional[str] = None
+        operation: str, error_message: str, document_id: Optional[str] = None
     ) -> StructuredError:
         """Error from Google API call."""
         context_data = {"operation": operation}
@@ -556,30 +568,35 @@ class DocsErrorBuilder:
                     "Document ID may be incorrect",
                     "You may not have permission to access this document",
                     "The document may have been deleted",
-                    "API rate limits may have been exceeded"
-                ]
-            )
+                    "API rate limits may have been exceeded",
+                ],
+            ),
         )
 
     @staticmethod
     def invalid_image_source(
         image_source: str,
         actual_mime_type: Optional[str] = None,
-        error_detail: Optional[str] = None
+        error_detail: Optional[str] = None,
     ) -> StructuredError:
         """Error when image source is invalid or inaccessible."""
-        is_drive_file = not (image_source.startswith('http://') or image_source.startswith('https://'))
+        is_drive_file = not (
+            image_source.startswith("http://") or image_source.startswith("https://")
+        )
 
-        if actual_mime_type and not actual_mime_type.startswith('image/'):
+        if actual_mime_type and not actual_mime_type.startswith("image/"):
             return StructuredError(
                 code=ErrorCode.INVALID_PARAM_VALUE.value,
                 message=f"File is not an image (MIME type: {actual_mime_type})",
                 reason="The specified file is not a valid image format.",
                 suggestion="Provide a valid image file (JPEG, PNG, GIF, etc.) or image URL.",
                 context=ErrorContext(
-                    received={"image_source": image_source, "mime_type": actual_mime_type},
-                    expected={"mime_type": "image/* (e.g., image/jpeg, image/png)"}
-                )
+                    received={
+                        "image_source": image_source,
+                        "mime_type": actual_mime_type,
+                    },
+                    expected={"mime_type": "image/* (e.g., image/jpeg, image/png)"},
+                ),
             )
 
         if is_drive_file:
@@ -594,9 +611,9 @@ class DocsErrorBuilder:
                         "File ID is incorrect",
                         "File was deleted or moved",
                         "You don't have permission to access the file",
-                        "File is not shared with the service account"
-                    ]
-                )
+                        "File is not shared with the service account",
+                    ],
+                ),
             )
         else:
             return StructuredError(
@@ -610,22 +627,20 @@ class DocsErrorBuilder:
                         "URL is invalid or broken",
                         "Image requires authentication",
                         "Server is unreachable",
-                        "URL does not point to an image"
-                    ]
-                )
+                        "URL does not point to an image",
+                    ],
+                ),
             )
 
     @staticmethod
     def pdf_export_error(
-        document_id: str,
-        stage: str,
-        error_detail: str
+        document_id: str, stage: str, error_detail: str
     ) -> StructuredError:
         """Error during PDF export operation."""
         suggestions = {
             "access": "Verify the document ID and ensure you have access permissions.",
             "export": "The document may be too large or contain unsupported elements. Try exporting a smaller document.",
-            "upload": "Check Drive permissions and storage quota."
+            "upload": "Check Drive permissions and storage quota.",
         }
 
         return StructuredError(
@@ -639,9 +654,9 @@ class DocsErrorBuilder:
                     "Document may be too large",
                     "Document may contain unsupported elements",
                     "Insufficient Drive storage quota",
-                    "Permission issues with target folder"
-                ]
-            )
+                    "Permission issues with target folder",
+                ],
+            ),
         )
 
     @staticmethod
@@ -649,7 +664,7 @@ class DocsErrorBuilder:
         document_id: str,
         file_name: str,
         actual_mime_type: str,
-        expected_mime_type: str = "application/vnd.google-apps.document"
+        expected_mime_type: str = "application/vnd.google-apps.document",
     ) -> StructuredError:
         """Error when file is not the expected Google Docs type."""
         return StructuredError(
@@ -659,8 +674,8 @@ class DocsErrorBuilder:
             suggestion="Only native Google Docs can be used with this operation. Convert the file to Google Docs format first.",
             context=ErrorContext(
                 received={"document_id": document_id, "mime_type": actual_mime_type},
-                expected={"mime_type": expected_mime_type}
-            )
+                expected={"mime_type": expected_mime_type},
+            ),
         )
 
     @staticmethod
@@ -674,12 +689,14 @@ class DocsErrorBuilder:
             example={
                 "insert_text": "modify_doc_text(document_id='...', location='end', text='new content')",
                 "delete_text": "modify_doc_text(document_id='...', start_index=10, end_index=20, text='')",
-                "replace_via_search": "modify_doc_text(document_id='...', search='old', position='replace', text='new')"
+                "replace_via_search": "modify_doc_text(document_id='...', search='old', position='replace', text='new')",
             },
             context=ErrorContext(
                 received={"text": "''"},
-                expected={"text": "non-empty string for insertion, or provide end_index > start_index to delete a range"}
-            )
+                expected={
+                    "text": "non-empty string for insertion, or provide end_index > start_index to delete a range"
+                },
+            ),
         )
 
     @staticmethod
@@ -687,7 +704,7 @@ class DocsErrorBuilder:
         entity_type: str,
         search_criteria: str,
         available_options: Optional[List[str]] = None,
-        suggestion: Optional[str] = None
+        suggestion: Optional[str] = None,
     ) -> StructuredError:
         """
         Generic error when an entity is not found.
@@ -706,7 +723,9 @@ class DocsErrorBuilder:
 
         default_suggestion = f"Check the {entity_type} name and try again."
         if available_options:
-            default_suggestion += f" Available {entity_type}s are listed in the context."
+            default_suggestion += (
+                f" Available {entity_type}s are listed in the context."
+            )
 
         return StructuredError(
             code=ErrorCode.OPERATION_FAILED.value,
@@ -715,8 +734,8 @@ class DocsErrorBuilder:
             suggestion=suggestion or default_suggestion,
             context=ErrorContext(
                 received={"search": search_criteria, "entity_type": entity_type},
-                available_headings=display_options  # Reusing available_headings for generic list
-            )
+                available_headings=display_options,  # Reusing available_headings for generic list
+            ),
         )
 
     @staticmethod
@@ -724,7 +743,7 @@ class DocsErrorBuilder:
         reason: str,
         current_state: str,
         required_state: str,
-        suggestion: Optional[str] = None
+        suggestion: Optional[str] = None,
     ) -> StructuredError:
         """
         Error when an operation cannot proceed due to invalid state.
@@ -739,11 +758,12 @@ class DocsErrorBuilder:
             code=ErrorCode.OPERATION_FAILED.value,
             message=reason,
             reason=f"Current state: {current_state}. Required state: {required_state}.",
-            suggestion=suggestion or f"Ensure the document is in the required state: {required_state}",
+            suggestion=suggestion
+            or f"Ensure the document is in the required state: {required_state}",
             context=ErrorContext(
                 received={"current_state": current_state},
-                expected={"required_state": required_state}
-            )
+                expected={"required_state": required_state},
+            ),
         )
 
     @staticmethod
@@ -752,7 +772,7 @@ class DocsErrorBuilder:
         value: Any,
         min_val: Any,
         max_val: Any,
-        suggestion: Optional[str] = None
+        suggestion: Optional[str] = None,
     ) -> StructuredError:
         """
         Error when a parameter value is outside the allowed range.
@@ -768,11 +788,12 @@ class DocsErrorBuilder:
             code=ErrorCode.INVALID_PARAM_VALUE.value,
             message=f"'{param_name}' value {value} is out of range [{min_val}, {max_val}]",
             reason=f"The parameter '{param_name}' must be between {min_val} and {max_val} (inclusive).",
-            suggestion=suggestion or f"Provide a value between {min_val} and {max_val} for '{param_name}'.",
+            suggestion=suggestion
+            or f"Provide a value between {min_val} and {max_val} for '{param_name}'.",
             context=ErrorContext(
                 received={param_name: value},
-                expected={param_name: f"{min_val} to {max_val}"}
-            )
+                expected={param_name: f"{min_val} to {max_val}"},
+            ),
         )
 
 
@@ -791,9 +812,5 @@ def simple_error(code: ErrorCode, message: str, suggestion: str = "") -> str:
 
     Useful for quick validation errors where full context isn't needed.
     """
-    error = StructuredError(
-        code=code.value,
-        message=message,
-        suggestion=suggestion
-    )
+    error = StructuredError(code=code.value, message=message, suggestion=suggestion)
     return error.to_json()

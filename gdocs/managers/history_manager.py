@@ -18,6 +18,7 @@ Limitations:
 - Complex operations (like find_replace) have limited undo support
 - Format undo requires storing the original formatting (complex to implement fully)
 """
+
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 class UndoCapability(str, Enum):
     """Indicates how well an operation can be undone."""
+
     FULL = "full"  # Can be fully reversed
     PARTIAL = "partial"  # Can be partially reversed (e.g., text but not formatting)
     NONE = "none"  # Cannot be undone (e.g., find_replace with unknown matches)
@@ -41,6 +43,7 @@ class OperationSnapshot:
 
     Stores both the operation performed and the data needed to reverse it.
     """
+
     id: str  # Unique operation ID
     document_id: str
     timestamp: datetime
@@ -52,7 +55,9 @@ class OperationSnapshot:
     # Data needed for undo
     deleted_text: Optional[str] = None  # Text that was deleted (for undo)
     original_text: Optional[str] = None  # Original text before replace (for undo)
-    original_formatting: Optional[Dict[str, Any]] = None  # Original formatting (for undo)
+    original_formatting: Optional[Dict[str, Any]] = (
+        None  # Original formatting (for undo)
+    )
 
     # Position tracking
     start_index: int = 0
@@ -72,15 +77,16 @@ class OperationSnapshot:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         result = asdict(self)
-        result['timestamp'] = self.timestamp.isoformat()
+        result["timestamp"] = self.timestamp.isoformat()
         if self.undone_at:
-            result['undone_at'] = self.undone_at.isoformat()
+            result["undone_at"] = self.undone_at.isoformat()
         return result
 
 
 @dataclass
 class UndoResult:
     """Result of an undo operation."""
+
     success: bool
     message: str
     operation_id: Optional[str] = None
@@ -96,6 +102,7 @@ class UndoResult:
 @dataclass
 class DocumentHistory:
     """History of operations for a single document."""
+
     document_id: str
     operations: List[OperationSnapshot] = field(default_factory=list)
     max_history_size: int = 50  # Maximum operations to keep per document
@@ -106,7 +113,7 @@ class DocumentHistory:
         # Trim old operations if we exceed max size
         if len(self.operations) > self.max_history_size:
             # Keep the most recent operations
-            self.operations = self.operations[-self.max_history_size:]
+            self.operations = self.operations[-self.max_history_size :]
 
     def get_last_undoable(self) -> Optional[OperationSnapshot]:
         """Get the last operation that can be undone."""
@@ -176,8 +183,7 @@ class HistoryManager:
         """Get or create history for a document."""
         if document_id not in self._history:
             self._history[document_id] = DocumentHistory(
-                document_id=document_id,
-                max_history_size=self._max_history_per_doc
+                document_id=document_id, max_history_size=self._max_history_per_doc
             )
         return self._history[document_id]
 
@@ -246,7 +252,9 @@ class HistoryManager:
 
         history.add_operation(snapshot)
         batch_info = f" (batch={batch_id}, idx={batch_index})" if batch_id else ""
-        logger.info(f"Recorded operation {snapshot.id}: {operation_type} on {document_id}{batch_info}")
+        logger.info(
+            f"Recorded operation {snapshot.id}: {operation_type} on {document_id}{batch_info}"
+        )
 
         return snapshot
 
@@ -268,7 +276,7 @@ class HistoryManager:
             return UndoResult(
                 success=False,
                 message="No history found for this document",
-                error="No operations have been tracked for this document"
+                error="No operations have been tracked for this document",
             )
 
         operation = history.get_last_undoable()
@@ -276,7 +284,7 @@ class HistoryManager:
             return UndoResult(
                 success=False,
                 message="No undoable operations found",
-                error="All operations have been undone or cannot be undone"
+                error="All operations have been undone or cannot be undone",
             )
 
         if operation.undo_capability == UndoCapability.NONE:
@@ -284,7 +292,8 @@ class HistoryManager:
                 success=False,
                 message=f"Operation {operation.id} cannot be undone",
                 operation_id=operation.id,
-                error=operation.undo_notes or "This operation type does not support undo"
+                error=operation.undo_notes
+                or "This operation type does not support undo",
             )
 
         # Generate the reverse operation based on type
@@ -295,12 +304,15 @@ class HistoryManager:
                 success=False,
                 message=f"Could not generate undo for operation {operation.id}",
                 operation_id=operation.id,
-                error="Missing information required for undo"
+                error="Missing information required for undo",
             )
 
         notes = []
         if operation.undo_capability == UndoCapability.PARTIAL:
-            notes.append(operation.undo_notes or "Partial undo - some aspects may not be reversed")
+            notes.append(
+                operation.undo_notes
+                or "Partial undo - some aspects may not be reversed"
+            )
 
         return UndoResult(
             success=True,
@@ -333,7 +345,7 @@ class HistoryManager:
                 "type": "delete_text",
                 "start_index": start,
                 "end_index": start + text_len,
-                "description": f"Undo insert: delete {text_len} chars at {start}"
+                "description": f"Undo insert: delete {text_len} chars at {start}",
             }
 
         elif op_type == "delete_text":
@@ -344,7 +356,7 @@ class HistoryManager:
                 "type": "insert_text",
                 "index": operation.start_index,
                 "text": operation.deleted_text,
-                "description": f"Undo delete: re-insert {len(operation.deleted_text)} chars at {operation.start_index}"
+                "description": f"Undo delete: re-insert {len(operation.deleted_text)} chars at {operation.start_index}",
             }
 
         elif op_type == "replace_text":
@@ -357,7 +369,7 @@ class HistoryManager:
                 "start_index": operation.start_index,
                 "end_index": operation.start_index + new_text_len,
                 "text": operation.original_text,
-                "description": f"Undo replace: restore original text at {operation.start_index}"
+                "description": f"Undo replace: restore original text at {operation.start_index}",
             }
 
         elif op_type == "format_text":
@@ -371,7 +383,7 @@ class HistoryManager:
                 "start_index": operation.start_index,
                 "end_index": operation.end_index,
                 **operation.original_formatting,
-                "description": f"Undo format: restore original formatting at {operation.start_index}-{operation.end_index}"
+                "description": f"Undo format: restore original formatting at {operation.start_index}-{operation.end_index}",
             }
 
         elif op_type == "insert_table":
@@ -385,7 +397,7 @@ class HistoryManager:
                 "type": "delete_text",
                 "start_index": operation.start_index,
                 "end_index": operation.start_index + 1,
-                "description": f"Undo page break: delete at {operation.start_index}"
+                "description": f"Undo page break: delete at {operation.start_index}",
             }
 
         elif op_type == "find_replace":
@@ -514,7 +526,7 @@ class HistoryManager:
             return UndoResult(
                 success=False,
                 message=f"No batch found with ID: {batch_id}",
-                error="Batch ID not found in history"
+                error="Batch ID not found in history",
             )
 
         # Check if any operation in the batch has already been undone
@@ -522,16 +534,18 @@ class HistoryManager:
             return UndoResult(
                 success=False,
                 message=f"Batch {batch_id} has already been partially or fully undone",
-                error="Some operations in the batch have already been undone"
+                error="Some operations in the batch have already been undone",
             )
 
         # Check undo capability for all operations
-        non_undoable = [op for op in batch_ops if op.undo_capability == UndoCapability.NONE]
+        non_undoable = [
+            op for op in batch_ops if op.undo_capability == UndoCapability.NONE
+        ]
         if non_undoable:
             return UndoResult(
                 success=False,
                 message=f"Batch contains {len(non_undoable)} operation(s) that cannot be undone",
-                error=f"Non-undoable operations: {[op.operation_type for op in non_undoable]}"
+                error=f"Non-undoable operations: {[op.operation_type for op in non_undoable]}",
             )
 
         # Generate reverse operations in reverse order (LIFO)
@@ -543,27 +557,31 @@ class HistoryManager:
                 return UndoResult(
                     success=False,
                     message=f"Could not generate undo for operation {op.id} in batch",
-                    error=f"Missing information for undo of {op.operation_type}"
+                    error=f"Missing information for undo of {op.operation_type}",
                 )
-            reverse_op['original_operation_id'] = op.id
+            reverse_op["original_operation_id"] = op.id
             reverse_ops.append(reverse_op)
             if op.undo_capability == UndoCapability.PARTIAL:
-                partial_ops.append(op.undo_notes or f"{op.operation_type} has partial undo support")
+                partial_ops.append(
+                    op.undo_notes or f"{op.operation_type} has partial undo support"
+                )
 
         notes = []
         if partial_ops:
-            notes.append(f"Partial undo for {len(partial_ops)} operation(s): {'; '.join(partial_ops)}")
+            notes.append(
+                f"Partial undo for {len(partial_ops)} operation(s): {'; '.join(partial_ops)}"
+            )
 
         return UndoResult(
             success=True,
             message=f"Generated {len(reverse_ops)} undo operation(s) for batch {batch_id}",
             operation_id=batch_id,
             reverse_operation={
-                'batch_undo': True,
-                'batch_id': batch_id,
-                'operations': reverse_ops,
-                'notes': notes if notes else None,
-            }
+                "batch_undo": True,
+                "batch_id": batch_id,
+                "operations": reverse_ops,
+                "notes": notes if notes else None,
+            },
         )
 
     def mark_batch_undone(
@@ -597,8 +615,7 @@ class HistoryManager:
         """Get statistics about tracked history."""
         total_ops = sum(len(h.operations) for h in self._history.values())
         undone_ops = sum(
-            sum(1 for op in h.operations if op.undone)
-            for h in self._history.values()
+            sum(1 for op in h.operations if op.undone) for h in self._history.values()
         )
 
         return {
@@ -606,9 +623,8 @@ class HistoryManager:
             "total_operations": total_ops,
             "undone_operations": undone_ops,
             "operations_per_document": {
-                doc_id: len(h.operations)
-                for doc_id, h in self._history.items()
-            }
+                doc_id: len(h.operations) for doc_id, h in self._history.items()
+            },
         }
 
 

@@ -10,6 +10,7 @@ These tests verify:
 4. Preview mode functionality
 5. Handling edge cases (no lists, invalid index, already correct type)
 """
+
 import pytest
 from gdocs.docs_helpers import create_bullet_list_request
 from gdocs.managers.validation_manager import ValidationManager
@@ -78,7 +79,10 @@ class TestListTypeNormalization:
                 "numbers": "ORDERED",
                 "ordered": "ORDERED",
             }
-            normalized = list_type_aliases.get(invalid_type.lower() if invalid_type else "", invalid_type.upper() if invalid_type else "")
+            normalized = list_type_aliases.get(
+                invalid_type.lower() if invalid_type else "",
+                invalid_type.upper() if invalid_type else "",
+            )
 
             if normalized not in ["ORDERED", "UNORDERED"]:
                 # This should trigger validation error
@@ -155,8 +159,16 @@ class TestListFindingLogic:
     def test_find_list_by_search_text(self):
         """Test finding list by search text in items."""
         all_lists = [
-            {"start_index": 10, "end_index": 50, "items": [{"text": "Apple"}, {"text": "Banana"}]},
-            {"start_index": 100, "end_index": 150, "items": [{"text": "Step 1"}, {"text": "Step 2"}]},
+            {
+                "start_index": 10,
+                "end_index": 50,
+                "items": [{"text": "Apple"}, {"text": "Banana"}],
+            },
+            {
+                "start_index": 100,
+                "end_index": 150,
+                "items": [{"text": "Step 1"}, {"text": "Step 2"}],
+            },
         ]
         search = "step"
         search_lower = search.lower()
@@ -315,7 +327,9 @@ class TestPreviewMode:
         long_text = "A" * 100
         item = {"text": long_text}
 
-        truncated = item.get("text", "")[:50] + ("..." if len(item.get("text", "")) > 50 else "")
+        truncated = item.get("text", "")[:50] + (
+            "..." if len(item.get("text", "")) > 50 else ""
+        )
 
         assert len(truncated) == 53  # 50 chars + "..."
         assert truncated.endswith("...")

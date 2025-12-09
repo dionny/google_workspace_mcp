@@ -229,12 +229,14 @@ async def get_doc_content(
             )
         except HttpError as e:
             if e.resp.status == 400:
-                return format_error(DocsErrorBuilder.invalid_param_value(
-                    param_name="document_id",
-                    received_value=document_id,
-                    valid_values=["native Google Doc ID"],
-                    context_description=f"scope='{scope}' or format='formatted' requires a native Google Doc, not a .docx file",
-                ))
+                return format_error(
+                    DocsErrorBuilder.invalid_param_value(
+                        param_name="document_id",
+                        received_value=document_id,
+                        valid_values=["native Google Doc ID"],
+                        context_description=f"scope='{scope}' or format='formatted' requires a native Google Doc, not a .docx file",
+                    )
+                )
             raise
 
         file_name = doc_data.get("title", "Untitled Document")
@@ -243,15 +245,26 @@ async def get_doc_content(
         # Handle section scope
         if scope == "section":
             return await _get_doc_content_section(
-                doc_data, document_id, file_name, web_view_link,
-                heading, include_subsections, match_case, format
+                doc_data,
+                document_id,
+                file_name,
+                web_view_link,
+                heading,
+                include_subsections,
+                match_case,
+                format,
             )
 
         # Handle range scope
         if scope == "range":
             return await _get_doc_content_range(
-                doc_data, document_id, file_name, web_view_link,
-                start_index, end_index, format
+                doc_data,
+                document_id,
+                file_name,
+                web_view_link,
+                start_index,
+                end_index,
+                format,
             )
 
         # Handle full doc with formatted output
@@ -262,8 +275,7 @@ async def get_doc_content(
             if content:
                 doc_end = content[-1].get("endIndex", 1)
                 return await _get_doc_content_range(
-                    doc_data, document_id, file_name, web_view_link,
-                    1, doc_end, format
+                    doc_data, document_id, file_name, web_view_link, 1, doc_end, format
                 )
 
     # Full document, plain text - original behavior with .docx fallback
@@ -387,7 +399,11 @@ async def get_doc_content(
 
     file_metadata = await asyncio.to_thread(
         drive_service.files()
-        .get(fileId=document_id, fields="id, name, mimeType, webViewLink", supportsAllDrives=True)
+        .get(
+            fileId=document_id,
+            fields="id, name, mimeType, webViewLink",
+            supportsAllDrives=True,
+        )
         .execute
     )
     mime_type = file_metadata.get("mimeType", "")
@@ -462,7 +478,9 @@ async def _get_doc_content_section(
         heading_list = [h["text"] for h in all_headings[:10]]
         error = DocsErrorBuilder.heading_not_found(
             heading=heading,
-            available_headings=heading_list if heading_list else ["(no headings found in document)"],
+            available_headings=heading_list
+            if heading_list
+            else ["(no headings found in document)"],
             match_case=match_case,
         )
         return format_error(error)
@@ -473,7 +491,9 @@ async def _get_doc_content_section(
 
     if format == "formatted":
         # Return with formatting info
-        formatting_spans = _extract_text_formatting_from_range(doc_data, start_idx, end_idx)
+        formatting_spans = _extract_text_formatting_from_range(
+            doc_data, start_idx, end_idx
+        )
         has_mixed = _has_mixed_formatting(formatting_spans)
 
         result = {
@@ -520,7 +540,9 @@ async def _get_doc_content_range(
 
     if format == "formatted":
         # Return with formatting info
-        formatting_spans = _extract_text_formatting_from_range(doc_data, start_index, end_index)
+        formatting_spans = _extract_text_formatting_from_range(
+            doc_data, start_index, end_index
+        )
         all_text = "".join(span.get("text", "") for span in formatting_spans)
         has_mixed = _has_mixed_formatting(formatting_spans)
 
@@ -614,9 +636,7 @@ async def list_doc_tabs(
 
     # Fetch document with tab content
     doc_data = await asyncio.to_thread(
-        service.documents()
-        .get(documentId=document_id, includeTabsContent=True)
-        .execute
+        service.documents().get(documentId=document_id, includeTabsContent=True).execute
     )
 
     doc_title = doc_data.get("title", "Untitled Document")
@@ -645,13 +665,15 @@ async def list_doc_tabs(
                     if text_run and "content" in text_run:
                         char_count += len(text_run["content"])
 
-        results.append({
-            "level": level,
-            "tab_id": tab_id,
-            "title": tab_title,
-            "char_count": char_count,
-            "indent": indent,
-        })
+        results.append(
+            {
+                "level": level,
+                "tab_id": tab_id,
+                "title": tab_title,
+                "char_count": char_count,
+                "indent": indent,
+            }
+        )
 
         # Process child tabs
         child_tabs = tab.get("childTabs", [])
@@ -684,7 +706,9 @@ async def list_doc_tabs(
         )
 
     out.append("")
-    out.append("TIP: Use the tab_id value with modify_doc_text, batch_edit_doc, or find_and_replace_doc to edit specific tabs.")
+    out.append(
+        "TIP: Use the tab_id value with modify_doc_text, batch_edit_doc, or find_and_replace_doc to edit specific tabs."
+    )
 
     return "\n".join(out)
 
@@ -1186,41 +1210,47 @@ async def modify_doc_text(
     # Check if this is a preview-only range inspection request
     # When preview=True and positioning is specified but no text/formatting,
     # we return information about what range would be selected
-    has_positioning = any([
-        range is not None,
-        search is not None,
-        heading is not None,
-        location is not None,
-        start_index is not None,
-    ])
+    has_positioning = any(
+        [
+            range is not None,
+            search is not None,
+            heading is not None,
+            location is not None,
+            start_index is not None,
+        ]
+    )
     is_range_inspection_preview = preview and has_positioning
 
     # Validate that we have something to do (unless this is a range inspection preview)
-    if not is_range_inspection_preview and text is None and not any(
-        [
-            bold is not None,
-            italic is not None,
-            underline is not None,
-            strikethrough is not None,
-            small_caps is not None,
-            subscript is not None,
-            superscript is not None,
-            font_size,
-            font_family,
-            link is not None,
-            foreground_color is not None,
-            background_color is not None,
-            line_spacing is not None,
-            heading_style is not None,
-            alignment is not None,
-            indent_first_line is not None,
-            indent_start is not None,
-            indent_end is not None,
-            space_above is not None,
-            space_below is not None,
-            convert_to_list is not None,
-            code_block is not None,
-        ]
+    if (
+        not is_range_inspection_preview
+        and text is None
+        and not any(
+            [
+                bold is not None,
+                italic is not None,
+                underline is not None,
+                strikethrough is not None,
+                small_caps is not None,
+                subscript is not None,
+                superscript is not None,
+                font_size,
+                font_family,
+                link is not None,
+                foreground_color is not None,
+                background_color is not None,
+                line_spacing is not None,
+                heading_style is not None,
+                alignment is not None,
+                indent_first_line is not None,
+                indent_start is not None,
+                indent_end is not None,
+                space_above is not None,
+                space_below is not None,
+                convert_to_list is not None,
+                code_block is not None,
+            ]
+        )
     ):
         error = DocsErrorBuilder.missing_required_param(
             param_name="text or formatting or convert_to_list or code_block",
@@ -1289,16 +1319,16 @@ async def modify_doc_text(
         # Accept named string values for common spacings
         if isinstance(line_spacing, str):
             line_spacing_map = {
-                'single': 100,
-                '1': 100,
-                '1.0': 100,
-                '1.15': 115,
-                '1.15x': 115,
-                '1.5': 150,
-                '1.5x': 150,
-                'double': 200,
-                '2': 200,
-                '2.0': 200,
+                "single": 100,
+                "1": 100,
+                "1.0": 100,
+                "1.15": 115,
+                "1.15x": 115,
+                "1.5": 150,
+                "1.5x": 150,
+                "double": 200,
+                "2": 200,
+                "2.0": 200,
             }
             normalized = line_spacing_map.get(line_spacing.lower().strip())
             if normalized is None:
@@ -1518,7 +1548,9 @@ async def modify_doc_text(
     if use_location_mode:
         # Get document to determine total length (with tab support)
         doc_data = await asyncio.to_thread(
-            service.documents().get(documentId=document_id, includeTabsContent=True).execute
+            service.documents()
+            .get(documentId=document_id, includeTabsContent=True)
+            .execute
         )
 
         structure = parse_document_structure(doc_data, tab_id)
@@ -1837,9 +1869,10 @@ async def modify_doc_text(
     original_text = text
     if text is not None and convert_to_list is not None:
         import re
+
         # Replace multiple consecutive newlines with single newline
         # This prevents empty list items while preserving single line breaks
-        text = re.sub(r'\n\s*\n+', '\n', text)
+        text = re.sub(r"\n\s*\n+", "\n", text)
         if text != original_text:
             logger.info(
                 f"[modify_doc_text] Cleaned text for list conversion: "
@@ -1869,14 +1902,18 @@ async def modify_doc_text(
                 if start_index == 0:
                     # Cannot delete at index 0 (first section break), start from 1
                     actual_start_index = 1
-                    requests.append(create_delete_range_request(1, delete_end, tab_id=tab_id))
+                    requests.append(
+                        create_delete_range_request(1, delete_end, tab_id=tab_id)
+                    )
                     op_msg = f"Deleted text from index 1 to {delete_end}"
                     if paragraph_deleted:
                         op_msg += " (including paragraph break)"
                     operations.append(op_msg)
                 else:
                     requests.append(
-                        create_delete_range_request(start_index, delete_end, tab_id=tab_id)
+                        create_delete_range_request(
+                            start_index, delete_end, tab_id=tab_id
+                        )
                     )
                     op_msg = f"Deleted text from index {start_index} to {delete_end}"
                     if paragraph_deleted:
@@ -1894,7 +1931,9 @@ async def modify_doc_text(
                     requests.append(create_insert_text_request(1, text, tab_id=tab_id))
                     adjusted_end = end_index + len(text)
                     requests.append(
-                        create_delete_range_request(1 + len(text), adjusted_end, tab_id=tab_id)
+                        create_delete_range_request(
+                            1 + len(text), adjusted_end, tab_id=tab_id
+                        )
                     )
                     operations.append(
                         f"Replaced text from index {start_index} to {end_index}"
@@ -1903,8 +1942,12 @@ async def modify_doc_text(
                     # Normal replacement: delete old text, then insert new text
                     requests.extend(
                         [
-                            create_delete_range_request(start_index, end_index, tab_id=tab_id),
-                            create_insert_text_request(start_index, text, tab_id=tab_id),
+                            create_delete_range_request(
+                                start_index, end_index, tab_id=tab_id
+                            ),
+                            create_insert_text_request(
+                                start_index, text, tab_id=tab_id
+                            ),
                         ]
                     )
                     operations.append(
@@ -1919,19 +1962,29 @@ async def modify_doc_text(
             operation_type = OperationType.INSERT
             actual_start_index = 1 if start_index == 0 else start_index
             actual_end_index = None  # Insert has no end_index
-            requests.append(create_insert_text_request(actual_start_index, text, tab_id=tab_id))
+            requests.append(
+                create_insert_text_request(actual_start_index, text, tab_id=tab_id)
+            )
             operations.append(f"Inserted text at index {actual_start_index}")
             search_info["inserted_at_index"] = actual_start_index
 
     # Clear formatting for plain text insertions (no formatting specified).
     # This ensures inserted text doesn't inherit surrounding formatting.
-    if text is not None and operation_type == OperationType.INSERT and not has_formatting:
+    if (
+        text is not None
+        and operation_type == OperationType.INSERT
+        and not has_formatting
+    ):
         format_start = 1 if start_index == 0 else start_index
         format_end = format_start + len(text)
         requests.append(
-            create_clear_formatting_request(format_start, format_end, preserve_links=False, tab_id=tab_id)
+            create_clear_formatting_request(
+                format_start, format_end, preserve_links=False, tab_id=tab_id
+            )
         )
-        operations.append(f"Cleared inherited formatting from range {format_start}-{format_end}")
+        operations.append(
+            f"Cleared inherited formatting from range {format_start}-{format_end}"
+        )
 
     # Handle formatting
     if has_formatting:
@@ -1962,13 +2015,15 @@ async def modify_doc_text(
         # 1. Text was inserted (not replaced) AND has formatting to apply
         # 2. code_block=True (regardless of insert/replace)
         should_clear_formatting = (
-            (text is not None and operation_type == OperationType.INSERT) or
-            code_block is True
-        )
+            text is not None and operation_type == OperationType.INSERT
+        ) or code_block is True
         if should_clear_formatting:
             requests.append(
                 create_clear_formatting_request(
-                    format_start, format_end, preserve_links=(link is not None), tab_id=tab_id
+                    format_start,
+                    format_end,
+                    preserve_links=(link is not None),
+                    tab_id=tab_id,
                 )
             )
 
@@ -2036,16 +2091,18 @@ async def modify_doc_text(
             actual_end_index = format_end
 
     # Handle paragraph formatting (line spacing, heading style, alignment, indentation, and spacing)
-    has_paragraph_formatting = any([
-        line_spacing is not None,
-        heading_style is not None,
-        alignment is not None,
-        indent_first_line is not None,
-        indent_start is not None,
-        indent_end is not None,
-        space_above is not None,
-        space_below is not None,
-    ])
+    has_paragraph_formatting = any(
+        [
+            line_spacing is not None,
+            heading_style is not None,
+            alignment is not None,
+            indent_first_line is not None,
+            indent_start is not None,
+            indent_end is not None,
+            space_above is not None,
+            space_below is not None,
+        ]
+    )
     if has_paragraph_formatting:
         # Determine the range for paragraph formatting
         para_start = (
@@ -2089,7 +2146,9 @@ async def modify_doc_text(
                     heading_style_end = heading_style_start + first_newline_pos
                 else:
                     # Single paragraph text: strip trailing newlines to prevent style bleed
-                    trailing_newlines = len(text_stripped) - len(text_stripped.rstrip("\n"))
+                    trailing_newlines = len(text_stripped) - len(
+                        text_stripped.rstrip("\n")
+                    )
                     if trailing_newlines > 0:
                         heading_style_end = para_start + len(text) - trailing_newlines
             # else: auto_normal_text_applied - keep heading_style_end = para_end
@@ -2106,20 +2165,30 @@ async def modify_doc_text(
             para_format_details = []
 
             # Apply line_spacing, alignment, indentation, and spacing to full range
-            has_general_para_formatting = any([
-                line_spacing is not None,
-                alignment is not None,
-                indent_first_line is not None,
-                indent_start is not None,
-                indent_end is not None,
-                space_above is not None,
-                space_below is not None,
-            ])
+            has_general_para_formatting = any(
+                [
+                    line_spacing is not None,
+                    alignment is not None,
+                    indent_first_line is not None,
+                    indent_start is not None,
+                    indent_end is not None,
+                    space_above is not None,
+                    space_below is not None,
+                ]
+            )
             if has_general_para_formatting:
                 general_para_request = create_paragraph_style_request(
-                    para_start, para_end, line_spacing, None, alignment,
-                    indent_first_line, indent_start, indent_end,
-                    space_above, space_below, tab_id=tab_id
+                    para_start,
+                    para_end,
+                    line_spacing,
+                    None,
+                    alignment,
+                    indent_first_line,
+                    indent_start,
+                    indent_end,
+                    space_above,
+                    space_below,
+                    tab_id=tab_id,
                 )
                 if general_para_request:
                     requests.append(general_para_request)
@@ -2130,7 +2199,9 @@ async def modify_doc_text(
                         para_format_details.append(f"alignment={alignment}")
                         format_styles.append(f"alignment_{alignment}")
                     if indent_first_line is not None:
-                        para_format_details.append(f"indent_first_line={indent_first_line}pt")
+                        para_format_details.append(
+                            f"indent_first_line={indent_first_line}pt"
+                        )
                         format_styles.append(f"indent_first_line_{indent_first_line}")
                     if indent_start is not None:
                         para_format_details.append(f"indent_start={indent_start}pt")
@@ -2152,8 +2223,12 @@ async def modify_doc_text(
             # or to all paragraphs (auto-applied NORMAL_TEXT to prevent inheritance)
             if heading_style is not None and heading_style_end > heading_style_start:
                 heading_request = create_paragraph_style_request(
-                    heading_style_start, heading_style_end, None, heading_style, None,
-                    tab_id=tab_id
+                    heading_style_start,
+                    heading_style_end,
+                    None,
+                    heading_style,
+                    None,
+                    tab_id=tab_id,
                 )
                 if heading_request:
                     requests.append(heading_request)
@@ -2223,7 +2298,9 @@ async def modify_doc_text(
         # Validate we have a valid range for list conversion
         if list_start is not None and list_end is not None and list_end > list_start:
             requests.append(
-                create_bullet_list_request(list_start, list_end, convert_to_list, tab_id=tab_id)
+                create_bullet_list_request(
+                    list_start, list_end, convert_to_list, tab_id=tab_id
+                )
             )
             list_type_display = (
                 "bullet" if convert_to_list == "UNORDERED" else "numbered"
@@ -2383,7 +2460,9 @@ async def modify_doc_text(
 
             # Extract content at the resolved range
             if doc_data:
-                range_end_idx = actual_end_index if actual_end_index else actual_start_index
+                range_end_idx = (
+                    actual_end_index if actual_end_index else actual_start_index
+                )
                 if range_end_idx > actual_start_index:
                     current = extract_text_at_range(
                         doc_data, actual_start_index, range_end_idx
@@ -2397,7 +2476,9 @@ async def modify_doc_text(
                 else:
                     # Insertion point, no range selected
                     current = extract_text_at_range(
-                        doc_data, max(1, actual_start_index - 25), min(actual_start_index + 25, actual_start_index + 50)
+                        doc_data,
+                        max(1, actual_start_index - 25),
+                        min(actual_start_index + 25, actual_start_index + 50),
                     )
                     preview_result["current_content"] = ""
                     preview_result["content_length"] = 0
@@ -2405,7 +2486,9 @@ async def modify_doc_text(
                         "before": current.get("context_before", ""),
                         "after": current.get("context_after", ""),
                     }
-                    preview_result["note"] = "This is an insertion point, not a range selection"
+                    preview_result["note"] = (
+                        "This is an insertion point, not a range selection"
+                    )
 
             # Build informative message based on positioning mode
             if use_range_mode:
@@ -2845,7 +2928,11 @@ async def find_and_replace_doc(
     # Note: tab_id is passed as a single-element list (tab_ids) since replaceAllText
     # uses tabsCriteria which accepts multiple tab IDs
     tab_ids = [tab_id] if tab_id else None
-    requests = [create_find_replace_request(find_text, replace_text, match_case, tab_ids=tab_ids)]
+    requests = [
+        create_find_replace_request(
+            find_text, replace_text, match_case, tab_ids=tab_ids
+        )
+    ]
 
     result = await asyncio.to_thread(
         service.documents()
@@ -2919,9 +3006,7 @@ async def find_and_replace_doc(
     # Use len(matches) for consistency - occurrences_replaced should match len(affected_ranges)
     # The API's replacements count may differ slightly due to different matching algorithms
     reported_count = len(matches)
-    message = (
-        f"Replaced {reported_count} occurrence(s) of '{find_text}' with '{replace_text}'"
-    )
+    message = f"Replaced {reported_count} occurrence(s) of '{find_text}' with '{replace_text}'"
 
     if occurrences_formatted > 0:
         message += f" and applied formatting to {occurrences_formatted} occurrence(s)"
@@ -3858,14 +3943,22 @@ async def insert_doc_elements(
                 valid_values=valid_section_types,
             )
 
-        requests.append(create_insert_section_break_request(resolved_index, section_type_value))
+        requests.append(
+            create_insert_section_break_request(resolved_index, section_type_value)
+        )
         description = f"section break ({section_type_value.lower().replace('_', ' ')})"
 
     else:
         return validator.create_invalid_param_error(
             param_name="element_type",
             received=element_type,
-            valid_values=["table", "list", "page_break", "horizontal_rule", "section_break"],
+            valid_values=[
+                "table",
+                "list",
+                "page_break",
+                "horizontal_rule",
+                "section_break",
+            ],
         )
 
     await asyncio.to_thread(
@@ -4039,7 +4132,11 @@ async def insert_doc_image(
         try:
             file_metadata = await asyncio.to_thread(
                 drive_service.files()
-                .get(fileId=image_source, fields="id, name, mimeType", supportsAllDrives=True)
+                .get(
+                    fileId=image_source,
+                    fields="id, name, mimeType",
+                    supportsAllDrives=True,
+                )
                 .execute
             )
             mime_type = file_metadata.get("mimeType", "")
@@ -4227,14 +4324,16 @@ async def insert_doc_footnote(
         result = await asyncio.to_thread(
             service.documents()
             .batchUpdate(
-                documentId=document_id,
-                body={"requests": [create_footnote_request]}
+                documentId=document_id, body={"requests": [create_footnote_request]}
             )
             .execute
         )
     except Exception as e:
         error_msg = str(e)
-        if "Invalid requests" in error_msg or "footerHeaderOrFootnote" in error_msg.lower():
+        if (
+            "Invalid requests" in error_msg
+            or "footerHeaderOrFootnote" in error_msg.lower()
+        ):
             return (
                 "ERROR: Cannot insert footnote at this location. Footnotes can only be "
                 "inserted in the document body, not in headers, footers, or other footnotes."
@@ -4257,15 +4356,14 @@ async def insert_doc_footnote(
     insert_text_request = create_insert_text_in_footnote_request(
         footnote_id=footnote_id,
         index=1,  # Insert after the initial space
-        text=processed_text
+        text=processed_text,
     )
 
     try:
         await asyncio.to_thread(
             service.documents()
             .batchUpdate(
-                documentId=document_id,
-                body={"requests": [insert_text_request]}
+                documentId=document_id, body={"requests": [insert_text_request]}
             )
             .execute
         )
@@ -4277,10 +4375,12 @@ async def insert_doc_footnote(
         )
 
     link = f"https://docs.google.com/document/d/{document_id}/edit"
-    text_preview = processed_text[:50] + "..." if len(processed_text) > 50 else processed_text
+    text_preview = (
+        processed_text[:50] + "..." if len(processed_text) > 50 else processed_text
+    )
     return (
         f"Inserted footnote {location_description} in document {document_id}. "
-        f"Footnote content: \"{text_preview}\". Link: {link}"
+        f'Footnote content: "{text_preview}". Link: {link}'
     )
 
 
@@ -4336,7 +4436,9 @@ async def update_doc_headers_footers(
     if text is not None and content is None:
         content = text
 
-    logger.info(f"[update_doc_headers_footers] Doc={document_id}, type={section_type}, header_content={header_content is not None}, footer_content={footer_content is not None}")
+    logger.info(
+        f"[update_doc_headers_footers] Doc={document_id}, type={section_type}, header_content={header_content is not None}, footer_content={footer_content is not None}"
+    )
 
     # Input validation
     validator = ValidationManager()
@@ -4355,7 +4457,9 @@ async def update_doc_headers_footers(
             return validator.create_invalid_param_error(
                 param_name="parameters",
                 received="both section_type+content and header_content/footer_content",
-                valid_values=["Use either section_type+content OR header_content/footer_content, not both"],
+                valid_values=[
+                    "Use either section_type+content OR header_content/footer_content, not both"
+                ],
                 context="Choose one usage mode: single section (section_type+content) or combined (header_content/footer_content)",
             )
 
@@ -4393,7 +4497,11 @@ async def update_doc_headers_footers(
                 )
 
             success, message = await header_footer_manager.update_header_footer_content(
-                document_id, "header", header_content, header_footer_type, create_if_missing
+                document_id,
+                "header",
+                header_content,
+                header_footer_type,
+                create_if_missing,
             )
             if success:
                 results.append("header")
@@ -4412,7 +4520,11 @@ async def update_doc_headers_footers(
                 )
 
             success, message = await header_footer_manager.update_header_footer_content(
-                document_id, "footer", footer_content, header_footer_type, create_if_missing
+                document_id,
+                "footer",
+                footer_content,
+                header_footer_type,
+                create_if_missing,
             )
             if success:
                 results.append("footer")
@@ -4535,7 +4647,9 @@ async def get_doc_headers_footers(
     """
     import json
 
-    logger.info(f"[get_doc_headers_footers] Doc={document_id}, section_type={section_type}")
+    logger.info(
+        f"[get_doc_headers_footers] Doc={document_id}, section_type={section_type}"
+    )
 
     # Input validation
     validator = ValidationManager()
@@ -5739,9 +5853,13 @@ async def modify_table(
             if not isinstance(op["column"], int) or op["column"] < 0:
                 return f"ERROR: Operation {i} (format_cell) 'column' must be a non-negative integer"
             # Validate optional row_span and column_span
-            if "row_span" in op and (not isinstance(op["row_span"], int) or op["row_span"] < 1):
+            if "row_span" in op and (
+                not isinstance(op["row_span"], int) or op["row_span"] < 1
+            ):
                 return f"ERROR: Operation {i} (format_cell) 'row_span' must be a positive integer (minimum 1)"
-            if "column_span" in op and (not isinstance(op["column_span"], int) or op["column_span"] < 1):
+            if "column_span" in op and (
+                not isinstance(op["column_span"], int) or op["column_span"] < 1
+            ):
                 return f"ERROR: Operation {i} (format_cell) 'column_span' must be a positive integer (minimum 1)"
             # Validate content_alignment if provided
             if "content_alignment" in op:
@@ -5750,15 +5868,31 @@ async def modify_table(
                     return f"ERROR: Operation {i} (format_cell) 'content_alignment' must be one of: {', '.join(valid_alignments)}"
             # Validate border_dash_style if provided
             if "border_dash_style" in op:
-                valid_dash_styles = {"SOLID", "DOT", "DASH", "DASH_DOT", "LONG_DASH", "LONG_DASH_DOT"}
+                valid_dash_styles = {
+                    "SOLID",
+                    "DOT",
+                    "DASH",
+                    "DASH_DOT",
+                    "LONG_DASH",
+                    "LONG_DASH_DOT",
+                }
                 if op["border_dash_style"] not in valid_dash_styles:
                     return f"ERROR: Operation {i} (format_cell) 'border_dash_style' must be one of: {', '.join(valid_dash_styles)}"
             # Check that at least one formatting option is provided
             format_options = [
-                "background_color", "border_color", "border_width", "border_dash_style",
-                "border_top", "border_bottom", "border_left", "border_right",
-                "padding_top", "padding_bottom", "padding_left", "padding_right",
-                "content_alignment"
+                "background_color",
+                "border_color",
+                "border_width",
+                "border_dash_style",
+                "border_top",
+                "border_bottom",
+                "border_left",
+                "border_right",
+                "padding_top",
+                "padding_bottom",
+                "padding_left",
+                "padding_right",
+                "content_alignment",
             ]
             if not any(opt in op for opt in format_options):
                 return f"ERROR: Operation {i} (format_cell) must specify at least one formatting option"
@@ -6197,14 +6331,22 @@ async def modify_table(
                     format_desc_parts.append(f"background={op['background_color']}")
                 if op.get("border_color") or op.get("border_width"):
                     format_desc_parts.append("borders")
-                if any(op.get(f"border_{side}") for side in ["top", "bottom", "left", "right"]):
+                if any(
+                    op.get(f"border_{side}")
+                    for side in ["top", "bottom", "left", "right"]
+                ):
                     format_desc_parts.append("custom borders")
-                if any(op.get(f"padding_{side}") for side in ["top", "bottom", "left", "right"]):
+                if any(
+                    op.get(f"padding_{side}")
+                    for side in ["top", "bottom", "left", "right"]
+                ):
                     format_desc_parts.append("padding")
                 if op.get("content_alignment"):
                     format_desc_parts.append(f"alignment={op['content_alignment']}")
 
-                format_desc = ", ".join(format_desc_parts) if format_desc_parts else "style"
+                format_desc = (
+                    ", ".join(format_desc_parts) if format_desc_parts else "style"
+                )
                 cell_range = f"({row_idx}, {col_idx})"
                 if row_span > 1 or column_span > 1:
                     cell_range = f"({row_idx}, {col_idx}) to ({row_idx + row_span - 1}, {col_idx + column_span - 1})"
@@ -6245,7 +6387,11 @@ async def modify_table(
                     .execute
                 )
 
-                col_desc = f"column {column_indices[0]}" if len(column_indices) == 1 else f"columns {column_indices}"
+                col_desc = (
+                    f"column {column_indices[0]}"
+                    if len(column_indices) == 1
+                    else f"columns {column_indices}"
+                )
                 results.append(
                     f"Op {i} (resize_column): SUCCESS - resized {col_desc} to {width}pt ({width_type})"
                 )
@@ -6299,7 +6445,11 @@ async def export_doc_to_pdf(
     try:
         file_metadata = await asyncio.to_thread(
             service.files()
-            .get(fileId=document_id, fields="id, name, mimeType, webViewLink", supportsAllDrives=True)
+            .get(
+                fileId=document_id,
+                fields="id, name, mimeType, webViewLink",
+                supportsAllDrives=True,
+            )
             .execute
         )
     except Exception as e:
@@ -6433,7 +6583,11 @@ async def export_doc_as_markdown(
     try:
         file_metadata = await asyncio.to_thread(
             service.files()
-            .get(fileId=document_id, fields="id, name, mimeType, webViewLink", supportsAllDrives=True)
+            .get(
+                fileId=document_id,
+                fields="id, name, mimeType, webViewLink",
+                supportsAllDrives=True,
+            )
             .execute
         )
     except Exception as e:
@@ -7888,7 +8042,9 @@ async def get_doc_statistics(
 
     # Character counts
     char_count = len(full_text)
-    char_count_no_spaces = len(full_text.replace(" ", "").replace("\t", "").replace("\n", ""))
+    char_count_no_spaces = len(
+        full_text.replace(" ", "").replace("\t", "").replace("\n", "")
+    )
 
     # Sentence count (approximate - count sentence-ending punctuation)
     sentence_endings = re.findall(r"[.!?]+", full_text)
@@ -7952,7 +8108,11 @@ async def get_doc_statistics(
 
     # Add section breakdown if requested
     if include_breakdown:
-        headings = [e for e in elements if e.get("type", "").startswith("heading") or e.get("type") == "title"]
+        headings = [
+            e
+            for e in elements
+            if e.get("type", "").startswith("heading") or e.get("type") == "title"
+        ]
 
         section_breakdown = []
         for i, heading in enumerate(headings):
@@ -7961,7 +8121,11 @@ async def get_doc_statistics(
             if i + 1 < len(headings):
                 section_end = headings[i + 1]["start_index"]
             else:
-                section_end = content[-1].get("endIndex", section_start) if content else section_start
+                section_end = (
+                    content[-1].get("endIndex", section_start)
+                    if content
+                    else section_start
+                )
 
             # Extract text for this section
             section_text = ""
@@ -7992,11 +8156,13 @@ async def get_doc_statistics(
                                 section_text += text[char_start:char_end]
 
             section_words = [w for w in section_text.split() if w.strip()]
-            section_breakdown.append({
-                "heading": heading.get("text", "").strip(),
-                "level": heading.get("level", 1),
-                "word_count": len(section_words),
-            })
+            section_breakdown.append(
+                {
+                    "heading": heading.get("text", "").strip(),
+                    "level": heading.get("level", 1),
+                    "word_count": len(section_words),
+                }
+            )
 
         result["section_breakdown"] = section_breakdown
 
@@ -9175,7 +9341,10 @@ async def create_doc_named_range(
         if location == "start":
             resolved_start = 1
             resolved_end = 1
-            positioning_info = {"location": "start", "message": "Range at document start"}
+            positioning_info = {
+                "location": "start",
+                "message": "Range at document start",
+            }
         elif location == "end":
             resolved_start = structure["total_length"] - 1
             resolved_end = structure["total_length"] - 1
@@ -9187,7 +9356,9 @@ async def create_doc_named_range(
 
         result = find_text_in_document(doc_data, search, occurrence, match_case)
         if result is None:
-            all_occurrences = find_all_occurrences_in_document(doc_data, search, match_case)
+            all_occurrences = find_all_occurrences_in_document(
+                doc_data, search, match_case
+            )
             if all_occurrences:
                 if occurrence != 1:
                     return validator.create_invalid_occurrence_error(
@@ -9458,7 +9629,9 @@ async def delete_doc_named_range(
         return validator.create_missing_param_error(
             param_name="named_range_id or name",
             context="for deleting named range",
-            valid_values=["named_range_id (specific range) or name (all ranges with name)"],
+            valid_values=[
+                "named_range_id (specific range) or name (all ranges with name)"
+            ],
         )
 
     if named_range_id and name:
@@ -9518,25 +9691,33 @@ async def delete_doc_named_range(
     if named_range_id:
         if named_range_id not in all_ids:
             available_ids = list(all_ids)[:5]  # Show up to 5 example IDs
-            return json.dumps({
-                "error": True,
-                "code": "NAMED_RANGE_NOT_FOUND",
-                "message": f"No named range with ID '{named_range_id}' found in document",
-                "suggestion": "Use list_doc_named_ranges to see available named ranges and their IDs",
-                "available_named_range_ids": available_ids if available_ids else [],
-                "link": doc_link,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "error": True,
+                    "code": "NAMED_RANGE_NOT_FOUND",
+                    "message": f"No named range with ID '{named_range_id}' found in document",
+                    "suggestion": "Use list_doc_named_ranges to see available named ranges and their IDs",
+                    "available_named_range_ids": available_ids if available_ids else [],
+                    "link": doc_link,
+                },
+                indent=2,
+            )
     else:  # deleting by name
         if name not in all_ranges:
             available_names = list(all_ranges.keys())[:5]  # Show up to 5 example names
-            return json.dumps({
-                "error": True,
-                "code": "NAMED_RANGE_NOT_FOUND",
-                "message": f"No named range with name '{name}' found in document",
-                "suggestion": "Use list_doc_named_ranges to see available named ranges",
-                "available_named_range_names": available_names if available_names else [],
-                "link": doc_link,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "error": True,
+                    "code": "NAMED_RANGE_NOT_FOUND",
+                    "message": f"No named range with name '{name}' found in document",
+                    "suggestion": "Use list_doc_named_ranges to see available named ranges",
+                    "available_named_range_names": available_names
+                    if available_names
+                    else [],
+                    "link": doc_link,
+                },
+                indent=2,
+            )
 
     # Determine tabs_criteria for multi-tab support
     tabs_criteria = None
@@ -9685,13 +9866,16 @@ async def convert_list_type(
     all_lists = find_elements_by_type(doc_data, "list")
 
     if not all_lists:
-        return json.dumps({
-            "error": True,
-            "code": "NO_LISTS_FOUND",
-            "message": "No lists found in the document",
-            "suggestion": "Use insert_doc_elements or modify_doc_text with convert_to_list to create a list first",
-            "link": doc_link,
-        }, indent=2)
+        return json.dumps(
+            {
+                "error": True,
+                "code": "NO_LISTS_FOUND",
+                "message": "No lists found in the document",
+                "suggestion": "Use insert_doc_elements or modify_doc_text with convert_to_list to create a list first",
+                "link": doc_link,
+            },
+            indent=2,
+        )
 
     # Find the target list
     target_list = None
@@ -9708,15 +9892,18 @@ async def convert_list_type(
                 break
 
         if not target_list:
-            return json.dumps({
-                "error": True,
-                "code": "LIST_NOT_FOUND",
-                "message": f"No list containing text '{search}' found",
-                "suggestion": "Check the search text or use find_doc_elements "
-                              "with element_type='list' to see all lists",
-                "available_lists": len(all_lists),
-                "link": doc_link,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "error": True,
+                    "code": "LIST_NOT_FOUND",
+                    "message": f"No list containing text '{search}' found",
+                    "suggestion": "Check the search text or use find_doc_elements "
+                    "with element_type='list' to see all lists",
+                    "available_lists": len(all_lists),
+                    "link": doc_link,
+                },
+                indent=2,
+            )
 
     elif start_index is not None and end_index is not None:
         # Find list overlapping with the given range
@@ -9726,26 +9913,32 @@ async def convert_list_type(
                 break
 
         if not target_list:
-            return json.dumps({
-                "error": True,
-                "code": "LIST_NOT_FOUND",
-                "message": f"No list found in range {start_index}-{end_index}",
-                "suggestion": "Use find_doc_elements with element_type='list' to see list positions",
-                "available_lists": len(all_lists),
-                "link": doc_link,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "error": True,
+                    "code": "LIST_NOT_FOUND",
+                    "message": f"No list found in range {start_index}-{end_index}",
+                    "suggestion": "Use find_doc_elements with element_type='list' to see list positions",
+                    "available_lists": len(all_lists),
+                    "link": doc_link,
+                },
+                indent=2,
+            )
 
     else:
         # Use list_index
         if list_index < 0 or list_index >= len(all_lists):
-            return json.dumps({
-                "error": True,
-                "code": "INVALID_LIST_INDEX",
-                "message": f"List index {list_index} is out of range. Document has {len(all_lists)} list(s).",
-                "suggestion": f"Use list_index between 0 and {len(all_lists) - 1}",
-                "available_lists": len(all_lists),
-                "link": doc_link,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "error": True,
+                    "code": "INVALID_LIST_INDEX",
+                    "message": f"List index {list_index} is out of range. Document has {len(all_lists)} list(s).",
+                    "suggestion": f"Use list_index between 0 and {len(all_lists) - 1}",
+                    "available_lists": len(all_lists),
+                    "link": doc_link,
+                },
+                indent=2,
+            )
         target_list = all_lists[list_index]
 
     # Determine current list type for display
@@ -9761,17 +9954,20 @@ async def convert_list_type(
 
     # Check if already the target type
     if current_type_normalized == normalized_type:
-        return json.dumps({
-            "success": True,
-            "message": f"List is already a {target_type_display} list",
-            "no_change_needed": True,
-            "list_range": {
-                "start_index": target_list["start_index"],
-                "end_index": target_list["end_index"],
+        return json.dumps(
+            {
+                "success": True,
+                "message": f"List is already a {target_type_display} list",
+                "no_change_needed": True,
+                "list_range": {
+                    "start_index": target_list["start_index"],
+                    "end_index": target_list["end_index"],
+                },
+                "items_count": len(target_list.get("items", [])),
+                "link": doc_link,
             },
-            "items_count": len(target_list.get("items", [])),
-            "link": doc_link,
-        }, indent=2)
+            indent=2,
+        )
 
     # Build preview info
     preview_info = {
@@ -9784,27 +9980,31 @@ async def convert_list_type(
         "items_count": len(target_list.get("items", [])),
         "items": [
             {
-                "text": item.get("text", "")[:50] + ("..." if len(item.get("text", "")) > 50 else ""),
+                "text": item.get("text", "")[:50]
+                + ("..." if len(item.get("text", "")) > 50 else ""),
                 "start_index": item["start_index"],
                 "end_index": item["end_index"],
             }
-            for item in target_list.get("items", [])[:5]  # Show up to 5 items in preview
+            for item in target_list.get("items", [])[
+                :5
+            ]  # Show up to 5 items in preview
         ],
     }
 
     if preview:
-        return json.dumps({
-            "preview": True,
-            "message": f"Would convert {current_type_display} list to {target_type_display} list",
-            **preview_info,
-            "link": doc_link,
-        }, indent=2)
+        return json.dumps(
+            {
+                "preview": True,
+                "message": f"Would convert {current_type_display} list to {target_type_display} list",
+                **preview_info,
+                "link": doc_link,
+            },
+            indent=2,
+        )
 
     # Create the conversion request using createParagraphBullets
     request = create_bullet_list_request(
-        target_list["start_index"],
-        target_list["end_index"],
-        normalized_type
+        target_list["start_index"], target_list["end_index"], normalized_type
     )
 
     # Execute the request
@@ -9814,18 +10014,21 @@ async def convert_list_type(
         .execute
     )
 
-    return json.dumps({
-        "success": True,
-        "message": f"Converted {current_type_display} list to {target_type_display} list",
-        "converted_from": current_type_display,
-        "converted_to": target_type_display,
-        "list_range": {
-            "start_index": target_list["start_index"],
-            "end_index": target_list["end_index"],
+    return json.dumps(
+        {
+            "success": True,
+            "message": f"Converted {current_type_display} list to {target_type_display} list",
+            "converted_from": current_type_display,
+            "converted_to": target_type_display,
+            "list_range": {
+                "start_index": target_list["start_index"],
+                "end_index": target_list["end_index"],
+            },
+            "items_count": len(target_list.get("items", [])),
+            "link": doc_link,
         },
-        "items_count": len(target_list.get("items", [])),
-        "link": doc_link,
-    }, indent=2)
+        indent=2,
+    )
 
 
 @server.tool()
@@ -9984,13 +10187,16 @@ async def append_to_list(
     all_lists = find_elements_by_type(doc_data, "list")
 
     if not all_lists:
-        return json.dumps({
-            "error": True,
-            "code": "NO_LISTS_FOUND",
-            "message": "No lists found in the document",
-            "suggestion": "Use insert_doc_elements with element_type='list' to create a list first",
-            "link": doc_link,
-        }, indent=2)
+        return json.dumps(
+            {
+                "error": True,
+                "code": "NO_LISTS_FOUND",
+                "message": "No lists found in the document",
+                "suggestion": "Use insert_doc_elements with element_type='list' to create a list first",
+                "link": doc_link,
+            },
+            indent=2,
+        )
 
     # Find the target list
     target_list = None
@@ -10007,27 +10213,33 @@ async def append_to_list(
                 break
 
         if not target_list:
-            return json.dumps({
-                "error": True,
-                "code": "LIST_NOT_FOUND",
-                "message": f"No list containing text '{search}' found",
-                "suggestion": "Check the search text or use find_doc_elements "
-                              "with element_type='list' to see all lists",
-                "available_lists": len(all_lists),
-                "link": doc_link,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "error": True,
+                    "code": "LIST_NOT_FOUND",
+                    "message": f"No list containing text '{search}' found",
+                    "suggestion": "Check the search text or use find_doc_elements "
+                    "with element_type='list' to see all lists",
+                    "available_lists": len(all_lists),
+                    "link": doc_link,
+                },
+                indent=2,
+            )
 
     else:
         # Use list_index
         if list_index < 0 or list_index >= len(all_lists):
-            return json.dumps({
-                "error": True,
-                "code": "INVALID_LIST_INDEX",
-                "message": f"List index {list_index} is out of range. Document has {len(all_lists)} list(s).",
-                "suggestion": f"Use list_index between 0 and {len(all_lists) - 1}",
-                "available_lists": len(all_lists),
-                "link": doc_link,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "error": True,
+                    "code": "INVALID_LIST_INDEX",
+                    "message": f"List index {list_index} is out of range. Document has {len(all_lists)} list(s).",
+                    "suggestion": f"Use list_index between 0 and {len(all_lists) - 1}",
+                    "available_lists": len(all_lists),
+                    "link": doc_link,
+                },
+                indent=2,
+            )
         target_list = all_lists[list_index]
 
     # Determine list type for applying bullet formatting
@@ -10068,7 +10280,9 @@ async def append_to_list(
         "nesting": {
             "has_nested_items": has_nested,
             "max_depth": max_level,
-        } if has_nested else None,
+        }
+        if has_nested
+        else None,
         "items_preview": [
             {
                 "text": item[:50] + ("..." if len(item) > 50 else ""),
@@ -10079,12 +10293,15 @@ async def append_to_list(
     }
 
     if preview:
-        return json.dumps({
-            "preview": True,
-            "message": f"Would append {len(processed_items)} item(s) to {list_type_display} list",
-            **preview_info,
-            "link": doc_link,
-        }, indent=2)
+        return json.dumps(
+            {
+                "preview": True,
+                "message": f"Would append {len(processed_items)} item(s) to {list_type_display} list",
+                **preview_info,
+                "link": doc_link,
+            },
+            indent=2,
+        )
 
     # Create the requests:
     # 1. Insert the text at the end of the list
@@ -10092,9 +10309,7 @@ async def append_to_list(
     requests = [
         create_insert_text_request(insertion_index, combined_text),
         create_bullet_list_request(
-            insertion_index,
-            insertion_index + text_length,
-            list_type
+            insertion_index, insertion_index + text_length, list_type
         ),
     ]
 
@@ -10105,17 +10320,20 @@ async def append_to_list(
         .execute
     )
 
-    return json.dumps({
-        "success": True,
-        "message": f"Appended {len(processed_items)} item(s) to {list_type_display} list",
-        "list_type": list_type_display,
-        "items_appended": len(processed_items),
-        "new_list_range": {
-            "start_index": target_list["start_index"],
-            "end_index": insertion_index + len(combined_text),
+    return json.dumps(
+        {
+            "success": True,
+            "message": f"Appended {len(processed_items)} item(s) to {list_type_display} list",
+            "list_type": list_type_display,
+            "items_appended": len(processed_items),
+            "new_list_range": {
+                "start_index": target_list["start_index"],
+                "end_index": insertion_index + len(combined_text),
+            },
+            "link": doc_link,
         },
-        "link": doc_link,
-    }, indent=2)
+        indent=2,
+    )
 
 
 @server.tool()
@@ -10260,13 +10478,16 @@ async def insert_list_item(
     all_lists = find_elements_by_type(doc_data, "list")
 
     if not all_lists:
-        return json.dumps({
-            "error": True,
-            "code": "NO_LISTS_FOUND",
-            "message": "No lists found in the document",
-            "suggestion": "Use insert_doc_elements with element_type='list' to create a list first",
-            "link": doc_link,
-        }, indent=2)
+        return json.dumps(
+            {
+                "error": True,
+                "code": "NO_LISTS_FOUND",
+                "message": "No lists found in the document",
+                "suggestion": "Use insert_doc_elements with element_type='list' to create a list first",
+                "link": doc_link,
+            },
+            indent=2,
+        )
 
     # Find the target list
     target_list = None
@@ -10283,27 +10504,33 @@ async def insert_list_item(
                 break
 
         if not target_list:
-            return json.dumps({
-                "error": True,
-                "code": "LIST_NOT_FOUND",
-                "message": f"No list containing text '{search}' found",
-                "suggestion": "Check the search text or use find_doc_elements "
-                              "with element_type='list' to see all lists",
-                "available_lists": len(all_lists),
-                "link": doc_link,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "error": True,
+                    "code": "LIST_NOT_FOUND",
+                    "message": f"No list containing text '{search}' found",
+                    "suggestion": "Check the search text or use find_doc_elements "
+                    "with element_type='list' to see all lists",
+                    "available_lists": len(all_lists),
+                    "link": doc_link,
+                },
+                indent=2,
+            )
 
     else:
         # Use list_index
         if list_index < 0 or list_index >= len(all_lists):
-            return json.dumps({
-                "error": True,
-                "code": "INVALID_LIST_INDEX",
-                "message": f"List index {list_index} is out of range. Document has {len(all_lists)} list(s).",
-                "suggestion": f"Use list_index between 0 and {len(all_lists) - 1}",
-                "available_lists": len(all_lists),
-                "link": doc_link,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "error": True,
+                    "code": "INVALID_LIST_INDEX",
+                    "message": f"List index {list_index} is out of range. Document has {len(all_lists)} list(s).",
+                    "suggestion": f"Use list_index between 0 and {len(all_lists) - 1}",
+                    "available_lists": len(all_lists),
+                    "link": doc_link,
+                },
+                indent=2,
+            )
         target_list = all_lists[list_index]
 
     # Determine list type for applying bullet formatting
@@ -10358,17 +10585,26 @@ async def insert_list_item(
                 break
 
         if not found_item:
-            return json.dumps({
-                "error": True,
-                "code": "LIST_ITEM_NOT_FOUND",
-                "message": f"No list item containing text '{search_text}' found",
-                "suggestion": "Check the search text in position parameter",
-                "available_items": [item.get("text", "")[:50] for item in list_items],
-                "link": doc_link,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "error": True,
+                    "code": "LIST_ITEM_NOT_FOUND",
+                    "message": f"No list item containing text '{search_text}' found",
+                    "suggestion": "Check the search text in position parameter",
+                    "available_items": [
+                        item.get("text", "")[:50] for item in list_items
+                    ],
+                    "link": doc_link,
+                },
+                indent=2,
+            )
 
         insertion_index = found_item["end_index"]
-        position_description = f"after item '{found_item.get('text', '')[:30]}...'" if len(found_item.get('text', '')) > 30 else f"after item '{found_item.get('text', '')}'"
+        position_description = (
+            f"after item '{found_item.get('text', '')[:30]}...'"
+            if len(found_item.get("text", "")) > 30
+            else f"after item '{found_item.get('text', '')}'"
+        )
         insert_item_index = found_item_index + 1
 
     elif position_str.startswith("before:"):
@@ -10391,17 +10627,26 @@ async def insert_list_item(
                 break
 
         if not found_item:
-            return json.dumps({
-                "error": True,
-                "code": "LIST_ITEM_NOT_FOUND",
-                "message": f"No list item containing text '{search_text}' found",
-                "suggestion": "Check the search text in position parameter",
-                "available_items": [item.get("text", "")[:50] for item in list_items],
-                "link": doc_link,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "error": True,
+                    "code": "LIST_ITEM_NOT_FOUND",
+                    "message": f"No list item containing text '{search_text}' found",
+                    "suggestion": "Check the search text in position parameter",
+                    "available_items": [
+                        item.get("text", "")[:50] for item in list_items
+                    ],
+                    "link": doc_link,
+                },
+                indent=2,
+            )
 
         insertion_index = found_item["start_index"]
-        position_description = f"before item '{found_item.get('text', '')[:30]}...'" if len(found_item.get('text', '')) > 30 else f"before item '{found_item.get('text', '')}'"
+        position_description = (
+            f"before item '{found_item.get('text', '')[:30]}...'"
+            if len(found_item.get("text", "")) > 30
+            else f"before item '{found_item.get('text', '')}'"
+        )
         insert_item_index = found_item_index
 
     else:
@@ -10464,12 +10709,15 @@ async def insert_list_item(
     }
 
     if preview:
-        return json.dumps({
-            "preview": True,
-            "message": f"Would insert item {position_description} in {list_type_display} list",
-            **preview_info,
-            "link": doc_link,
-        }, indent=2)
+        return json.dumps(
+            {
+                "preview": True,
+                "message": f"Would insert item {position_description} in {list_type_display} list",
+                **preview_info,
+                "link": doc_link,
+            },
+            indent=2,
+        )
 
     # Create the requests:
     # 1. Insert the text at the calculated position
@@ -10477,9 +10725,7 @@ async def insert_list_item(
     requests = [
         create_insert_text_request(insertion_index, insert_text),
         create_bullet_list_request(
-            insertion_index,
-            insertion_index + text_length,
-            list_type
+            insertion_index, insertion_index + text_length, list_type
         ),
     ]
 
@@ -10490,17 +10736,20 @@ async def insert_list_item(
         .execute
     )
 
-    return json.dumps({
-        "success": True,
-        "message": f"Inserted item {position_description} in {list_type_display} list",
-        "list_type": list_type_display,
-        "position": position_description,
-        "new_item_range": {
-            "start_index": insertion_index,
-            "end_index": insertion_index + len(insert_text),
+    return json.dumps(
+        {
+            "success": True,
+            "message": f"Inserted item {position_description} in {list_type_display} list",
+            "list_type": list_type_display,
+            "position": position_description,
+            "new_item_range": {
+                "start_index": insertion_index,
+                "end_index": insertion_index + len(insert_text),
+            },
+            "link": doc_link,
         },
-        "link": doc_link,
-    }, indent=2)
+        indent=2,
+    )
 
 
 @server.tool()
@@ -10618,11 +10867,14 @@ async def copy_doc_section(
             valid_values=["heading", "start_index + end_index", "search"],
         )
     if sum(source_methods) > 1:
-        return json.dumps({
-            "error": "INVALID_PARAMETERS",
-            "message": "Multiple source methods specified. Use only one of: heading, start_index+end_index, or search",
-            "hint": "Choose one method to specify the source content to copy"
-        }, indent=2)
+        return json.dumps(
+            {
+                "error": "INVALID_PARAMETERS",
+                "message": "Multiple source methods specified. Use only one of: heading, start_index+end_index, or search",
+                "hint": "Choose one method to specify the source content to copy",
+            },
+            indent=2,
+        )
 
     # Validate destination specification - exactly one method should be used
     dest_methods = [
@@ -10634,23 +10886,33 @@ async def copy_doc_section(
         return validator.create_missing_param_error(
             param_name="destination specification",
             context="for copy operation",
-            valid_values=["destination_index", "destination_location", "destination_after_heading"],
+            valid_values=[
+                "destination_index",
+                "destination_location",
+                "destination_after_heading",
+            ],
         )
     if sum(dest_methods) > 1:
-        return json.dumps({
-            "error": "INVALID_PARAMETERS",
-            "message": "Multiple destination methods specified. Use only one of: destination_index, destination_location, or destination_after_heading",
-            "hint": "Choose one method to specify where the content should be copied to"
-        }, indent=2)
+        return json.dumps(
+            {
+                "error": "INVALID_PARAMETERS",
+                "message": "Multiple destination methods specified. Use only one of: destination_index, destination_location, or destination_after_heading",
+                "hint": "Choose one method to specify where the content should be copied to",
+            },
+            indent=2,
+        )
 
     # Validate destination_location if provided
     if destination_location and destination_location not in ("start", "end"):
-        return json.dumps({
-            "error": "INVALID_PARAMETERS",
-            "message": f"Invalid destination_location: '{destination_location}'",
-            "valid_values": ["start", "end"],
-            "hint": "Use 'start' to insert at beginning or 'end' to append at document end"
-        }, indent=2)
+        return json.dumps(
+            {
+                "error": "INVALID_PARAMETERS",
+                "message": f"Invalid destination_location: '{destination_location}'",
+                "valid_values": ["start", "end"],
+                "hint": "Use 'start' to insert at beginning or 'end' to append at document end",
+            },
+            indent=2,
+        )
 
     # Get the document
     doc = await asyncio.to_thread(
@@ -10699,17 +10961,23 @@ async def copy_doc_section(
     elif start_index is not None and end_index is not None:
         # Copy by explicit indices
         if start_index < 1:
-            return json.dumps({
-                "error": "INVALID_INDEX",
-                "message": f"start_index must be >= 1, got {start_index}",
-                "hint": "Document indices start at 1"
-            }, indent=2)
+            return json.dumps(
+                {
+                    "error": "INVALID_INDEX",
+                    "message": f"start_index must be >= 1, got {start_index}",
+                    "hint": "Document indices start at 1",
+                },
+                indent=2,
+            )
         if end_index <= start_index:
-            return json.dumps({
-                "error": "INVALID_RANGE",
-                "message": f"end_index ({end_index}) must be greater than start_index ({start_index})",
-                "hint": "Specify a valid range with end_index > start_index"
-            }, indent=2)
+            return json.dumps(
+                {
+                    "error": "INVALID_RANGE",
+                    "message": f"end_index ({end_index}) must be greater than start_index ({start_index})",
+                    "hint": "Specify a valid range with end_index > start_index",
+                },
+                indent=2,
+            )
 
         copy_start = start_index
         copy_end = end_index
@@ -10724,25 +10992,33 @@ async def copy_doc_section(
         # find_all_occurrences_in_document returns List[Tuple[int, int]] - (start, end) pairs
         positions = find_all_occurrences_in_document(doc, search, match_case)
         if not positions:
-            return json.dumps({
-                "error": "TEXT_NOT_FOUND",
-                "message": f"Search text not found: '{search}'",
-                "match_case": match_case,
-                "hint": "Check your search text or try with match_case=False"
-            }, indent=2)
+            return json.dumps(
+                {
+                    "error": "TEXT_NOT_FOUND",
+                    "message": f"Search text not found: '{search}'",
+                    "match_case": match_case,
+                    "hint": "Check your search text or try with match_case=False",
+                },
+                indent=2,
+            )
 
         copy_start = positions[0][0]  # First tuple's start index
 
         if search_end:
             # Find end marker
-            end_positions = find_all_occurrences_in_document(doc, search_end, match_case)
+            end_positions = find_all_occurrences_in_document(
+                doc, search_end, match_case
+            )
             if not end_positions:
-                return json.dumps({
-                    "error": "TEXT_NOT_FOUND",
-                    "message": f"End search text not found: '{search_end}'",
-                    "match_case": match_case,
-                    "hint": "Check your search_end text or try with match_case=False"
-                }, indent=2)
+                return json.dumps(
+                    {
+                        "error": "TEXT_NOT_FOUND",
+                        "message": f"End search text not found: '{search_end}'",
+                        "match_case": match_case,
+                        "hint": "Check your search_end text or try with match_case=False",
+                    },
+                    indent=2,
+                )
             # Find the first occurrence of search_end that comes after our start
             copy_end = None
             for start, end in end_positions:
@@ -10750,11 +11026,14 @@ async def copy_doc_section(
                     copy_end = end
                     break
             if copy_end is None:
-                return json.dumps({
-                    "error": "INVALID_RANGE",
-                    "message": f"End marker '{search_end}' not found after start marker '{search}'",
-                    "hint": "Ensure search_end appears after search in the document"
-                }, indent=2)
+                return json.dumps(
+                    {
+                        "error": "INVALID_RANGE",
+                        "message": f"End marker '{search_end}' not found after start marker '{search}'",
+                        "hint": "Ensure search_end appears after search in the document",
+                    },
+                    indent=2,
+                )
         else:
             copy_end = positions[0][1]  # First tuple's end index
 
@@ -10777,17 +11056,22 @@ async def copy_doc_section(
     text_to_copy = extract_text_in_range(doc, copy_start, copy_end)
 
     if not text_to_copy:
-        return json.dumps({
-            "error": "EMPTY_CONTENT",
-            "message": "No content to copy in the specified range",
-            "source_range": {"start": copy_start, "end": copy_end},
-            "hint": "Check your source specification - the range may be empty"
-        }, indent=2)
+        return json.dumps(
+            {
+                "error": "EMPTY_CONTENT",
+                "message": "No content to copy in the specified range",
+                "source_range": {"start": copy_start, "end": copy_end},
+                "hint": "Check your source specification - the range may be empty",
+            },
+            indent=2,
+        )
 
     # Extract formatting spans if needed
     formatting_spans = []
     if preserve_formatting:
-        formatting_spans = _extract_text_formatting_from_range(doc, copy_start, copy_end)
+        formatting_spans = _extract_text_formatting_from_range(
+            doc, copy_start, copy_end
+        )
 
     # Determine destination index
     dest_index = None
@@ -10799,14 +11083,16 @@ async def copy_doc_section(
     elif destination_location == "end":
         dest_index = doc_end_index - 1
     elif destination_after_heading:
-        dest_section = find_section_by_heading(doc, destination_after_heading, match_case)
+        dest_section = find_section_by_heading(
+            doc, destination_after_heading, match_case
+        )
         if dest_section is None:
             all_headings = get_all_headings(doc)
             heading_list = [h["text"] for h in all_headings] if all_headings else []
             return validator.create_heading_not_found_error(
                 heading=destination_after_heading,
                 available_headings=heading_list,
-                match_case=match_case
+                match_case=match_case,
             )
         # Insert at the end of the destination section
         dest_index = dest_section["end_index"]
@@ -10829,8 +11115,10 @@ async def copy_doc_section(
         "destination": {
             "index": dest_index,
             "method": (
-                "index" if destination_index is not None
-                else "location" if destination_location is not None
+                "index"
+                if destination_index is not None
+                else "location"
+                if destination_location is not None
                 else "after_heading"
             ),
         },
@@ -10865,7 +11153,9 @@ async def copy_doc_section(
     # This prevents style inheritance issues
     if preserve_formatting and formatting_spans:
         text_length = len(text_to_copy)
-        requests.append(create_clear_formatting_request(dest_index, dest_index + text_length))
+        requests.append(
+            create_clear_formatting_request(dest_index, dest_index + text_length)
+        )
 
         # 3. Re-apply the original formatting at the new location
         for span in formatting_spans:
@@ -10884,7 +11174,9 @@ async def copy_doc_section(
                 bold=span.get("bold") if span.get("bold") else None,
                 italic=span.get("italic") if span.get("italic") else None,
                 underline=span.get("underline") if span.get("underline") else None,
-                strikethrough=span.get("strikethrough") if span.get("strikethrough") else None,
+                strikethrough=span.get("strikethrough")
+                if span.get("strikethrough")
+                else None,
                 small_caps=span.get("small_caps") if span.get("small_caps") else None,
                 font_size=span.get("font_size"),
                 font_family=span.get("font_family"),

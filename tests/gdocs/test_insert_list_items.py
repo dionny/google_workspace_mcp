@@ -8,6 +8,7 @@ These tests verify:
 2. Validation rejects invalid items (non-list, empty list, non-string elements)
 3. Backward compatibility with single 'text' parameter
 """
+
 import pytest
 from gdocs.docs_helpers import (
     create_insert_text_request,
@@ -24,10 +25,10 @@ class TestListItemsHelpers:
         combined_text = "Item 1\nItem 2\nItem 3\n"
         request = create_insert_text_request(100, combined_text)
 
-        assert 'insertText' in request
-        assert request['insertText']['location']['index'] == 100
-        assert request['insertText']['text'] == combined_text
-        assert request['insertText']['text'].count('\n') == 3
+        assert "insertText" in request
+        assert request["insertText"]["location"]["index"] == 100
+        assert request["insertText"]["text"] == combined_text
+        assert request["insertText"]["text"].count("\n") == 3
 
     def test_create_bullet_list_request_range(self):
         """Test that bullet request covers the correct range."""
@@ -39,19 +40,19 @@ class TestListItemsHelpers:
 
         request = create_bullet_list_request(start, end, "ORDERED")
 
-        assert 'createParagraphBullets' in request
-        bullet_req = request['createParagraphBullets']
-        assert bullet_req['range']['startIndex'] == start
-        assert bullet_req['range']['endIndex'] == end
-        assert 'NUMBERED' in bullet_req['bulletPreset']
+        assert "createParagraphBullets" in request
+        bullet_req = request["createParagraphBullets"]
+        assert bullet_req["range"]["startIndex"] == start
+        assert bullet_req["range"]["endIndex"] == end
+        assert "NUMBERED" in bullet_req["bulletPreset"]
 
     def test_create_bullet_list_request_unordered(self):
         """Test unordered list creates bullet preset."""
         request = create_bullet_list_request(100, 120, "UNORDERED")
 
-        assert 'createParagraphBullets' in request
-        bullet_req = request['createParagraphBullets']
-        assert 'BULLET' in bullet_req['bulletPreset']
+        assert "createParagraphBullets" in request
+        bullet_req = request["createParagraphBullets"]
+        assert "BULLET" in bullet_req["bulletPreset"]
 
 
 class TestListItemsValidation:
@@ -61,9 +62,7 @@ class TestListItemsValidation:
         """ValidationManager can create error for non-list items."""
         validator = ValidationManager()
         error = validator.create_invalid_param_error(
-            param_name="items",
-            received="str",
-            valid_values=["list of strings"]
+            param_name="items", received="str", valid_values=["list of strings"]
         )
 
         assert "error" in error.lower()
@@ -75,7 +74,7 @@ class TestListItemsValidation:
         error = validator.create_invalid_param_error(
             param_name="items",
             received="empty list",
-            valid_values=["non-empty list of strings"]
+            valid_values=["non-empty list of strings"],
         )
 
         assert "error" in error.lower()
@@ -88,7 +87,7 @@ class TestListItemsLogic:
     def test_build_combined_text_single_item(self):
         """Single item produces correct text."""
         items = ["First item"]
-        combined = '\n'.join(items) + '\n'
+        combined = "\n".join(items) + "\n"
 
         assert combined == "First item\n"
         assert len(combined) == 11
@@ -96,16 +95,16 @@ class TestListItemsLogic:
     def test_build_combined_text_multiple_items(self):
         """Multiple items are joined with newlines."""
         items = ["Item 1", "Item 2", "Item 3"]
-        combined = '\n'.join(items) + '\n'
+        combined = "\n".join(items) + "\n"
 
         expected = "Item 1\nItem 2\nItem 3\n"
         assert combined == expected
-        assert combined.count('\n') == 3
+        assert combined.count("\n") == 3
 
     def test_bullet_range_calculation(self):
         """Bullet range should cover text but not trailing newline."""
         items = ["First", "Second"]
-        combined = '\n'.join(items) + '\n'
+        combined = "\n".join(items) + "\n"
 
         start_index = 100
         # total_length excludes final newline
@@ -132,7 +131,7 @@ class TestListItemsIntegration:
             error = validator.create_invalid_param_error(
                 param_name="items",
                 received=type(items).__name__,
-                valid_values=["list of strings"]
+                valid_values=["list of strings"],
             )
             assert "str" in error
 
@@ -145,7 +144,7 @@ class TestListItemsIntegration:
             error = validator.create_invalid_param_error(
                 param_name="items",
                 received="empty list",
-                valid_values=["non-empty list of strings"]
+                valid_values=["non-empty list of strings"],
             )
             assert "empty" in error.lower()
 
@@ -159,7 +158,7 @@ class TestListItemsIntegration:
                 error = validator.create_invalid_param_error(
                     param_name=f"items[{i}]",
                     received=type(item).__name__,
-                    valid_values=["string"]
+                    valid_values=["string"],
                 )
                 assert "items[1]" in error
                 assert "int" in error
@@ -180,10 +179,10 @@ class TestNestedListItems:
         # Build nested items with tab prefixes
         nested_items = []
         for item_text, level in zip(items, nesting_levels):
-            prefix = '\t' * level
+            prefix = "\t" * level
             nested_items.append(prefix + item_text)
 
-        combined = '\n'.join(nested_items) + '\n'
+        combined = "\n".join(nested_items) + "\n"
 
         expected = "Main item\n\tSub item 1\n\tSub item 2\nAnother main\n"
         assert combined == expected
@@ -195,10 +194,10 @@ class TestNestedListItems:
 
         nested_items = []
         for item_text, level in zip(items, nesting_levels):
-            prefix = '\t' * level
+            prefix = "\t" * level
             nested_items.append(prefix + item_text)
 
-        combined = '\n'.join(nested_items) + '\n'
+        combined = "\n".join(nested_items) + "\n"
 
         expected = "Level 0\n\tLevel 1\n\t\tLevel 2\n\t\t\tLevel 3\n\tBack to 1\n"
         assert combined == expected
@@ -210,13 +209,13 @@ class TestNestedListItems:
 
         nested_items = []
         for item_text, level in zip(items, nesting_levels):
-            prefix = '\t' * level
+            prefix = "\t" * level
             nested_items.append(prefix + item_text)
 
-        combined = '\n'.join(nested_items) + '\n'
+        combined = "\n".join(nested_items) + "\n"
 
         # No tabs should be present
-        assert '\t' not in combined
+        assert "\t" not in combined
         assert combined == "Item 1\nItem 2\nItem 3\n"
 
     def test_validate_nesting_levels_must_be_list(self):
@@ -228,7 +227,7 @@ class TestNestedListItems:
             error = validator.create_invalid_param_error(
                 param_name="nesting_levels",
                 received=type(nesting_levels).__name__,
-                valid_values=["list of integers"]
+                valid_values=["list of integers"],
             )
             assert "nesting_levels" in error
             assert "str" in error
@@ -243,7 +242,7 @@ class TestNestedListItems:
             error = validator.create_invalid_param_error(
                 param_name="nesting_levels",
                 received=f"list of length {len(nesting_levels)}",
-                valid_values=[f"list of length {len(items)} (must match items length)"]
+                valid_values=[f"list of length {len(items)} (must match items length)"],
             )
             assert "nesting_levels" in error
             assert "length 2" in error
@@ -259,7 +258,7 @@ class TestNestedListItems:
                 error = validator.create_invalid_param_error(
                     param_name=f"nesting_levels[{i}]",
                     received=type(level).__name__,
-                    valid_values=["integer (0-8)"]
+                    valid_values=["integer (0-8)"],
                 )
                 assert "nesting_levels[1]" in error
                 assert "str" in error
@@ -275,7 +274,7 @@ class TestNestedListItems:
                 error = validator.create_invalid_param_error(
                     param_name=f"nesting_levels[{i}]",
                     received=str(level),
-                    valid_values=["integer from 0 to 8"]
+                    valid_values=["integer from 0 to 8"],
                 )
                 assert "nesting_levels[1]" in error
                 assert "-1" in error
@@ -291,7 +290,7 @@ class TestNestedListItems:
                 error = validator.create_invalid_param_error(
                     param_name=f"nesting_levels[{i}]",
                     received=str(level),
-                    valid_values=["integer from 0 to 8"]
+                    valid_values=["integer from 0 to 8"],
                 )
                 assert "nesting_levels[2]" in error
                 assert "9" in error
@@ -323,10 +322,10 @@ class TestNestedListItems:
         # Build nested items
         nested_items = []
         for item_text, level in zip(items, nesting_levels):
-            prefix = '\t' * level
+            prefix = "\t" * level
             nested_items.append(prefix + item_text)
 
-        combined = '\n'.join(nested_items) + '\n'
+        combined = "\n".join(nested_items) + "\n"
         # "Main\n\tSub\n" = 10 chars
         assert combined == "Main\n\tSub\n"
         assert len(combined) == 10

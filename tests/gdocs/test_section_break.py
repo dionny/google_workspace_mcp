@@ -3,6 +3,7 @@ Unit tests for section_break insertion functionality.
 
 Tests verify proper creation of insertSectionBreak requests.
 """
+
 from gdocs.docs_helpers import create_insert_section_break_request
 
 
@@ -22,14 +23,18 @@ class TestCreateInsertSectionBreakRequest:
 
     def test_request_with_next_page_type(self):
         """Section break request should use NEXT_PAGE type when specified."""
-        request = create_insert_section_break_request(index=50, section_type="NEXT_PAGE")
+        request = create_insert_section_break_request(
+            index=50, section_type="NEXT_PAGE"
+        )
 
         assert request["insertSectionBreak"]["sectionType"] == "NEXT_PAGE"
         assert request["insertSectionBreak"]["location"]["index"] == 50
 
     def test_request_with_continuous_type(self):
         """Section break request should use CONTINUOUS type when specified."""
-        request = create_insert_section_break_request(index=25, section_type="CONTINUOUS")
+        request = create_insert_section_break_request(
+            index=25, section_type="CONTINUOUS"
+        )
 
         assert request["insertSectionBreak"]["sectionType"] == "CONTINUOUS"
         assert request["insertSectionBreak"]["location"]["index"] == 25

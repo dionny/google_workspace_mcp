@@ -4,41 +4,38 @@ Unit tests for paragraph style inheritance prevention in modify_doc_text.
 Tests the auto-detection of heading paragraphs and automatic NORMAL_TEXT
 style application to prevent newly inserted content from inheriting heading styles.
 """
+
 from gdocs.docs_structure import (
     get_paragraph_style_at_index,
     is_heading_style,
-    HEADING_TYPES
+    HEADING_TYPES,
 )
 
 
-def create_mock_paragraph(text: str, start_index: int, named_style: str = 'NORMAL_TEXT'):
+def create_mock_paragraph(
+    text: str, start_index: int, named_style: str = "NORMAL_TEXT"
+):
     """Create a mock paragraph element."""
     end_index = start_index + len(text) + 1  # +1 for newline
     return {
-        'startIndex': start_index,
-        'endIndex': end_index,
-        'paragraph': {
-            'paragraphStyle': {
-                'namedStyleType': named_style
-            },
-            'elements': [{
-                'startIndex': start_index,
-                'endIndex': end_index,
-                'textRun': {
-                    'content': text + '\n'
+        "startIndex": start_index,
+        "endIndex": end_index,
+        "paragraph": {
+            "paragraphStyle": {"namedStyleType": named_style},
+            "elements": [
+                {
+                    "startIndex": start_index,
+                    "endIndex": end_index,
+                    "textRun": {"content": text + "\n"},
                 }
-            }]
-        }
+            ],
+        },
     }
 
 
 def create_mock_document(elements):
     """Create a mock document with given elements."""
-    return {
-        'body': {
-            'content': elements
-        }
-    }
+    return {"body": {"content": elements}}
 
 
 class TestGetParagraphStyleAtIndex:
@@ -46,82 +43,82 @@ class TestGetParagraphStyleAtIndex:
 
     def test_returns_style_for_heading_1(self):
         """Should return HEADING_1 for text inside a heading 1 paragraph."""
-        doc = create_mock_document([
-            create_mock_paragraph("My Heading", 1, 'HEADING_1')
-        ])
+        doc = create_mock_document(
+            [create_mock_paragraph("My Heading", 1, "HEADING_1")]
+        )
         result = get_paragraph_style_at_index(doc, 5)
-        assert result == 'HEADING_1'
+        assert result == "HEADING_1"
 
     def test_returns_style_for_heading_2(self):
         """Should return HEADING_2 for text inside a heading 2 paragraph."""
-        doc = create_mock_document([
-            create_mock_paragraph("Subheading", 1, 'HEADING_2')
-        ])
+        doc = create_mock_document(
+            [create_mock_paragraph("Subheading", 1, "HEADING_2")]
+        )
         result = get_paragraph_style_at_index(doc, 5)
-        assert result == 'HEADING_2'
+        assert result == "HEADING_2"
 
     def test_returns_style_for_normal_text(self):
         """Should return NORMAL_TEXT for regular paragraph."""
-        doc = create_mock_document([
-            create_mock_paragraph("Normal paragraph text", 1, 'NORMAL_TEXT')
-        ])
+        doc = create_mock_document(
+            [create_mock_paragraph("Normal paragraph text", 1, "NORMAL_TEXT")]
+        )
         result = get_paragraph_style_at_index(doc, 10)
-        assert result == 'NORMAL_TEXT'
+        assert result == "NORMAL_TEXT"
 
     def test_returns_style_at_paragraph_boundary(self):
         """Should return correct style at paragraph start boundary."""
-        doc = create_mock_document([
-            create_mock_paragraph("Heading", 1, 'HEADING_1')
-        ])
+        doc = create_mock_document([create_mock_paragraph("Heading", 1, "HEADING_1")])
         result = get_paragraph_style_at_index(doc, 1)
-        assert result == 'HEADING_1'
+        assert result == "HEADING_1"
 
     def test_returns_none_for_index_outside_content(self):
         """Should return None for index outside all elements."""
-        doc = create_mock_document([
-            create_mock_paragraph("Some text", 1, 'NORMAL_TEXT')
-        ])
+        doc = create_mock_document(
+            [create_mock_paragraph("Some text", 1, "NORMAL_TEXT")]
+        )
         # Index 100 is way beyond the paragraph
         result = get_paragraph_style_at_index(doc, 100)
         assert result is None
 
     def test_handles_multiple_paragraphs(self):
         """Should find correct paragraph in multi-paragraph document."""
-        doc = create_mock_document([
-            create_mock_paragraph("Heading", 1, 'HEADING_1'),        # 1-9
-            create_mock_paragraph("Normal text", 9, 'NORMAL_TEXT'),  # 9-21
-            create_mock_paragraph("Another heading", 21, 'HEADING_2')  # 21-37
-        ])
+        doc = create_mock_document(
+            [
+                create_mock_paragraph("Heading", 1, "HEADING_1"),  # 1-9
+                create_mock_paragraph("Normal text", 9, "NORMAL_TEXT"),  # 9-21
+                create_mock_paragraph("Another heading", 21, "HEADING_2"),  # 21-37
+            ]
+        )
         # Check heading 1
-        assert get_paragraph_style_at_index(doc, 5) == 'HEADING_1'
+        assert get_paragraph_style_at_index(doc, 5) == "HEADING_1"
         # Check normal text
-        assert get_paragraph_style_at_index(doc, 15) == 'NORMAL_TEXT'
+        assert get_paragraph_style_at_index(doc, 15) == "NORMAL_TEXT"
         # Check heading 2
-        assert get_paragraph_style_at_index(doc, 30) == 'HEADING_2'
+        assert get_paragraph_style_at_index(doc, 30) == "HEADING_2"
 
     def test_handles_title_style(self):
         """Should return TITLE for title-styled paragraph."""
-        doc = create_mock_document([
-            create_mock_paragraph("Document Title", 1, 'TITLE')
-        ])
+        doc = create_mock_document(
+            [create_mock_paragraph("Document Title", 1, "TITLE")]
+        )
         result = get_paragraph_style_at_index(doc, 5)
-        assert result == 'TITLE'
+        assert result == "TITLE"
 
     def test_handles_subtitle_style(self):
         """Should return SUBTITLE for subtitle-styled paragraph."""
-        doc = create_mock_document([
-            create_mock_paragraph("Document Subtitle", 1, 'SUBTITLE')
-        ])
+        doc = create_mock_document(
+            [create_mock_paragraph("Document Subtitle", 1, "SUBTITLE")]
+        )
         result = get_paragraph_style_at_index(doc, 5)
-        assert result == 'SUBTITLE'
+        assert result == "SUBTITLE"
 
     def test_handles_all_heading_levels(self):
         """Should correctly identify all heading levels 1-6."""
         for level in range(1, 7):
-            style = f'HEADING_{level}'
-            doc = create_mock_document([
-                create_mock_paragraph(f"Heading {level}", 1, style)
-            ])
+            style = f"HEADING_{level}"
+            doc = create_mock_document(
+                [create_mock_paragraph(f"Heading {level}", 1, style)]
+            )
             result = get_paragraph_style_at_index(doc, 5)
             assert result == style, f"Failed for {style}"
 
@@ -132,21 +129,21 @@ class TestIsHeadingStyle:
     def test_returns_true_for_heading_1_through_6(self):
         """All HEADING_1 through HEADING_6 should be detected as headings."""
         for level in range(1, 7):
-            style = f'HEADING_{level}'
+            style = f"HEADING_{level}"
             assert is_heading_style(style) is True, f"Failed for {style}"
 
     def test_returns_true_for_title(self):
         """TITLE should be detected as a heading style."""
-        assert is_heading_style('TITLE') is True
+        assert is_heading_style("TITLE") is True
 
     def test_returns_false_for_normal_text(self):
         """NORMAL_TEXT should NOT be detected as a heading style."""
-        assert is_heading_style('NORMAL_TEXT') is False
+        assert is_heading_style("NORMAL_TEXT") is False
 
     def test_returns_false_for_subtitle(self):
         """SUBTITLE should NOT be detected as a heading style (not in HEADING_TYPES)."""
         # SUBTITLE is not in HEADING_TYPES, so it should return False
-        assert is_heading_style('SUBTITLE') is False
+        assert is_heading_style("SUBTITLE") is False
 
     def test_returns_false_for_none(self):
         """None should return False."""
@@ -154,19 +151,19 @@ class TestIsHeadingStyle:
 
     def test_returns_false_for_arbitrary_string(self):
         """Arbitrary strings should return False."""
-        assert is_heading_style('RANDOM_STYLE') is False
-        assert is_heading_style('') is False
+        assert is_heading_style("RANDOM_STYLE") is False
+        assert is_heading_style("") is False
 
     def test_heading_types_constant_values(self):
         """Verify HEADING_TYPES constant has expected values."""
         expected = {
-            'HEADING_1': 1,
-            'HEADING_2': 2,
-            'HEADING_3': 3,
-            'HEADING_4': 4,
-            'HEADING_5': 5,
-            'HEADING_6': 6,
-            'TITLE': 0,
+            "HEADING_1": 1,
+            "HEADING_2": 2,
+            "HEADING_3": 3,
+            "HEADING_4": 4,
+            "HEADING_5": 5,
+            "HEADING_6": 6,
+            "TITLE": 0,
         }
         assert HEADING_TYPES == expected
 
@@ -176,7 +173,7 @@ class TestEdgeCases:
 
     def test_empty_document(self):
         """Should handle empty document gracefully."""
-        doc = {'body': {'content': []}}
+        doc = {"body": {"content": []}}
         result = get_paragraph_style_at_index(doc, 1)
         assert result is None
 
@@ -188,64 +185,74 @@ class TestEdgeCases:
 
     def test_missing_content(self):
         """Should handle body without content."""
-        doc = {'body': {}}
+        doc = {"body": {}}
         result = get_paragraph_style_at_index(doc, 1)
         assert result is None
 
     def test_element_without_paragraph(self):
         """Should skip elements that don't contain paragraphs."""
-        doc = create_mock_document([
-            {
-                'startIndex': 1,
-                'endIndex': 10,
-                'table': {}  # Not a paragraph
-            },
-            create_mock_paragraph("After table", 10, 'HEADING_1')
-        ])
+        doc = create_mock_document(
+            [
+                {
+                    "startIndex": 1,
+                    "endIndex": 10,
+                    "table": {},  # Not a paragraph
+                },
+                create_mock_paragraph("After table", 10, "HEADING_1"),
+            ]
+        )
         # Index 5 is in the table element, which has no paragraph
         result = get_paragraph_style_at_index(doc, 5)
         assert result is None
         # Index 15 should find the heading
         result = get_paragraph_style_at_index(doc, 15)
-        assert result == 'HEADING_1'
+        assert result == "HEADING_1"
 
     def test_paragraph_without_style(self):
         """Should return NORMAL_TEXT for paragraph without explicit style."""
-        doc = create_mock_document([
-            {
-                'startIndex': 1,
-                'endIndex': 20,
-                'paragraph': {
-                    # No paragraphStyle key
-                    'elements': [{
-                        'startIndex': 1,
-                        'endIndex': 20,
-                        'textRun': {'content': 'Text without style\n'}
-                    }]
+        doc = create_mock_document(
+            [
+                {
+                    "startIndex": 1,
+                    "endIndex": 20,
+                    "paragraph": {
+                        # No paragraphStyle key
+                        "elements": [
+                            {
+                                "startIndex": 1,
+                                "endIndex": 20,
+                                "textRun": {"content": "Text without style\n"},
+                            }
+                        ]
+                    },
                 }
-            }
-        ])
+            ]
+        )
         result = get_paragraph_style_at_index(doc, 5)
-        assert result == 'NORMAL_TEXT'  # Default value
+        assert result == "NORMAL_TEXT"  # Default value
 
     def test_paragraph_with_empty_style(self):
         """Should return NORMAL_TEXT for paragraph with empty style dict."""
-        doc = create_mock_document([
-            {
-                'startIndex': 1,
-                'endIndex': 20,
-                'paragraph': {
-                    'paragraphStyle': {},  # Empty style dict
-                    'elements': [{
-                        'startIndex': 1,
-                        'endIndex': 20,
-                        'textRun': {'content': 'Text with empty style\n'}
-                    }]
+        doc = create_mock_document(
+            [
+                {
+                    "startIndex": 1,
+                    "endIndex": 20,
+                    "paragraph": {
+                        "paragraphStyle": {},  # Empty style dict
+                        "elements": [
+                            {
+                                "startIndex": 1,
+                                "endIndex": 20,
+                                "textRun": {"content": "Text with empty style\n"},
+                            }
+                        ],
+                    },
                 }
-            }
-        ])
+            ]
+        )
         result = get_paragraph_style_at_index(doc, 5)
-        assert result == 'NORMAL_TEXT'  # Default value
+        assert result == "NORMAL_TEXT"  # Default value
 
 
 class TestHeadingStyleFirstParagraphOnly:

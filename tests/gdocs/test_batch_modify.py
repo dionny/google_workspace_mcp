@@ -8,6 +8,7 @@ These tests verify:
 - Request building from resolved operations
 - Recent insert preference for format operations
 """
+
 import pytest
 from unittest.mock import MagicMock
 from gdocs.managers.batch_operation_manager import (
@@ -323,7 +324,9 @@ class TestBatchOperationManagerSearchConversion:
             "search": "Chapter 2",
             "position": "before",
         }
-        result = self.manager._convert_search_to_index_op(op, "insert_page_break", 300, 309)
+        result = self.manager._convert_search_to_index_op(
+            op, "insert_page_break", 300, 309
+        )
 
         assert result["type"] == "insert_page_break"
         assert result["index"] == 300
@@ -528,7 +531,10 @@ class TestBatchOperationManagerRequestBuilding:
         # Should create 1 request: updateParagraphStyle for heading
         assert len(requests) == 1
         assert "updateParagraphStyle" in requests[0]
-        assert requests[0]["updateParagraphStyle"]["paragraphStyle"]["namedStyleType"] == "HEADING_2"
+        assert (
+            requests[0]["updateParagraphStyle"]["paragraphStyle"]["namedStyleType"]
+            == "HEADING_2"
+        )
 
     def test_build_format_request_with_heading_style_and_bold(self):
         """Test building format request with both heading_style and text formatting.
@@ -558,7 +564,12 @@ class TestBatchOperationManagerRequestBuilding:
         # Check for paragraph style request
         para_style_reqs = [r for r in requests if "updateParagraphStyle" in r]
         assert len(para_style_reqs) == 1
-        assert para_style_reqs[0]["updateParagraphStyle"]["paragraphStyle"]["namedStyleType"] == "HEADING_2"
+        assert (
+            para_style_reqs[0]["updateParagraphStyle"]["paragraphStyle"][
+                "namedStyleType"
+            ]
+            == "HEADING_2"
+        )
 
     def test_build_format_request_with_alignment(self):
         """Test building format request with paragraph alignment."""
@@ -574,7 +585,10 @@ class TestBatchOperationManagerRequestBuilding:
 
         assert len(requests) == 1
         assert "updateParagraphStyle" in requests[0]
-        assert requests[0]["updateParagraphStyle"]["paragraphStyle"]["alignment"] == "CENTER"
+        assert (
+            requests[0]["updateParagraphStyle"]["paragraphStyle"]["alignment"]
+            == "CENTER"
+        )
 
     def test_build_format_request_with_line_spacing(self):
         """Test building format request with line spacing."""
@@ -590,7 +604,9 @@ class TestBatchOperationManagerRequestBuilding:
 
         assert len(requests) == 1
         assert "updateParagraphStyle" in requests[0]
-        assert requests[0]["updateParagraphStyle"]["paragraphStyle"]["lineSpacing"] == 150
+        assert (
+            requests[0]["updateParagraphStyle"]["paragraphStyle"]["lineSpacing"] == 150
+        )
 
     def test_build_skips_none_operations(self):
         """Test that None operations are skipped."""
@@ -663,14 +679,16 @@ class TestInsertWithFormatting:
 
     def test_build_insert_with_multiple_formats(self):
         """Test insert with multiple formatting options."""
-        ops = [{
-            "type": "insert_text",
-            "index": 1,
-            "text": "Formatted",
-            "bold": True,
-            "italic": True,
-            "underline": True,
-        }]
+        ops = [
+            {
+                "type": "insert_text",
+                "index": 1,
+                "text": "Formatted",
+                "bold": True,
+                "italic": True,
+                "underline": True,
+            }
+        ]
         requests = self.manager._build_requests_from_resolved(ops)
 
         assert len(requests) == 3  # insert + clear formatting + apply formatting
@@ -681,12 +699,14 @@ class TestInsertWithFormatting:
 
     def test_build_insert_with_font_size(self):
         """Test insert with font_size formatting."""
-        ops = [{
-            "type": "insert_text",
-            "index": 1,
-            "text": "Big Text",
-            "font_size": 24,
-        }]
+        ops = [
+            {
+                "type": "insert_text",
+                "index": 1,
+                "text": "Big Text",
+                "font_size": 24,
+            }
+        ]
         requests = self.manager._build_requests_from_resolved(ops)
 
         assert len(requests) == 3  # insert + clear formatting + apply formatting
@@ -695,12 +715,14 @@ class TestInsertWithFormatting:
 
     def test_build_insert_with_foreground_color(self):
         """Test insert with foreground_color (text color) formatting."""
-        ops = [{
-            "type": "insert_text",
-            "index": 1,
-            "text": "Red Text",
-            "foreground_color": "#FF0000",
-        }]
+        ops = [
+            {
+                "type": "insert_text",
+                "index": 1,
+                "text": "Red Text",
+                "foreground_color": "#FF0000",
+            }
+        ]
         requests = self.manager._build_requests_from_resolved(ops)
 
         assert len(requests) == 3  # insert + clear formatting + apply formatting
@@ -723,16 +745,20 @@ class TestInsertWithFormatting:
 
     def test_build_replace_with_bold_creates_format_request(self):
         """Test that replace with bold=True creates delete, insert, clear, and format requests."""
-        ops = [{
-            "type": "replace_text",
-            "start_index": 100,
-            "end_index": 110,
-            "text": "Bold Replacement",
-            "bold": True,
-        }]
+        ops = [
+            {
+                "type": "replace_text",
+                "start_index": 100,
+                "end_index": 110,
+                "text": "Bold Replacement",
+                "bold": True,
+            }
+        ]
         requests = self.manager._build_requests_from_resolved(ops)
 
-        assert len(requests) == 4  # delete + insert + clear formatting + apply formatting
+        assert (
+            len(requests) == 4
+        )  # delete + insert + clear formatting + apply formatting
         assert "deleteContentRange" in requests[0]
         assert "insertText" in requests[1]
         assert "updateTextStyle" in requests[2]  # clear formatting
@@ -747,12 +773,14 @@ class TestInsertWithFormatting:
 
         This prevents replaced text from inheriting surrounding formatting.
         """
-        ops = [{
-            "type": "replace_text",
-            "start_index": 50,
-            "end_index": 60,
-            "text": "Plain",
-        }]
+        ops = [
+            {
+                "type": "replace_text",
+                "start_index": 50,
+                "end_index": 60,
+                "text": "Plain",
+            }
+        ]
         requests = self.manager._build_requests_from_resolved(ops)
 
         # Replace without explicit formatting still clears inherited styles
@@ -764,12 +792,14 @@ class TestInsertWithFormatting:
 
     def test_build_insert_with_link(self):
         """Test insert with hyperlink formatting."""
-        ops = [{
-            "type": "insert_text",
-            "index": 1,
-            "text": "Click here",
-            "link": "https://example.com",
-        }]
+        ops = [
+            {
+                "type": "insert_text",
+                "index": 1,
+                "text": "Click here",
+                "link": "https://example.com",
+            }
+        ]
         requests = self.manager._build_requests_from_resolved(ops)
 
         assert len(requests) == 3  # insert + clear formatting + apply formatting
@@ -778,12 +808,14 @@ class TestInsertWithFormatting:
 
     def test_build_insert_with_strikethrough(self):
         """Test insert with strikethrough formatting."""
-        ops = [{
-            "type": "insert_text",
-            "index": 1,
-            "text": "Crossed out",
-            "strikethrough": True,
-        }]
+        ops = [
+            {
+                "type": "insert_text",
+                "index": 1,
+                "text": "Crossed out",
+                "strikethrough": True,
+            }
+        ]
         requests = self.manager._build_requests_from_resolved(ops)
 
         assert len(requests) == 3  # insert + clear formatting + apply formatting
@@ -1007,7 +1039,9 @@ class TestBatchOperationManagerIntegration:
         assert result.results[1].position_shift == 6
 
     @pytest.mark.asyncio
-    async def test_execute_batch_delete_then_insert_adjusts_correctly(self, mock_service):
+    async def test_execute_batch_delete_then_insert_adjusts_correctly(
+        self, mock_service
+    ):
         """Test that delete shifts subsequent insert positions correctly."""
         manager = BatchOperationManager(mock_service)
 
@@ -1030,8 +1064,8 @@ class TestBatchOperationManagerIntegration:
     @pytest.mark.asyncio
     async def test_execute_batch_api_error(self, mock_service):
         """Test handling of API errors during batch execution."""
-        mock_service.documents.return_value.batchUpdate.return_value.execute = MagicMock(
-            side_effect=Exception("API Error: Rate limit exceeded")
+        mock_service.documents.return_value.batchUpdate.return_value.execute = (
+            MagicMock(side_effect=Exception("API Error: Rate limit exceeded"))
         )
         manager = BatchOperationManager(mock_service)
 
@@ -1107,7 +1141,10 @@ class TestBatchOperationManagerIntegration:
         assert len(result.results) == 2
         # First operation resolved OK (marked success initially, but batch failed)
         assert result.results[1].success is False
-        assert "Unsupported operation type: 'completely_fake_op'" in result.results[1].error
+        assert (
+            "Unsupported operation type: 'completely_fake_op'"
+            in result.results[1].error
+        )
 
 
 class TestOperationAliasNormalization:
@@ -1117,52 +1154,52 @@ class TestOperationAliasNormalization:
         """Test that short operation type forms are normalized to canonical forms."""
         from gdocs.managers.batch_operation_manager import normalize_operation_type
 
-        assert normalize_operation_type('insert') == 'insert_text'
-        assert normalize_operation_type('delete') == 'delete_text'
-        assert normalize_operation_type('format') == 'format_text'
-        assert normalize_operation_type('replace') == 'replace_text'
+        assert normalize_operation_type("insert") == "insert_text"
+        assert normalize_operation_type("delete") == "delete_text"
+        assert normalize_operation_type("format") == "format_text"
+        assert normalize_operation_type("replace") == "replace_text"
 
     def test_normalize_operation_type_canonical_forms(self):
         """Test that canonical forms remain unchanged."""
         from gdocs.managers.batch_operation_manager import normalize_operation_type
 
-        assert normalize_operation_type('insert_text') == 'insert_text'
-        assert normalize_operation_type('delete_text') == 'delete_text'
-        assert normalize_operation_type('format_text') == 'format_text'
-        assert normalize_operation_type('replace_text') == 'replace_text'
+        assert normalize_operation_type("insert_text") == "insert_text"
+        assert normalize_operation_type("delete_text") == "delete_text"
+        assert normalize_operation_type("format_text") == "format_text"
+        assert normalize_operation_type("replace_text") == "replace_text"
 
     def test_normalize_operation_type_non_aliased(self):
         """Test that non-aliased operations pass through unchanged."""
         from gdocs.managers.batch_operation_manager import normalize_operation_type
 
-        assert normalize_operation_type('insert_table') == 'insert_table'
-        assert normalize_operation_type('insert_page_break') == 'insert_page_break'
-        assert normalize_operation_type('find_replace') == 'find_replace'
+        assert normalize_operation_type("insert_table") == "insert_table"
+        assert normalize_operation_type("insert_page_break") == "insert_page_break"
+        assert normalize_operation_type("find_replace") == "find_replace"
 
     def test_normalize_operation_type_unknown(self):
         """Test that unknown types pass through unchanged."""
         from gdocs.managers.batch_operation_manager import normalize_operation_type
 
-        assert normalize_operation_type('unknown_type') == 'unknown_type'
+        assert normalize_operation_type("unknown_type") == "unknown_type"
 
     def test_normalize_operation_dict(self):
         """Test normalizing an operation dictionary."""
         from gdocs.managers.batch_operation_manager import normalize_operation
 
-        op = {'type': 'insert', 'index': 100, 'text': 'Hello'}
+        op = {"type": "insert", "index": 100, "text": "Hello"}
         normalized = normalize_operation(op)
 
-        assert normalized['type'] == 'insert_text'
-        assert normalized['index'] == 100
-        assert normalized['text'] == 'Hello'
+        assert normalized["type"] == "insert_text"
+        assert normalized["index"] == 100
+        assert normalized["text"] == "Hello"
         # Original should be unchanged
-        assert op['type'] == 'insert'
+        assert op["type"] == "insert"
 
     def test_normalize_operation_missing_type(self):
         """Test that operations without type field pass through unchanged."""
         from gdocs.managers.batch_operation_manager import normalize_operation
 
-        op = {'index': 100, 'text': 'Hello'}
+        op = {"index": 100, "text": "Hello"}
         normalized = normalize_operation(op)
 
         assert normalized == op
@@ -1179,7 +1216,9 @@ class TestOperationAliasNormalization:
                             "paragraph": {
                                 "elements": [
                                     {
-                                        "textRun": {"content": "Test document content."},
+                                        "textRun": {
+                                            "content": "Test document content."
+                                        },
                                         "startIndex": 1,
                                         "endIndex": 23,
                                     }
@@ -1231,7 +1270,7 @@ class TestOperationAliasNormalization:
         )
 
         assert success is True
-        assert metadata['operations_count'] == 2
+        assert metadata["operations_count"] == 2
 
 
 class TestBatchAllOccurrences:
@@ -1316,7 +1355,9 @@ class TestBatchAllOccurrences:
             assert "search" not in op
             assert "all_occurrences" not in op
 
-    def test_expand_all_occurrences_preserves_order_reversed(self, mock_service_with_multiple_matches):
+    def test_expand_all_occurrences_preserves_order_reversed(
+        self, mock_service_with_multiple_matches
+    ):
         """Test that expanded operations are in reverse document order (for correct index handling)."""
         manager = BatchOperationManager(mock_service_with_multiple_matches)
 
@@ -1396,7 +1437,9 @@ class TestBatchAllOccurrences:
             assert op["type"] == "replace_text"
             assert op["text"] == "DONE"
 
-    def test_expand_all_occurrences_no_matches(self, mock_service_with_multiple_matches):
+    def test_expand_all_occurrences_no_matches(
+        self, mock_service_with_multiple_matches
+    ):
         """Test that all_occurrences with no matches keeps original operation (for error reporting)."""
         manager = BatchOperationManager(mock_service_with_multiple_matches)
 
@@ -1435,7 +1478,9 @@ class TestBatchAllOccurrences:
         assert len(expanded) == 1
         assert expanded[0]["search"] == "NONEXISTENT"
 
-    def test_expand_preserves_non_all_occurrences_operations(self, mock_service_with_multiple_matches):
+    def test_expand_preserves_non_all_occurrences_operations(
+        self, mock_service_with_multiple_matches
+    ):
         """Test that operations without all_occurrences are not expanded."""
         manager = BatchOperationManager(mock_service_with_multiple_matches)
 
@@ -1477,7 +1522,9 @@ class TestBatchAllOccurrences:
         assert expanded[1]["search"] == "TODO"
 
     @pytest.mark.asyncio
-    async def test_execute_batch_with_all_occurrences(self, mock_service_with_multiple_matches):
+    async def test_execute_batch_with_all_occurrences(
+        self, mock_service_with_multiple_matches
+    ):
         """Test full batch execution with all_occurrences operations."""
         manager = BatchOperationManager(mock_service_with_multiple_matches)
 
@@ -1507,7 +1554,9 @@ class TestBatchAllOccurrences:
         assert "all_occurrences" in result.message
 
     @pytest.mark.asyncio
-    async def test_execute_batch_mixed_all_occurrences_and_regular(self, mock_service_with_multiple_matches):
+    async def test_execute_batch_mixed_all_occurrences_and_regular(
+        self, mock_service_with_multiple_matches
+    ):
         """Test batch with both all_occurrences and regular operations."""
         manager = BatchOperationManager(mock_service_with_multiple_matches)
 
@@ -1906,7 +1955,7 @@ class TestVirtualTextTracker:
         success, start, end, msg = tracker.search_text("World", "replace")
         assert success is True
         assert start == 7  # 1-based index: "World" starts at index 7
-        assert end == 12   # End is exclusive
+        assert end == 12  # End is exclusive
 
     def test_search_text_not_found(self):
         """Test searching for text that doesn't exist."""
@@ -1950,7 +1999,9 @@ class TestVirtualTextTracker:
         doc_data = self._make_doc_data("Hello World")
         tracker = VirtualTextTracker(doc_data)
 
-        success, start, end, msg = tracker.search_text("hello", "replace", match_case=False)
+        success, start, end, msg = tracker.search_text(
+            "hello", "replace", match_case=False
+        )
         assert success is True
         assert start == 1
 
@@ -1962,11 +2013,13 @@ class TestVirtualTextTracker:
         tracker = VirtualTextTracker(doc_data)
 
         # Insert "[NEW]" after "Hello"
-        tracker.apply_operation({
-            "type": "insert_text",
-            "index": 6,  # After "Hello"
-            "text": "[NEW]"
-        })
+        tracker.apply_operation(
+            {
+                "type": "insert_text",
+                "index": 6,  # After "Hello"
+                "text": "[NEW]",
+            }
+        )
 
         assert "[NEW]" in tracker.text
         assert tracker.text == "Hello[NEW] World"
@@ -1979,11 +2032,9 @@ class TestVirtualTextTracker:
         tracker = VirtualTextTracker(doc_data)
 
         # Delete "Hello "
-        tracker.apply_operation({
-            "type": "delete_text",
-            "start_index": 1,
-            "end_index": 7
-        })
+        tracker.apply_operation(
+            {"type": "delete_text", "start_index": 1, "end_index": 7}
+        )
 
         assert tracker.text == "World"
 
@@ -1995,12 +2046,14 @@ class TestVirtualTextTracker:
         tracker = VirtualTextTracker(doc_data)
 
         # Replace "World" with "Universe"
-        tracker.apply_operation({
-            "type": "replace_text",
-            "start_index": 7,
-            "end_index": 12,
-            "text": "Universe"
-        })
+        tracker.apply_operation(
+            {
+                "type": "replace_text",
+                "start_index": 7,
+                "end_index": 12,
+                "text": "Universe",
+            }
+        )
 
         assert tracker.text == "Hello Universe"
 
@@ -2012,22 +2065,20 @@ class TestVirtualTextTracker:
         tracker = VirtualTextTracker(doc_data)
 
         # First: insert [OP1] after [MARKER]
-        tracker.apply_operation({
-            "type": "insert_text",
-            "index": 9,  # After [MARKER]
-            "text": "[OP1]"
-        })
+        tracker.apply_operation(
+            {
+                "type": "insert_text",
+                "index": 9,  # After [MARKER]
+                "text": "[OP1]",
+            }
+        )
 
         # Now search for [OP1] - should find it in the virtual text
         success, start, end, msg = tracker.search_text("[OP1]", "after")
         assert success is True, f"Failed to find [OP1]: {msg}"
 
         # Apply second insert after [OP1]
-        tracker.apply_operation({
-            "type": "insert_text",
-            "index": end,
-            "text": "[OP2]"
-        })
+        tracker.apply_operation({"type": "insert_text", "index": end, "text": "[OP2]"})
 
         # Should also be able to find [OP2]
         success2, start2, end2, msg2 = tracker.search_text("[OP2]", "replace")
@@ -2051,7 +2102,9 @@ class TestVirtualTextTracker:
         assert start == 14  # After "apple banana " (1-based: 1 + len("apple banana "))
 
         # Last occurrence (occurrence=-1)
-        success, start, end, msg = tracker.search_text("apple", "replace", occurrence=-1)
+        success, start, end, msg = tracker.search_text(
+            "apple", "replace", occurrence=-1
+        )
         assert success is True
         assert start == 27  # Last "apple" (1 + len("apple banana apple cherry "))
 
@@ -2113,7 +2166,12 @@ class TestChainedBatchOperations:
         manager = BatchOperationManager(mock_service)
 
         operations = [
-            {"type": "insert", "search": "[MARKER]", "position": "after", "text": "[OP1]"},
+            {
+                "type": "insert",
+                "search": "[MARKER]",
+                "position": "after",
+                "text": "[OP1]",
+            },
             {"type": "insert", "search": "[OP1]", "position": "after", "text": "[OP2]"},
         ]
 
@@ -2134,7 +2192,12 @@ class TestChainedBatchOperations:
         manager = BatchOperationManager(mock_service)
 
         operations = [
-            {"type": "insert", "search": "[MARKER]", "position": "after", "text": "[A]"},
+            {
+                "type": "insert",
+                "search": "[MARKER]",
+                "position": "after",
+                "text": "[A]",
+            },
             {"type": "insert", "search": "[A]", "position": "after", "text": "[B]"},
             {"type": "insert", "search": "[B]", "position": "after", "text": "[C]"},
         ]
@@ -2154,8 +2217,18 @@ class TestChainedBatchOperations:
         manager = BatchOperationManager(mock_service)
 
         operations = [
-            {"type": "insert", "search": "[MARKER]", "position": "after", "text": "[TEMP]"},
-            {"type": "replace", "search": "[TEMP]", "position": "replace", "text": "[FINAL]"},
+            {
+                "type": "insert",
+                "search": "[MARKER]",
+                "position": "after",
+                "text": "[TEMP]",
+            },
+            {
+                "type": "replace",
+                "search": "[TEMP]",
+                "position": "replace",
+                "text": "[FINAL]",
+            },
         ]
 
         result = await manager.execute_batch_with_search(
@@ -2173,7 +2246,12 @@ class TestChainedBatchOperations:
         manager = BatchOperationManager(mock_service)
 
         operations = [
-            {"type": "insert", "search": "[MARKER]", "position": "after", "text": "[OP1]"},
+            {
+                "type": "insert",
+                "search": "[MARKER]",
+                "position": "after",
+                "text": "[OP1]",
+            },
             {"type": "insert", "search": "[OP1]", "position": "after", "text": "[OP2]"},
         ]
 
@@ -2210,7 +2288,9 @@ class TestLocationBasedPositioning:
                                 {
                                     "startIndex": 1,
                                     "endIndex": 50,
-                                    "textRun": {"content": "Hello World. This is test content.\n"},
+                                    "textRun": {
+                                        "content": "Hello World. This is test content.\n"
+                                    },
                                 }
                             ]
                         },
@@ -2227,9 +2307,7 @@ class TestLocationBasedPositioning:
         """Test that location='end' resolves to the last valid document index."""
         manager = BatchOperationManager(mock_service)
 
-        operations = [
-            {"type": "insert", "location": "end", "text": "[APPENDED]"}
-        ]
+        operations = [{"type": "insert", "location": "end", "text": "[APPENDED]"}]
 
         result = await manager.execute_batch_with_search(
             "test-doc-id",
@@ -2247,9 +2325,7 @@ class TestLocationBasedPositioning:
         """Test that location='start' resolves to index 1 (after section break)."""
         manager = BatchOperationManager(mock_service)
 
-        operations = [
-            {"type": "insert", "location": "start", "text": "[PREPENDED]"}
-        ]
+        operations = [{"type": "insert", "location": "start", "text": "[PREPENDED]"}]
 
         result = await manager.execute_batch_with_search(
             "test-doc-id",
@@ -2267,9 +2343,7 @@ class TestLocationBasedPositioning:
         """Test that invalid location values return an error."""
         manager = BatchOperationManager(mock_service)
 
-        operations = [
-            {"type": "insert", "location": "middle", "text": "[INVALID]"}
-        ]
+        operations = [{"type": "insert", "location": "middle", "text": "[INVALID]"}]
 
         result = await manager.execute_batch_with_search(
             "test-doc-id",
@@ -2285,9 +2359,7 @@ class TestLocationBasedPositioning:
         """Test that location-based operations work in preview mode."""
         manager = BatchOperationManager(mock_service)
 
-        operations = [
-            {"type": "insert", "location": "end", "text": "[TEST]"}
-        ]
+        operations = [{"type": "insert", "location": "end", "text": "[TEST]"}]
 
         result = await manager.execute_batch_with_search(
             "test-doc-id",
@@ -2347,9 +2419,7 @@ class TestLocationBasedPositioning:
         """Test that location works with insert_page_break operations."""
         manager = BatchOperationManager(mock_service)
 
-        operations = [
-            {"type": "insert_page_break", "location": "end"}
-        ]
+        operations = [{"type": "insert_page_break", "location": "end"}]
 
         result = await manager.execute_batch_with_search(
             "test-doc-id",
@@ -2404,11 +2474,13 @@ class TestRecentInsertPreference:
         assert tracker._recent_inserts == []
 
         # Apply an insert operation
-        tracker.apply_operation({
-            "type": "insert_text",
-            "index": 12,  # After "Hello World"
-            "text": "[MARKER]"
-        })
+        tracker.apply_operation(
+            {
+                "type": "insert_text",
+                "index": 12,  # After "Hello World"
+                "text": "[MARKER]",
+            }
+        )
 
         # Should have tracked the insert
         assert len(tracker._recent_inserts) == 1
@@ -2421,11 +2493,9 @@ class TestRecentInsertPreference:
         tracker = VirtualTextTracker(doc_data)
 
         # Insert "TEST" again at a later position
-        tracker.apply_operation({
-            "type": "insert_text",
-            "index": 22,
-            "text": "NEW TEST"
-        })
+        tracker.apply_operation(
+            {"type": "insert_text", "index": 22, "text": "NEW TEST"}
+        )
 
         # Search should find "TEST" in the recently inserted text, not the original
         success, start, end, msg = tracker.search_text("TEST", "replace")
@@ -2443,11 +2513,9 @@ class TestRecentInsertPreference:
         tracker = VirtualTextTracker(doc_data)
 
         # Insert different text
-        tracker.apply_operation({
-            "type": "insert_text",
-            "index": 22,
-            "text": "[MARKER]"
-        })
+        tracker.apply_operation(
+            {"type": "insert_text", "index": 22, "text": "[MARKER]"}
+        )
 
         # Search for "EXISTING" - should find in original document
         success, start, end, msg = tracker.search_text("EXISTING", "replace")
@@ -2462,11 +2530,9 @@ class TestRecentInsertPreference:
         tracker = VirtualTextTracker(doc_data)
 
         # Insert another "TEST" at the end
-        tracker.apply_operation({
-            "type": "insert_text",
-            "index": 24,
-            "text": " TEST third"
-        })
+        tracker.apply_operation(
+            {"type": "insert_text", "index": 24, "text": " TEST third"}
+        )
 
         # Search with occurrence=2 should find the second occurrence, not recent insert
         success, start, end, msg = tracker.search_text("TEST", "replace", occurrence=2)
@@ -2480,14 +2546,14 @@ class TestRecentInsertPreference:
         doc_data = self._create_mock_doc_with_existing_text("test existing\n")
         tracker = VirtualTextTracker(doc_data)
 
-        tracker.apply_operation({
-            "type": "insert_text",
-            "index": 15,
-            "text": "NEW TEST"
-        })
+        tracker.apply_operation(
+            {"type": "insert_text", "index": 15, "text": "NEW TEST"}
+        )
 
         # Case-insensitive search should find recent insert
-        success, start, end, msg = tracker.search_text("test", "replace", match_case=False)
+        success, start, end, msg = tracker.search_text(
+            "test", "replace", match_case=False
+        )
 
         assert success is True
         # Should find "TEST" in recently inserted "NEW TEST"
@@ -2523,14 +2589,16 @@ class TestRecentInsertPreference:
                     },
                 ]
             },
-            "title": "Test Doc"
+            "title": "Test Doc",
         }
         service.documents().get().execute.return_value = mock_doc
         service.documents().batchUpdate().execute.return_value = {"replies": []}
         return service
 
     @pytest.mark.asyncio
-    async def test_insert_then_format_targets_inserted_text(self, mock_service_with_existing_marker):
+    async def test_insert_then_format_targets_inserted_text(
+        self, mock_service_with_existing_marker
+    ):
         """Test the main bug fix: insert text then format should target inserted text.
 
         This reproduces the bug from google_workspace_mcp-0aac:
@@ -2540,7 +2608,11 @@ class TestRecentInsertPreference:
         manager = BatchOperationManager(mock_service_with_existing_marker)
 
         operations = [
-            {"type": "insert", "location": "end", "text": "\n\n=== BATCH EDIT TEST ===\n"},
+            {
+                "type": "insert",
+                "location": "end",
+                "text": "\n\n=== BATCH EDIT TEST ===\n",
+            },
             {"type": "format", "search": "BATCH EDIT TEST", "bold": True},
         ]
 
@@ -2557,10 +2629,14 @@ class TestRecentInsertPreference:
         format_result = result.results[1]
         # The inserted text starts at index 48 (end of doc), + 4 for "\n\n=== "
         # So "BATCH EDIT TEST" starts at 52
-        assert format_result.resolved_index >= 48  # Should be in the inserted text, not at 18
+        assert (
+            format_result.resolved_index >= 48
+        )  # Should be in the inserted text, not at 18
 
     @pytest.mark.asyncio
-    async def test_insert_then_format_preview_mode(self, mock_service_with_existing_marker):
+    async def test_insert_then_format_preview_mode(
+        self, mock_service_with_existing_marker
+    ):
         """Test insert+format in preview mode shows correct targeting."""
         manager = BatchOperationManager(mock_service_with_existing_marker)
 
@@ -2585,7 +2661,9 @@ class TestRecentInsertPreference:
         assert format_result.resolved_index >= 48
 
     @pytest.mark.asyncio
-    async def test_multiple_inserts_then_format(self, mock_service_with_existing_marker):
+    async def test_multiple_inserts_then_format(
+        self, mock_service_with_existing_marker
+    ):
         """Test that format finds text in the most recent insert."""
         manager = BatchOperationManager(mock_service_with_existing_marker)
 
@@ -2679,7 +2757,10 @@ class TestBatchOperationInsertValidation:
         assert result.success is False
         assert len(result.results) == 1
         assert result.results[0].success is False
-        assert "position" in result.results[0].error.lower() or "index" in result.results[0].error.lower()
+        assert (
+            "position" in result.results[0].error.lower()
+            or "index" in result.results[0].error.lower()
+        )
 
     @pytest.mark.asyncio
     async def test_insert_without_text_or_position_fails_validation(self, mock_service):
@@ -2864,7 +2945,9 @@ class TestConvertToListOperation:
             "position": "replace",
             "list_type": "ORDERED",
         }
-        result = self.manager._convert_search_to_index_op(op, "convert_to_list", 100, 200)
+        result = self.manager._convert_search_to_index_op(
+            op, "convert_to_list", 100, 200
+        )
 
         assert result["type"] == "convert_to_list"
         assert result["start_index"] == 100
@@ -2896,13 +2979,18 @@ class TestConvertToListOperation:
             "end_index": 200,
             "list_type": "ORDERED",
         }
-        request, description = self.manager._build_operation_request(op, "convert_to_list")
+        request, description = self.manager._build_operation_request(
+            op, "convert_to_list"
+        )
 
         # Verify request structure
         assert "createParagraphBullets" in request
         assert request["createParagraphBullets"]["range"]["startIndex"] == 100
         assert request["createParagraphBullets"]["range"]["endIndex"] == 200
-        assert request["createParagraphBullets"]["bulletPreset"] == "NUMBERED_DECIMAL_ALPHA_ROMAN"
+        assert (
+            request["createParagraphBullets"]["bulletPreset"]
+            == "NUMBERED_DECIMAL_ALPHA_ROMAN"
+        )
         assert "numbered list" in description
 
     def test_build_operation_request_convert_to_list_unordered(self):
@@ -2913,9 +3001,14 @@ class TestConvertToListOperation:
             "end_index": 150,
             "list_type": "UNORDERED",
         }
-        request, description = self.manager._build_operation_request(op, "convert_to_list")
+        request, description = self.manager._build_operation_request(
+            op, "convert_to_list"
+        )
 
-        assert request["createParagraphBullets"]["bulletPreset"] == "BULLET_DISC_CIRCLE_SQUARE"
+        assert (
+            request["createParagraphBullets"]["bulletPreset"]
+            == "BULLET_DISC_CIRCLE_SQUARE"
+        )
         assert "bullet list" in description
 
     def test_build_operation_request_convert_to_list_alias(self):
@@ -2928,12 +3021,18 @@ class TestConvertToListOperation:
             "list_type": "bullet",
         }
         request, _ = self.manager._build_operation_request(op, "convert_to_list")
-        assert request["createParagraphBullets"]["bulletPreset"] == "BULLET_DISC_CIRCLE_SQUARE"
+        assert (
+            request["createParagraphBullets"]["bulletPreset"]
+            == "BULLET_DISC_CIRCLE_SQUARE"
+        )
 
         # Test 'numbered' alias
         op["list_type"] = "numbered"
         request, _ = self.manager._build_operation_request(op, "convert_to_list")
-        assert request["createParagraphBullets"]["bulletPreset"] == "NUMBERED_DECIMAL_ALPHA_ROMAN"
+        assert (
+            request["createParagraphBullets"]["bulletPreset"]
+            == "NUMBERED_DECIMAL_ALPHA_ROMAN"
+        )
 
     def test_build_operation_request_convert_to_list_missing_indices(self):
         """Test that convert_to_list raises error for missing indices."""
@@ -2945,7 +3044,9 @@ class TestConvertToListOperation:
         with pytest.raises(KeyError) as exc_info:
             self.manager._build_operation_request(op, "convert_to_list")
 
-        assert "start_index" in str(exc_info.value) or "end_index" in str(exc_info.value)
+        assert "start_index" in str(exc_info.value) or "end_index" in str(
+            exc_info.value
+        )
 
     def test_build_operation_request_convert_to_list_invalid_list_type(self):
         """Test that convert_to_list raises error for invalid list_type."""

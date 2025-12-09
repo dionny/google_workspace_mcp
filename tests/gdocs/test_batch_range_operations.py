@@ -7,6 +7,7 @@ These tests verify:
 - Various range spec formats (search bounds, extend, offsets, section)
 - Error handling for range resolution failures
 """
+
 import pytest
 from unittest.mock import MagicMock
 from gdocs.managers.batch_operation_manager import (
@@ -37,7 +38,7 @@ class TestBatchOperationManagerRangeResolution:
                                     "endIndex": 89,
                                 }
                             ]
-                        }
+                        },
                     },
                     {
                         "startIndex": 89,
@@ -52,8 +53,8 @@ class TestBatchOperationManagerRangeResolution:
                                     "endIndex": 134,
                                 }
                             ]
-                        }
-                    }
+                        },
+                    },
                 ]
             }
         }
@@ -65,7 +66,7 @@ class TestBatchOperationManagerRangeResolution:
             "range_spec": {
                 "search": "intro",
                 "extend": "paragraph",
-            }
+            },
         }
         result = self.manager._resolve_range_spec(op, self.doc_data, 0, False)
 
@@ -82,7 +83,7 @@ class TestBatchOperationManagerRangeResolution:
                 "search": "intro",
                 "before_chars": 5,
                 "after_chars": 10,
-            }
+            },
         }
         result = self.manager._resolve_range_spec(op, self.doc_data, 0, False)
 
@@ -97,7 +98,7 @@ class TestBatchOperationManagerRangeResolution:
             "range_spec": {
                 "start": {"search": "This is the intro"},
                 "end": {"search": "more text"},
-            }
+            },
         }
         result = self.manager._resolve_range_spec(op, self.doc_data, 0, False)
 
@@ -113,10 +114,12 @@ class TestBatchOperationManagerRangeResolution:
             "range_spec": {
                 "search": "intro",
                 "extend": "paragraph",
-            }
+            },
         }
         result_no_shift = self.manager._resolve_range_spec(op, self.doc_data, 0, True)
-        result_with_shift = self.manager._resolve_range_spec(op, self.doc_data, 50, True)
+        result_with_shift = self.manager._resolve_range_spec(
+            op, self.doc_data, 50, True
+        )
 
         assert result_with_shift.success is True
         assert result_with_shift.start_index == result_no_shift.start_index + 50
@@ -129,9 +132,11 @@ class TestBatchOperationManagerRangeResolution:
             "range_spec": {
                 "search": "intro",
                 "extend": "paragraph",
-            }
+            },
         }
-        result_no_adjust = self.manager._resolve_range_spec(op, self.doc_data, 50, False)
+        result_no_adjust = self.manager._resolve_range_spec(
+            op, self.doc_data, 50, False
+        )
         result_baseline = self.manager._resolve_range_spec(op, self.doc_data, 0, False)
 
         assert result_no_adjust.start_index == result_baseline.start_index
@@ -143,7 +148,7 @@ class TestBatchOperationManagerRangeResolution:
             "range_spec": {
                 "search": "NonexistentText",
                 "extend": "paragraph",
-            }
+            },
         }
         result = self.manager._resolve_range_spec(op, self.doc_data, 0, False)
 
@@ -245,7 +250,9 @@ class TestBatchOperationManagerRangeConversion:
             "type": "insert_page_break",
             "range_spec": {"search": "Conclusion"},
         }
-        result = self.manager._convert_range_to_index_op(op, "insert_page_break", 89, 100)
+        result = self.manager._convert_range_to_index_op(
+            op, "insert_page_break", 89, 100
+        )
 
         assert result["type"] == "insert_page_break"
         assert result["index"] == 89
@@ -276,7 +283,7 @@ class TestBatchOperationManagerRangeIntegration:
                                         "endIndex": 58,
                                     }
                                 ]
-                            }
+                            },
                         },
                         {
                             "startIndex": 58,
@@ -291,8 +298,8 @@ class TestBatchOperationManagerRangeIntegration:
                                         "endIndex": 93,
                                     }
                                 ]
-                            }
-                        }
+                            },
+                        },
                     ]
                 }
             }
@@ -410,7 +417,9 @@ class TestBatchOperationManagerRangeIntegration:
         assert result.results[0].position_shift == 8
 
     @pytest.mark.asyncio
-    async def test_execute_batch_range_spec_then_delete_adjusts_following(self, mock_service):
+    async def test_execute_batch_range_spec_then_delete_adjusts_following(
+        self, mock_service
+    ):
         """Test that delete with range_spec properly shifts following operations."""
         manager = BatchOperationManager(mock_service)
 
@@ -499,7 +508,9 @@ class TestBatchOperationManagerRangeIntegration:
         assert result.operations_completed == 3
 
     @pytest.mark.asyncio
-    async def test_execute_batch_range_spec_replace_calculates_shift(self, mock_service):
+    async def test_execute_batch_range_spec_replace_calculates_shift(
+        self, mock_service
+    ):
         """Test that replace with range_spec correctly calculates position shift."""
         manager = BatchOperationManager(mock_service)
 
@@ -552,7 +563,7 @@ class TestBatchOperationManagerRangeEdgeCases:
                                         "endIndex": 38,
                                     }
                                 ]
-                            }
+                            },
                         }
                     ]
                 }
@@ -663,7 +674,7 @@ class TestSearchBasedExtendPositioning:
                                     "endIndex": 39,
                                 }
                             ]
-                        }
+                        },
                     },
                     {
                         "startIndex": 50,
@@ -678,8 +689,8 @@ class TestSearchBasedExtendPositioning:
                                     "endIndex": 89,
                                 }
                             ]
-                        }
-                    }
+                        },
+                    },
                 ]
             }
         }
@@ -691,8 +702,8 @@ class TestSearchBasedExtendPositioning:
         mock_service.documents.return_value.get.return_value.execute = MagicMock(
             return_value=self.doc_data
         )
-        mock_service.documents.return_value.batchUpdate.return_value.execute = MagicMock(
-            return_value={}
+        mock_service.documents.return_value.batchUpdate.return_value.execute = (
+            MagicMock(return_value={})
         )
 
         manager = BatchOperationManager(mock_service)
@@ -723,8 +734,8 @@ class TestSearchBasedExtendPositioning:
         mock_service.documents.return_value.get.return_value.execute = MagicMock(
             return_value=self.doc_data
         )
-        mock_service.documents.return_value.batchUpdate.return_value.execute = MagicMock(
-            return_value={}
+        mock_service.documents.return_value.batchUpdate.return_value.execute = (
+            MagicMock(return_value={})
         )
 
         manager = BatchOperationManager(mock_service)
@@ -755,8 +766,8 @@ class TestSearchBasedExtendPositioning:
         mock_service.documents.return_value.get.return_value.execute = MagicMock(
             return_value=self.doc_data
         )
-        mock_service.documents.return_value.batchUpdate.return_value.execute = MagicMock(
-            return_value={}
+        mock_service.documents.return_value.batchUpdate.return_value.execute = (
+            MagicMock(return_value={})
         )
 
         manager = BatchOperationManager(mock_service)
@@ -829,7 +840,7 @@ class TestSearchBasedExtendPositioning:
                                     "endIndex": 74,
                                 }
                             ]
-                        }
+                        },
                     }
                 ]
             }
@@ -868,8 +879,8 @@ class TestSearchBasedExtendPositioning:
         mock_service.documents.return_value.get.return_value.execute = MagicMock(
             return_value=self.doc_data
         )
-        mock_service.documents.return_value.batchUpdate.return_value.execute = MagicMock(
-            return_value={}
+        mock_service.documents.return_value.batchUpdate.return_value.execute = (
+            MagicMock(return_value={})
         )
 
         manager = BatchOperationManager(mock_service)

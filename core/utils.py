@@ -176,7 +176,7 @@ def extract_office_xml_text(file_bytes: bytes, mime_type: str) -> Optional[str]:
                                         member_texts.append(shared_strings[ss_idx])
                                     else:
                                         logger.warning(
-                                            f"Invalid shared string index {ss_idx} in {member}. Max index: {len(shared_strings)-1}"
+                                            f"Invalid shared string index {ss_idx} in {member}. Max index: {len(shared_strings) - 1}"
                                         )
                                 except ValueError:
                                     logger.warning(
@@ -252,7 +252,7 @@ def _parse_docs_index_error(error_details: str) -> Optional[str]:
     match = re.search(
         r"Index\s+(\d+)\s+must be less than the end index of the referenced segment,?\s*(\d+)?",
         error_details,
-        re.IGNORECASE
+        re.IGNORECASE,
     )
     if match:
         index_value = int(match.group(1))
@@ -261,20 +261,25 @@ def _parse_docs_index_error(error_details: str) -> Optional[str]:
         error_response = {
             "error": True,
             "code": "INDEX_OUT_OF_BOUNDS",
-            "message": f"Index {index_value} exceeds document length" + (f" ({doc_length})" if doc_length else ""),
-            "reason": f"The requested index {index_value} is beyond the end of the document." + (
+            "message": f"Index {index_value} exceeds document length"
+            + (f" ({doc_length})" if doc_length else ""),
+            "reason": f"The requested index {index_value} is beyond the end of the document."
+            + (
                 f" Document length is {doc_length} characters (valid indices: 1 to {doc_length - 1})."
-                if doc_length else ""
+                if doc_length
+                else ""
             ),
             "suggestion": "Use inspect_doc_structure to check document length before editing. "
-                         "Valid indices are from 1 to document_length - 1.",
+            "Valid indices are from 1 to document_length - 1.",
             "example": {
                 "check_length": "inspect_doc_structure(document_id='...')",
-                "valid_usage": f"Use an index less than {doc_length}" if doc_length else "Use a valid index within document bounds"
+                "valid_usage": f"Use an index less than {doc_length}"
+                if doc_length
+                else "Use a valid index within document bounds",
             },
             "context": {
                 "received": {"index": index_value},
-            }
+            },
         }
         if doc_length:
             error_response["context"]["document_length"] = doc_length
@@ -290,14 +295,15 @@ def _parse_docs_index_error(error_details: str) -> Optional[str]:
         error_response = {
             "error": True,
             "code": "INDEX_OUT_OF_BOUNDS",
-            "message": "Insertion index is outside document bounds" + (f" (index: {index_value})" if index_value else ""),
+            "message": "Insertion index is outside document bounds"
+            + (f" (index: {index_value})" if index_value else ""),
             "reason": "The insertion point is not within a valid text location in the document. "
-                     "This often happens when trying to insert at an index that doesn't exist yet.",
+            "This often happens when trying to insert at an index that doesn't exist yet.",
             "suggestion": "Use inspect_doc_structure to find valid insertion points. "
-                         "For a new or empty document, use index 1.",
+            "For a new or empty document, use index 1.",
             "example": {
                 "check_structure": "inspect_doc_structure(document_id='...')",
-                "empty_doc": "For an empty document, use start_index=1"
+                "empty_doc": "For an empty document, use start_index=1",
             },
         }
         if index_value is not None:
@@ -332,14 +338,16 @@ def _create_docs_not_found_error(document_id: str) -> str:
                 "Document ID is incorrect",
                 "Document was deleted",
                 "You don't have permission to access this document",
-                "Document ID includes extra characters (quotes, spaces)"
-            ]
-        }
+                "Document ID includes extra characters (quotes, spaces)",
+            ],
+        },
     }
     return json.dumps(error_response, indent=2)
 
 
-def handle_http_errors(tool_name: str, is_read_only: bool = False, service_type: Optional[str] = None):
+def handle_http_errors(
+    tool_name: str, is_read_only: bool = False, service_type: Optional[str] = None
+):
     """
     A decorator to handle Google API HttpErrors and transient SSL errors in a standardized way.
 
@@ -385,8 +393,13 @@ def handle_http_errors(tool_name: str, is_read_only: bool = False, service_type:
                     error_details = str(error)
 
                     # Check if this is an API not enabled error
-                    if error.resp.status == 403 and "accessNotConfigured" in error_details:
-                        enablement_msg = get_api_enablement_message(error_details, service_type)
+                    if (
+                        error.resp.status == 403
+                        and "accessNotConfigured" in error_details
+                    ):
+                        enablement_msg = get_api_enablement_message(
+                            error_details, service_type
+                        )
 
                         if enablement_msg:
                             message = (
@@ -410,7 +423,9 @@ def handle_http_errors(tool_name: str, is_read_only: bool = False, service_type:
                         # Check for index out-of-bounds errors in Google Docs API
                         structured_error = _parse_docs_index_error(error_details)
                         if structured_error:
-                            logger.error(f"Index error in {tool_name}: {error}", exc_info=True)
+                            logger.error(
+                                f"Index error in {tool_name}: {error}", exc_info=True
+                            )
                             return structured_error
                         # Fall through to generic error handling if not an index error
                         message = f"API error in {tool_name}: {error}"
@@ -418,7 +433,9 @@ def handle_http_errors(tool_name: str, is_read_only: bool = False, service_type:
                         # Document not found error - return structured error response
                         document_id = kwargs.get("document_id", "unknown")
                         structured_error = _create_docs_not_found_error(document_id)
-                        logger.error(f"Document not found in {tool_name}: {error}", exc_info=True)
+                        logger.error(
+                            f"Document not found in {tool_name}: {error}", exc_info=True
+                        )
                         return structured_error
                     else:
                         # Other HTTP errors (400 Bad Request, etc.) - don't suggest re-auth
