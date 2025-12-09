@@ -15,7 +15,11 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
-from gsheets.sheets_tools import _parse_cell_reference, _column_index_to_letter
+from gsheets.sheets_tools import (
+    _parse_cell_reference,
+    _column_index_to_letter,
+    _strip_sheet_prefix,
+)
 
 
 class TestParseCellReference:
@@ -158,3 +162,73 @@ class TestRoundTrip:
         row, col = _parse_cell_reference("AB50")
         letter = _column_index_to_letter(col)
         assert f"{letter}{row + 1}" == "AB50"
+
+
+class TestCellNoteSheetPrefixExtraction:
+    """
+    Tests for cell note functions' sheet prefix extraction.
+
+    These tests verify the logic used in update_cell_note and clear_cell_note
+    to extract sheet names from cell references like 'SheetName!A1'.
+    """
+
+    def test_cell_with_simple_sheet_prefix(self):
+        """Test extracting sheet name from 'SheetName!A1'."""
+        cell = "DataSheet!A1"
+        cell_sheet_prefix, clean_cell = _strip_sheet_prefix(cell)
+        assert cell_sheet_prefix == "DataSheet"
+        assert clean_cell == "A1"
+        # Verify the clean cell can be parsed
+        row, col = _parse_cell_reference(clean_cell)
+        assert row == 0
+        assert col == 0
+
+    def test_cell_with_quoted_sheet_prefix(self):
+        """Test extracting sheet name with spaces from quoted format."""
+        cell = "'My Sheet'!B2"
+        cell_sheet_prefix, clean_cell = _strip_sheet_prefix(cell)
+        assert cell_sheet_prefix == "My Sheet"
+        assert clean_cell == "B2"
+        row, col = _parse_cell_reference(clean_cell)
+        assert row == 1
+        assert col == 1
+
+    def test_cell_with_escaped_apostrophe_in_sheet_name(self):
+        """Test extracting sheet name with escaped apostrophe."""
+        cell = "'John''s Data'!C3"
+        cell_sheet_prefix, clean_cell = _strip_sheet_prefix(cell)
+        assert cell_sheet_prefix == "John's Data"
+        assert clean_cell == "C3"
+        row, col = _parse_cell_reference(clean_cell)
+        assert row == 2
+        assert col == 2
+
+    def test_cell_without_sheet_prefix(self):
+        """Test cell without sheet prefix returns None for sheet name."""
+        cell = "A1"
+        cell_sheet_prefix, clean_cell = _strip_sheet_prefix(cell)
+        assert cell_sheet_prefix is None
+        assert clean_cell == "A1"
+        row, col = _parse_cell_reference(clean_cell)
+        assert row == 0
+        assert col == 0
+
+    def test_cell_with_double_letter_column(self):
+        """Test cell with sheet prefix and double-letter column."""
+        cell = "Sheet1!AA100"
+        cell_sheet_prefix, clean_cell = _strip_sheet_prefix(cell)
+        assert cell_sheet_prefix == "Sheet1"
+        assert clean_cell == "AA100"
+        row, col = _parse_cell_reference(clean_cell)
+        assert row == 99
+        assert col == 26
+
+    def test_cell_with_exclamation_in_sheet_name(self):
+        """Test quoted sheet name containing exclamation mark."""
+        cell = "'Important!'!D4"
+        cell_sheet_prefix, clean_cell = _strip_sheet_prefix(cell)
+        assert cell_sheet_prefix == "Important!"
+        assert clean_cell == "D4"
+        row, col = _parse_cell_reference(clean_cell)
+        assert row == 3
+        assert col == 3

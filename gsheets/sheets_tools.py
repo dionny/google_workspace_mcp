@@ -827,11 +827,13 @@ async def update_cell_note(
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        cell (str): Cell reference in A1 notation (e.g., 'A1', 'B2', 'AA10'). Required.
+        cell (str): Cell reference in A1 notation (e.g., 'A1', 'B2', 'AA10'). Can also
+            include a sheet prefix (e.g., 'SheetName!A1', "'My Sheet'!B2"). Required.
         note (str): The note text to add to the cell. Required.
-        sheet_name (Optional[str]): Name of the sheet. If not provided, uses the first sheet.
+        sheet_name (Optional[str]): Name of the sheet. If not provided and cell doesn't
+            include a sheet prefix, uses the first sheet.
         sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
-            Takes precedence over sheet_name if both are provided.
+            Takes precedence over sheet_name and cell prefix if provided.
 
     Returns:
         str: Confirmation message of the successful note update.
@@ -839,6 +841,13 @@ async def update_cell_note(
     logger.info(
         f"[update_cell_note] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Cell: {cell}, Sheet: {sheet_name}, SheetId: {sheet_id}"
     )
+
+    # Check if cell contains sheet prefix (e.g., 'SheetName!A1')
+    # Use it only if no explicit sheet_name or sheet_id is provided
+    cell_sheet_prefix, clean_cell = _strip_sheet_prefix(cell)
+    if cell_sheet_prefix and sheet_name is None and sheet_id is None:
+        sheet_name = cell_sheet_prefix
+        cell = clean_cell
 
     # Parse cell reference
     row_index, col_index = _parse_cell_reference(cell)
@@ -917,10 +926,12 @@ async def clear_cell_note(
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        cell (str): Cell reference in A1 notation (e.g., 'A1', 'B2', 'AA10'). Required.
-        sheet_name (Optional[str]): Name of the sheet. If not provided, uses the first sheet.
+        cell (str): Cell reference in A1 notation (e.g., 'A1', 'B2', 'AA10'). Can also
+            include a sheet prefix (e.g., 'SheetName!A1', "'My Sheet'!B2"). Required.
+        sheet_name (Optional[str]): Name of the sheet. If not provided and cell doesn't
+            include a sheet prefix, uses the first sheet.
         sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
-            Takes precedence over sheet_name if both are provided.
+            Takes precedence over sheet_name and cell prefix if provided.
 
     Returns:
         str: Confirmation message of the successful note removal.
@@ -928,6 +939,13 @@ async def clear_cell_note(
     logger.info(
         f"[clear_cell_note] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Cell: {cell}, Sheet: {sheet_name}, SheetId: {sheet_id}"
     )
+
+    # Check if cell contains sheet prefix (e.g., 'SheetName!A1')
+    # Use it only if no explicit sheet_name or sheet_id is provided
+    cell_sheet_prefix, clean_cell = _strip_sheet_prefix(cell)
+    if cell_sheet_prefix and sheet_name is None and sheet_id is None:
+        sheet_name = cell_sheet_prefix
+        cell = clean_cell
 
     # Parse cell reference
     row_index, col_index = _parse_cell_reference(cell)
