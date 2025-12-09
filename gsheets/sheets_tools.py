@@ -575,6 +575,8 @@ async def read_cell_notes(
     user_google_email: str,
     spreadsheet_id: str,
     range_name: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
 ) -> str:
     """
     Reads cell notes (yellow popup comments) from a range in a Google Sheet.
@@ -586,13 +588,25 @@ async def read_cell_notes(
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        range_name (str): The range to read notes from (e.g., "Sheet1!A1:D10", "A1:B5"). Required.
+        range_name (str): The range to read notes from (e.g., "A1:D10", "A1:B5"). Can include
+            sheet name prefix like "Sheet1!A1:D10" but this is optional if sheet_name or
+            sheet_id is provided. Required.
+        sheet_name (Optional[str]): Name of the sheet to read from. If provided, the range_name
+            only needs the cell range (e.g., "A1:D10" instead of "Sheet1!A1:D10").
+            For sheet names with spaces, this avoids needing to escape quotes.
+        sheet_id (Optional[int]): Numeric ID of the sheet to read from. Alternative to sheet_name.
+            Takes precedence over sheet_name if both are provided.
 
     Returns:
         str: Formatted list of cells with notes, including cell reference and note content.
     """
     logger.info(
-        f"[read_cell_notes] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+        f"[read_cell_notes] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}, Sheet: {sheet_name}, SheetId: {sheet_id}"
+    )
+
+    # Build the full range with sheet reference if sheet_name or sheet_id is provided
+    full_range = await _build_full_range(
+        service, spreadsheet_id, range_name, sheet_name, sheet_id
     )
 
     # Get spreadsheet data including notes
@@ -600,7 +614,7 @@ async def read_cell_notes(
         service.spreadsheets()
         .get(
             spreadsheetId=spreadsheet_id,
-            ranges=[range_name],
+            ranges=[full_range],
             fields="sheets.data.rowData.values.note,sheets.properties.title",
         )
         .execute
@@ -608,14 +622,14 @@ async def read_cell_notes(
 
     sheets = result.get("sheets", [])
     if not sheets:
-        return f"No data found in range '{range_name}'."
+        return f"No data found in range '{full_range}'."
 
     sheet = sheets[0]
-    sheet_name = sheet.get("properties", {}).get("title", "Unknown")
+    resolved_sheet_name = sheet.get("properties", {}).get("title", "Unknown")
     data = sheet.get("data", [])
 
     if not data:
-        return f"No data found in range '{range_name}'."
+        return f"No data found in range '{full_range}'."
 
     notes_found = []
     grid_data = data[0]
@@ -634,10 +648,10 @@ async def read_cell_notes(
                 notes_found.append({"cell": cell_ref, "note": note})
 
     if not notes_found:
-        return f"No cell notes found in range '{range_name}' of sheet '{sheet_name}'."
+        return f"No cell notes found in range '{full_range}' of sheet '{resolved_sheet_name}'."
 
     output = [
-        f"Found {len(notes_found)} cell notes in range '{range_name}' of sheet '{sheet_name}':\n"
+        f"Found {len(notes_found)} cell notes in range '{full_range}' of sheet '{resolved_sheet_name}':\n"
     ]
     for item in notes_found:
         output.append(f"  Cell {item['cell']}: {item['note']}")
@@ -658,6 +672,7 @@ async def update_cell_note(
     cell: str,
     note: str,
     sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
 ) -> str:
     """
     Adds or updates a note on a specific cell in a Google Sheet.
@@ -672,30 +687,42 @@ async def update_cell_note(
         cell (str): Cell reference in A1 notation (e.g., 'A1', 'B2', 'AA10'). Required.
         note (str): The note text to add to the cell. Required.
         sheet_name (Optional[str]): Name of the sheet. If not provided, uses the first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+            Takes precedence over sheet_name if both are provided.
 
     Returns:
         str: Confirmation message of the successful note update.
     """
     logger.info(
-        f"[update_cell_note] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Cell: {cell}, Sheet: {sheet_name}"
+        f"[update_cell_note] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Cell: {cell}, Sheet: {sheet_name}, SheetId: {sheet_id}"
     )
 
     # Parse cell reference
     row_index, col_index = _parse_cell_reference(cell)
 
-    # Get sheet ID
-    if sheet_name:
-        sheet_id = await _get_sheet_id_by_name(service, spreadsheet_id, sheet_name)
+    # Get sheet ID and name
+    resolved_sheet_id: int
+    resolved_sheet_name: str
+    if sheet_id is not None:
+        resolved_sheet_id = sheet_id
+        resolved_sheet_name = await _get_sheet_name_by_id(
+            service, spreadsheet_id, sheet_id
+        )
+    elif sheet_name:
+        resolved_sheet_id = await _get_sheet_id_by_name(
+            service, spreadsheet_id, sheet_name
+        )
+        resolved_sheet_name = sheet_name
     else:
-        # Get first sheet ID
+        # Get first sheet ID and name
         spreadsheet = await asyncio.to_thread(
             service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
         )
         sheets = spreadsheet.get("sheets", [])
         if not sheets:
             raise ValueError("Spreadsheet has no sheets.")
-        sheet_id = sheets[0].get("properties", {}).get("sheetId")
-        sheet_name = sheets[0].get("properties", {}).get("title", "Sheet1")
+        resolved_sheet_id = sheets[0].get("properties", {}).get("sheetId")
+        resolved_sheet_name = sheets[0].get("properties", {}).get("title", "Sheet1")
 
     # Build the update request
     request_body = {
@@ -705,7 +732,7 @@ async def update_cell_note(
                     "rows": [{"values": [{"note": note}]}],
                     "fields": "note",
                     "start": {
-                        "sheetId": sheet_id,
+                        "sheetId": resolved_sheet_id,
                         "rowIndex": row_index,
                         "columnIndex": col_index,
                     },
@@ -721,7 +748,7 @@ async def update_cell_note(
     )
 
     text_output = (
-        f"Successfully added/updated note on cell {cell} in sheet '{sheet_name}' "
+        f"Successfully added/updated note on cell {cell} in sheet '{resolved_sheet_name}' "
         f"of spreadsheet {spreadsheet_id} for {user_google_email}.\n"
         f"Note content: {note}"
     )
@@ -739,6 +766,7 @@ async def clear_cell_note(
     spreadsheet_id: str,
     cell: str,
     sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
 ) -> str:
     """
     Removes a note from a specific cell in a Google Sheet.
@@ -748,30 +776,42 @@ async def clear_cell_note(
         spreadsheet_id (str): The ID of the spreadsheet. Required.
         cell (str): Cell reference in A1 notation (e.g., 'A1', 'B2', 'AA10'). Required.
         sheet_name (Optional[str]): Name of the sheet. If not provided, uses the first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+            Takes precedence over sheet_name if both are provided.
 
     Returns:
         str: Confirmation message of the successful note removal.
     """
     logger.info(
-        f"[clear_cell_note] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Cell: {cell}, Sheet: {sheet_name}"
+        f"[clear_cell_note] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Cell: {cell}, Sheet: {sheet_name}, SheetId: {sheet_id}"
     )
 
     # Parse cell reference
     row_index, col_index = _parse_cell_reference(cell)
 
-    # Get sheet ID
-    if sheet_name:
-        sheet_id = await _get_sheet_id_by_name(service, spreadsheet_id, sheet_name)
+    # Get sheet ID and name
+    resolved_sheet_id: int
+    resolved_sheet_name: str
+    if sheet_id is not None:
+        resolved_sheet_id = sheet_id
+        resolved_sheet_name = await _get_sheet_name_by_id(
+            service, spreadsheet_id, sheet_id
+        )
+    elif sheet_name:
+        resolved_sheet_id = await _get_sheet_id_by_name(
+            service, spreadsheet_id, sheet_name
+        )
+        resolved_sheet_name = sheet_name
     else:
-        # Get first sheet ID
+        # Get first sheet ID and name
         spreadsheet = await asyncio.to_thread(
             service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
         )
         sheets = spreadsheet.get("sheets", [])
         if not sheets:
             raise ValueError("Spreadsheet has no sheets.")
-        sheet_id = sheets[0].get("properties", {}).get("sheetId")
-        sheet_name = sheets[0].get("properties", {}).get("title", "Sheet1")
+        resolved_sheet_id = sheets[0].get("properties", {}).get("sheetId")
+        resolved_sheet_name = sheets[0].get("properties", {}).get("title", "Sheet1")
 
     # Build the update request - setting note to empty string clears it
     request_body = {
@@ -781,7 +821,7 @@ async def clear_cell_note(
                     "rows": [{"values": [{"note": ""}]}],
                     "fields": "note",
                     "start": {
-                        "sheetId": sheet_id,
+                        "sheetId": resolved_sheet_id,
                         "rowIndex": row_index,
                         "columnIndex": col_index,
                     },
@@ -797,7 +837,7 @@ async def clear_cell_note(
     )
 
     text_output = (
-        f"Successfully cleared note from cell {cell} in sheet '{sheet_name}' "
+        f"Successfully cleared note from cell {cell} in sheet '{resolved_sheet_name}' "
         f"of spreadsheet {spreadsheet_id} for {user_google_email}."
     )
 
