@@ -57,7 +57,7 @@ async def list_spreadsheets(
         return f"No spreadsheets found for {user_google_email}."
 
     spreadsheets_list = [
-        f"- \"{file['name']}\" (ID: {file['id']}) | Modified: {file.get('modifiedTime', 'Unknown')} | Link: {file.get('webViewLink', 'No link')}"
+        f'- "{file["name"]}" (ID: {file["id"]}) | Modified: {file.get("modifiedTime", "Unknown")} | Link: {file.get("webViewLink", "No link")}'
         for file in files
     ]
 
@@ -66,7 +66,9 @@ async def list_spreadsheets(
         + "\n".join(spreadsheets_list)
     )
 
-    logger.info(f"Successfully listed {len(files)} spreadsheets for {user_google_email}.")
+    logger.info(
+        f"Successfully listed {len(files)} spreadsheets for {user_google_email}."
+    )
     return text_output
 
 
@@ -88,7 +90,9 @@ async def get_spreadsheet_info(
     Returns:
         str: Formatted spreadsheet information including title and sheets list.
     """
-    logger.info(f"[get_spreadsheet_info] Invoked. Email: '{user_google_email}', Spreadsheet ID: {spreadsheet_id}")
+    logger.info(
+        f"[get_spreadsheet_info] Invoked. Email: '{user_google_email}', Spreadsheet ID: {spreadsheet_id}"
+    )
 
     spreadsheet = await asyncio.to_thread(
         service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
@@ -106,17 +110,18 @@ async def get_spreadsheet_info(
         rows = grid_props.get("rowCount", "Unknown")
         cols = grid_props.get("columnCount", "Unknown")
 
-        sheets_info.append(
-            f"  - \"{sheet_name}\" (ID: {sheet_id}) | Size: {rows}x{cols}"
-        )
+        sheets_info.append(f'  - "{sheet_name}" (ID: {sheet_id}) | Size: {rows}x{cols}')
 
     text_output = (
-        f"Spreadsheet: \"{title}\" (ID: {spreadsheet_id})\n"
-        f"Sheets ({len(sheets)}):\n"
-        + "\n".join(sheets_info) if sheets_info else "  No sheets found"
+        f'Spreadsheet: "{title}" (ID: {spreadsheet_id})\n'
+        f"Sheets ({len(sheets)}):\n" + "\n".join(sheets_info)
+        if sheets_info
+        else "  No sheets found"
     )
 
-    logger.info(f"Successfully retrieved info for spreadsheet {spreadsheet_id} for {user_google_email}.")
+    logger.info(
+        f"Successfully retrieved info for spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
     return text_output
 
 
@@ -140,7 +145,9 @@ async def read_sheet_values(
     Returns:
         str: The formatted values from the specified range.
     """
-    logger.info(f"[read_sheet_values] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}")
+    logger.info(
+        f"[read_sheet_values] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+    )
 
     result = await asyncio.to_thread(
         service.spreadsheets()
@@ -197,27 +204,37 @@ async def modify_sheet_values(
         str: Confirmation message of the successful modification operation.
     """
     operation = "clear" if clear_values else "write"
-    logger.info(f"[modify_sheet_values] Invoked. Operation: {operation}, Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}")
+    logger.info(
+        f"[modify_sheet_values] Invoked. Operation: {operation}, Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+    )
 
     # Parse values if it's a JSON string (MCP passes parameters as JSON strings)
     if values is not None and isinstance(values, str):
         try:
             parsed_values = json.loads(values)
             if not isinstance(parsed_values, list):
-                raise ValueError(f"Values must be a list, got {type(parsed_values).__name__}")
+                raise ValueError(
+                    f"Values must be a list, got {type(parsed_values).__name__}"
+                )
             # Validate it's a list of lists
             for i, row in enumerate(parsed_values):
                 if not isinstance(row, list):
-                    raise ValueError(f"Row {i} must be a list, got {type(row).__name__}")
+                    raise ValueError(
+                        f"Row {i} must be a list, got {type(row).__name__}"
+                    )
             values = parsed_values
-            logger.info(f"[modify_sheet_values] Parsed JSON string to Python list with {len(values)} rows")
+            logger.info(
+                f"[modify_sheet_values] Parsed JSON string to Python list with {len(values)} rows"
+            )
         except json.JSONDecodeError as e:
             raise Exception(f"Invalid JSON format for values: {e}")
         except ValueError as e:
             raise Exception(f"Invalid values structure: {e}")
 
     if not clear_values and not values:
-        raise Exception("Either 'values' must be provided or 'clear_values' must be True.")
+        raise Exception(
+            "Either 'values' must be provided or 'clear_values' must be True."
+        )
 
     if clear_values:
         result = await asyncio.to_thread(
@@ -229,7 +246,9 @@ async def modify_sheet_values(
 
         cleared_range = result.get("clearedRange", range_name)
         text_output = f"Successfully cleared range '{cleared_range}' in spreadsheet {spreadsheet_id} for {user_google_email}."
-        logger.info(f"Successfully cleared range '{cleared_range}' for {user_google_email}.")
+        logger.info(
+            f"Successfully cleared range '{cleared_range}' for {user_google_email}."
+        )
     else:
         body = {"values": values}
 
@@ -253,7 +272,9 @@ async def modify_sheet_values(
             f"Successfully updated range '{range_name}' in spreadsheet {spreadsheet_id} for {user_google_email}. "
             f"Updated: {updated_cells} cells, {updated_rows} rows, {updated_columns} columns."
         )
-        logger.info(f"Successfully updated {updated_cells} cells for {user_google_email}.")
+        logger.info(
+            f"Successfully updated {updated_cells} cells for {user_google_email}."
+        )
 
     return text_output
 
@@ -278,13 +299,11 @@ async def create_spreadsheet(
     Returns:
         str: Information about the newly created spreadsheet including ID and URL.
     """
-    logger.info(f"[create_spreadsheet] Invoked. Email: '{user_google_email}', Title: {title}")
+    logger.info(
+        f"[create_spreadsheet] Invoked. Email: '{user_google_email}', Title: {title}"
+    )
 
-    spreadsheet_body = {
-        "properties": {
-            "title": title
-        }
-    }
+    spreadsheet_body = {"properties": {"title": title}}
 
     if sheet_names:
         spreadsheet_body["sheets"] = [
@@ -303,7 +322,9 @@ async def create_spreadsheet(
         f"ID: {spreadsheet_id} | URL: {spreadsheet_url}"
     )
 
-    logger.info(f"Successfully created spreadsheet for {user_google_email}. ID: {spreadsheet_id}")
+    logger.info(
+        f"Successfully created spreadsheet for {user_google_email}. ID: {spreadsheet_id}"
+    )
     return text_output
 
 
@@ -327,19 +348,11 @@ async def create_sheet(
     Returns:
         str: Confirmation message of the successful sheet creation.
     """
-    logger.info(f"[create_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet: {sheet_name}")
+    logger.info(
+        f"[create_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet: {sheet_name}"
+    )
 
-    request_body = {
-        "requests": [
-            {
-                "addSheet": {
-                    "properties": {
-                        "title": sheet_name
-                    }
-                }
-            }
-        ]
-    }
+    request_body = {"requests": [{"addSheet": {"properties": {"title": sheet_name}}}]}
 
     response = await asyncio.to_thread(
         service.spreadsheets()
@@ -349,11 +362,11 @@ async def create_sheet(
 
     sheet_id = response["replies"][0]["addSheet"]["properties"]["sheetId"]
 
-    text_output = (
-        f"Successfully created sheet '{sheet_name}' (ID: {sheet_id}) in spreadsheet {spreadsheet_id} for {user_google_email}."
-    )
+    text_output = f"Successfully created sheet '{sheet_name}' (ID: {sheet_id}) in spreadsheet {spreadsheet_id} for {user_google_email}."
 
-    logger.info(f"Successfully created sheet for {user_google_email}. Sheet ID: {sheet_id}")
+    logger.info(
+        f"Successfully created sheet for {user_google_email}. Sheet ID: {sheet_id}"
+    )
     return text_output
 
 
@@ -361,9 +374,322 @@ async def create_sheet(
 _comment_tools = create_comment_tools("spreadsheet", "spreadsheet_id")
 
 # Extract and register the functions
-read_sheet_comments = _comment_tools['read_comments']
-create_sheet_comment = _comment_tools['create_comment']
-reply_to_sheet_comment = _comment_tools['reply_to_comment']
-resolve_sheet_comment = _comment_tools['resolve_comment']
+read_sheet_comments = _comment_tools["read_comments"]
+create_sheet_comment = _comment_tools["create_comment"]
+reply_to_sheet_comment = _comment_tools["reply_to_comment"]
+resolve_sheet_comment = _comment_tools["resolve_comment"]
 
 
+def _parse_cell_reference(cell_ref: str) -> tuple[int, int]:
+    """
+    Parse a cell reference like 'A1' into (row_index, column_index).
+
+    Args:
+        cell_ref: Cell reference in A1 notation (e.g., 'A1', 'B2', 'AA10')
+
+    Returns:
+        Tuple of (row_index, column_index) - both 0-indexed
+    """
+    import re
+
+    match = re.match(r"^([A-Za-z]+)(\d+)$", cell_ref.strip())
+    if not match:
+        raise ValueError(
+            f"Invalid cell reference: '{cell_ref}'. Expected format like 'A1', 'B2', 'AA10'."
+        )
+
+    col_letters = match.group(1).upper()
+    row_num = int(match.group(2))
+
+    # Convert column letters to index (A=0, B=1, ..., Z=25, AA=26, ...)
+    col_index = 0
+    for char in col_letters:
+        col_index = col_index * 26 + (ord(char) - ord("A") + 1)
+    col_index -= 1  # Make 0-indexed
+
+    row_index = row_num - 1  # Make 0-indexed
+
+    return row_index, col_index
+
+
+def _column_index_to_letter(col_index: int) -> str:
+    """
+    Convert a 0-indexed column number to column letters (0='A', 25='Z', 26='AA').
+    """
+    result = ""
+    col_index += 1  # Make 1-indexed for calculation
+    while col_index > 0:
+        col_index -= 1
+        result = chr(ord("A") + col_index % 26) + result
+        col_index //= 26
+    return result
+
+
+async def _get_sheet_id_by_name(service, spreadsheet_id: str, sheet_name: str) -> int:
+    """
+    Get the sheet ID from the sheet name.
+
+    Args:
+        service: Authenticated Sheets service
+        spreadsheet_id: The spreadsheet ID
+        sheet_name: Name of the sheet
+
+    Returns:
+        The sheet ID (integer)
+
+    Raises:
+        ValueError if sheet not found
+    """
+    spreadsheet = await asyncio.to_thread(
+        service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+    )
+
+    for sheet in spreadsheet.get("sheets", []):
+        props = sheet.get("properties", {})
+        if props.get("title") == sheet_name:
+            return props.get("sheetId")
+
+    available_sheets = [
+        s.get("properties", {}).get("title") for s in spreadsheet.get("sheets", [])
+    ]
+    raise ValueError(
+        f"Sheet '{sheet_name}' not found. Available sheets: {available_sheets}"
+    )
+
+
+@server.tool()
+@handle_http_errors("read_cell_notes", is_read_only=True, service_type="sheets")
+@require_google_service("sheets", "sheets_read")
+async def read_cell_notes(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    range_name: str,
+) -> str:
+    """
+    Reads cell notes (yellow popup comments) from a range in a Google Sheet.
+
+    Cell notes are lightweight annotations attached to individual cells that appear
+    as yellow popups when you hover over a cell. These are different from threaded
+    comments (use read_spreadsheet_comments for those).
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        range_name (str): The range to read notes from (e.g., "Sheet1!A1:D10", "A1:B5"). Required.
+
+    Returns:
+        str: Formatted list of cells with notes, including cell reference and note content.
+    """
+    logger.info(
+        f"[read_cell_notes] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+    )
+
+    # Get spreadsheet data including notes
+    result = await asyncio.to_thread(
+        service.spreadsheets()
+        .get(
+            spreadsheetId=spreadsheet_id,
+            ranges=[range_name],
+            fields="sheets.data.rowData.values.note,sheets.properties.title",
+        )
+        .execute
+    )
+
+    sheets = result.get("sheets", [])
+    if not sheets:
+        return f"No data found in range '{range_name}'."
+
+    sheet = sheets[0]
+    sheet_name = sheet.get("properties", {}).get("title", "Unknown")
+    data = sheet.get("data", [])
+
+    if not data:
+        return f"No data found in range '{range_name}'."
+
+    notes_found = []
+    grid_data = data[0]
+    start_row = grid_data.get("startRow", 0)
+    start_col = grid_data.get("startColumn", 0)
+
+    row_data_list = grid_data.get("rowData", [])
+    for row_offset, row_data in enumerate(row_data_list):
+        values = row_data.get("values", [])
+        for col_offset, cell in enumerate(values):
+            note = cell.get("note")
+            if note:
+                row_num = start_row + row_offset + 1
+                col_letter = _column_index_to_letter(start_col + col_offset)
+                cell_ref = f"{col_letter}{row_num}"
+                notes_found.append({"cell": cell_ref, "note": note})
+
+    if not notes_found:
+        return f"No cell notes found in range '{range_name}' of sheet '{sheet_name}'."
+
+    output = [
+        f"Found {len(notes_found)} cell notes in range '{range_name}' of sheet '{sheet_name}':\n"
+    ]
+    for item in notes_found:
+        output.append(f"  Cell {item['cell']}: {item['note']}")
+
+    logger.info(
+        f"Successfully read {len(notes_found)} cell notes for {user_google_email}."
+    )
+    return "\n".join(output)
+
+
+@server.tool()
+@handle_http_errors("update_cell_note", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def update_cell_note(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    cell: str,
+    note: str,
+    sheet_name: Optional[str] = None,
+) -> str:
+    """
+    Adds or updates a note on a specific cell in a Google Sheet.
+
+    Cell notes are lightweight yellow popup annotations that appear when hovering
+    over a cell. They are simpler than threaded comments - just plain text without
+    threading, author tracking, or resolution status.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        cell (str): Cell reference in A1 notation (e.g., 'A1', 'B2', 'AA10'). Required.
+        note (str): The note text to add to the cell. Required.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses the first sheet.
+
+    Returns:
+        str: Confirmation message of the successful note update.
+    """
+    logger.info(
+        f"[update_cell_note] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Cell: {cell}, Sheet: {sheet_name}"
+    )
+
+    # Parse cell reference
+    row_index, col_index = _parse_cell_reference(cell)
+
+    # Get sheet ID
+    if sheet_name:
+        sheet_id = await _get_sheet_id_by_name(service, spreadsheet_id, sheet_name)
+    else:
+        # Get first sheet ID
+        spreadsheet = await asyncio.to_thread(
+            service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+        )
+        sheets = spreadsheet.get("sheets", [])
+        if not sheets:
+            raise ValueError("Spreadsheet has no sheets.")
+        sheet_id = sheets[0].get("properties", {}).get("sheetId")
+        sheet_name = sheets[0].get("properties", {}).get("title", "Sheet1")
+
+    # Build the update request
+    request_body = {
+        "requests": [
+            {
+                "updateCells": {
+                    "rows": [{"values": [{"note": note}]}],
+                    "fields": "note",
+                    "start": {
+                        "sheetId": sheet_id,
+                        "rowIndex": row_index,
+                        "columnIndex": col_index,
+                    },
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully added/updated note on cell {cell} in sheet '{sheet_name}' "
+        f"of spreadsheet {spreadsheet_id} for {user_google_email}.\n"
+        f"Note content: {note}"
+    )
+
+    logger.info(f"Successfully updated cell note for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("clear_cell_note", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def clear_cell_note(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    cell: str,
+    sheet_name: Optional[str] = None,
+) -> str:
+    """
+    Removes a note from a specific cell in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        cell (str): Cell reference in A1 notation (e.g., 'A1', 'B2', 'AA10'). Required.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses the first sheet.
+
+    Returns:
+        str: Confirmation message of the successful note removal.
+    """
+    logger.info(
+        f"[clear_cell_note] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Cell: {cell}, Sheet: {sheet_name}"
+    )
+
+    # Parse cell reference
+    row_index, col_index = _parse_cell_reference(cell)
+
+    # Get sheet ID
+    if sheet_name:
+        sheet_id = await _get_sheet_id_by_name(service, spreadsheet_id, sheet_name)
+    else:
+        # Get first sheet ID
+        spreadsheet = await asyncio.to_thread(
+            service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+        )
+        sheets = spreadsheet.get("sheets", [])
+        if not sheets:
+            raise ValueError("Spreadsheet has no sheets.")
+        sheet_id = sheets[0].get("properties", {}).get("sheetId")
+        sheet_name = sheets[0].get("properties", {}).get("title", "Sheet1")
+
+    # Build the update request - setting note to empty string clears it
+    request_body = {
+        "requests": [
+            {
+                "updateCells": {
+                    "rows": [{"values": [{"note": ""}]}],
+                    "fields": "note",
+                    "start": {
+                        "sheetId": sheet_id,
+                        "rowIndex": row_index,
+                        "columnIndex": col_index,
+                    },
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully cleared note from cell {cell} in sheet '{sheet_name}' "
+        f"of spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully cleared cell note for {user_google_email}.")
+    return text_output
