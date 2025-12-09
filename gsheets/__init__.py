@@ -8,7 +8,6 @@ from .sheets_tools import (
     list_spreadsheets,
     get_spreadsheet_info,
     read_sheet_values,
-    read_sheet_formulas,
     modify_sheet_values,
     create_spreadsheet,
     create_sheet,
@@ -19,15 +18,12 @@ from .sheets_tools import (
     delete_rows,
     delete_columns,
     sort_range,
-    copy_sheet,
-    append_rows,
 )
 
 __all__ = [
     "list_spreadsheets",
     "get_spreadsheet_info",
     "read_sheet_values",
-    "read_sheet_formulas",
     "modify_sheet_values",
     "create_spreadsheet",
     "create_sheet",
@@ -38,6 +34,4 @@ __all__ = [
     "delete_rows",
     "delete_columns",
     "sort_range",
-    "copy_sheet",
-    "append_rows",
 ]
