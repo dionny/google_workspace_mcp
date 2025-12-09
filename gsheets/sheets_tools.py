@@ -805,21 +805,76 @@ async def clear_cell_note(
     return text_output
 
 
+def _strip_sheet_prefix(range_str: str) -> tuple[Optional[str], str]:
+    """
+    Strip the sheet name prefix from a range string if present.
+
+    Handles formats like:
+    - 'SheetName!A1:D10' -> ('SheetName', 'A1:D10')
+    - "'Sheet Name'!A1:D10" -> ('Sheet Name', 'A1:D10')
+    - "'Sheet''s Name'!A1:D10" -> ("Sheet's Name", 'A1:D10')
+    - 'A1:D10' -> (None, 'A1:D10')
+
+    Args:
+        range_str: Range in A1 notation, optionally with sheet prefix
+
+    Returns:
+        Tuple of (sheet_name or None, clean_range_without_prefix)
+    """
+    if "!" not in range_str:
+        return None, range_str
+
+    # Split on the last '!' to handle sheet names that might contain '!'
+    # However, we need to be careful with quoted sheet names
+    if range_str.startswith("'"):
+        # Find the closing quote (handling escaped quotes '')
+        i = 1
+        while i < len(range_str):
+            if range_str[i] == "'":
+                if i + 1 < len(range_str) and range_str[i + 1] == "'":
+                    # Escaped quote, skip both
+                    i += 2
+                else:
+                    # End of quoted name
+                    break
+            else:
+                i += 1
+
+        # After the closing quote, expect '!'
+        if i + 1 < len(range_str) and range_str[i + 1] == "!":
+            quoted_name = range_str[1:i]  # Strip outer quotes
+            # Unescape doubled quotes
+            sheet_name = quoted_name.replace("''", "'")
+            clean_range = range_str[i + 2 :]  # After the '!'
+            return sheet_name, clean_range
+
+    # Simple case: no quotes, split on first '!'
+    parts = range_str.split("!", 1)
+    if len(parts) == 2:
+        return parts[0], parts[1]
+
+    return None, range_str
+
+
 def _parse_range_to_grid(range_str: str) -> Dict[str, int]:
     """
     Parse a range string like 'A1:D10' into GridRange coordinates.
 
     Args:
-        range_str: Range in A1 notation (e.g., 'A1:D10', 'B2:C5')
+        range_str: Range in A1 notation (e.g., 'A1:D10', 'B2:C5', 'Sheet1!A1:D10')
+            If a sheet name prefix is included, it will be stripped before parsing.
 
     Returns:
         Dict with startRowIndex, endRowIndex, startColumnIndex, endColumnIndex (all 0-indexed)
     """
+    # Strip sheet name prefix if present
+    _, clean_range = _strip_sheet_prefix(range_str)
+
     # Handle single cell vs range
-    if ":" in range_str:
-        start_cell, end_cell = range_str.split(":")
+    if ":" in clean_range:
+        start_cell, end_cell = clean_range.split(":")
     else:
-        start_cell = end_cell = range_str
+        start_cell = end_cell = clean_range
 
     start_row, start_col = _parse_cell_reference(start_cell)
     end_row, end_col = _parse_cell_reference(end_cell)
@@ -977,13 +1032,19 @@ async def format_cells(
         f"[format_cells] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
     )
 
+    # Extract sheet name from range_name if present and no explicit sheet_name provided
+    extracted_sheet_name, clean_range = _strip_sheet_prefix(range_name)
+    effective_sheet_name = (
+        sheet_name if sheet_name is not None else extracted_sheet_name
+    )
+
     # Resolve sheet ID
     resolved_sheet_id = await _resolve_sheet_id(
-        service, spreadsheet_id, sheet_name, sheet_id
+        service, spreadsheet_id, effective_sheet_name, sheet_id
     )
 
     # Parse range
-    grid_range = _parse_range_to_grid(range_name)
+    grid_range = _parse_range_to_grid(clean_range)
     grid_range["sheetId"] = resolved_sheet_id
 
     # Build cell format
@@ -1177,13 +1238,19 @@ async def merge_cells(
             f"Invalid merge_type: '{merge_type}'. Must be one of: {valid_merge_types}"
         )
 
+    # Extract sheet name from range_name if present and no explicit sheet_name provided
+    extracted_sheet_name, clean_range = _strip_sheet_prefix(range_name)
+    effective_sheet_name = (
+        sheet_name if sheet_name is not None else extracted_sheet_name
+    )
+
     # Resolve sheet ID
     resolved_sheet_id = await _resolve_sheet_id(
-        service, spreadsheet_id, sheet_name, sheet_id
+        service, spreadsheet_id, effective_sheet_name, sheet_id
     )
 
     # Parse range
-    grid_range = _parse_range_to_grid(range_name)
+    grid_range = _parse_range_to_grid(clean_range)
     grid_range["sheetId"] = resolved_sheet_id
 
     # Build request
@@ -1236,13 +1303,19 @@ async def unmerge_cells(
         f"[unmerge_cells] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
     )
 
+    # Extract sheet name from range_name if present and no explicit sheet_name provided
+    extracted_sheet_name, clean_range = _strip_sheet_prefix(range_name)
+    effective_sheet_name = (
+        sheet_name if sheet_name is not None else extracted_sheet_name
+    )
+
     # Resolve sheet ID
     resolved_sheet_id = await _resolve_sheet_id(
-        service, spreadsheet_id, sheet_name, sheet_id
+        service, spreadsheet_id, effective_sheet_name, sheet_id
     )
 
     # Parse range
-    grid_range = _parse_range_to_grid(range_name)
+    grid_range = _parse_range_to_grid(clean_range)
     grid_range["sheetId"] = resolved_sheet_id
 
     # Build request
@@ -1599,13 +1672,19 @@ async def add_conditional_formatting(
             f"Invalid rule_type: '{rule_type}'. Must be BOOLEAN or GRADIENT."
         )
 
+    # Extract sheet name from range_name if present and no explicit sheet_name provided
+    extracted_sheet_name, clean_range = _strip_sheet_prefix(range_name)
+    effective_sheet_name = (
+        sheet_name if sheet_name is not None else extracted_sheet_name
+    )
+
     # Resolve sheet ID
     resolved_sheet_id = await _resolve_sheet_id(
-        service, spreadsheet_id, sheet_name, sheet_id
+        service, spreadsheet_id, effective_sheet_name, sheet_id
     )
 
     # Parse range
-    grid_range = _parse_range_to_grid(range_name)
+    grid_range = _parse_range_to_grid(clean_range)
     grid_range["sheetId"] = resolved_sheet_id
 
     # Build the rule based on type
@@ -1902,13 +1981,19 @@ async def set_borders(
     ):
         return "No border positions specified. Please set at least one of: top, bottom, left, right, inner_horizontal, inner_vertical."
 
+    # Extract sheet name from range_name if present and no explicit sheet_name provided
+    extracted_sheet_name, clean_range = _strip_sheet_prefix(range_name)
+    effective_sheet_name = (
+        sheet_name if sheet_name is not None else extracted_sheet_name
+    )
+
     # Resolve sheet ID
     resolved_sheet_id = await _resolve_sheet_id(
-        service, spreadsheet_id, sheet_name, sheet_id
+        service, spreadsheet_id, effective_sheet_name, sheet_id
     )
 
     # Parse range
-    grid_range = _parse_range_to_grid(range_name)
+    grid_range = _parse_range_to_grid(clean_range)
     grid_range["sheetId"] = resolved_sheet_id
 
     # Build border style object
@@ -2013,13 +2098,19 @@ async def sort_range(
         f"[sort_range] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}, Column: {sort_column}"
     )
 
+    # Extract sheet name from range_name if present and no explicit sheet_name provided
+    extracted_sheet_name, clean_range = _strip_sheet_prefix(range_name)
+    effective_sheet_name = (
+        sheet_name if sheet_name is not None else extracted_sheet_name
+    )
+
     # Resolve sheet ID
     resolved_sheet_id = await _resolve_sheet_id(
-        service, spreadsheet_id, sheet_name, sheet_id
+        service, spreadsheet_id, effective_sheet_name, sheet_id
     )
 
     # Parse range to get grid coordinates
-    grid_range = _parse_range_to_grid(range_name)
+    grid_range = _parse_range_to_grid(clean_range)
     grid_range["sheetId"] = resolved_sheet_id
 
     # Parse the sort column letter to get its index
@@ -2122,11 +2213,16 @@ async def find_and_replace(
         # Search all sheets
         find_replace_request["allSheets"] = True
     elif range_name:
+        # Extract sheet name from range_name if present and no explicit sheet_name provided
+        extracted_sheet_name, clean_range = _strip_sheet_prefix(range_name)
+        effective_sheet_name = (
+            sheet_name if sheet_name is not None else extracted_sheet_name
+        )
         # Search within a specific range
         resolved_sheet_id = await _resolve_sheet_id(
-            service, spreadsheet_id, sheet_name, sheet_id
+            service, spreadsheet_id, effective_sheet_name, sheet_id
         )
-        grid_range = _parse_range_to_grid(range_name)
+        grid_range = _parse_range_to_grid(clean_range)
         grid_range["sheetId"] = resolved_sheet_id
         find_replace_request["range"] = grid_range
     else:
@@ -2536,9 +2632,7 @@ async def auto_resize_dimension(
     # Validate dimension
     dimension_upper = dimension.upper()
     if dimension_upper not in ["ROWS", "COLUMNS"]:
-        raise ValueError(
-            f"Invalid dimension: '{dimension}'. Must be ROWS or COLUMNS."
-        )
+        raise ValueError(f"Invalid dimension: '{dimension}'. Must be ROWS or COLUMNS.")
 
     # Resolve sheet ID
     resolved_sheet_id = await _resolve_sheet_id(
@@ -2569,9 +2663,11 @@ async def auto_resize_dimension(
             )
             for sheet in spreadsheet.get("sheets", []):
                 if sheet.get("properties", {}).get("sheetId") == resolved_sheet_id:
-                    resolved_end = sheet.get("properties", {}).get(
-                        "gridProperties", {}
-                    ).get("columnCount", 26)
+                    resolved_end = (
+                        sheet.get("properties", {})
+                        .get("gridProperties", {})
+                        .get("columnCount", 26)
+                    )
                     break
             else:
                 resolved_end = 26  # Default if not found
@@ -2579,7 +2675,9 @@ async def auto_resize_dimension(
         # For rows, use 1-indexed start_index and end_index
         if start_index is not None:
             if start_index < 1:
-                raise ValueError("start_index for rows must be 1 or greater (1-indexed)")
+                raise ValueError(
+                    "start_index for rows must be 1 or greater (1-indexed)"
+                )
             resolved_start = start_index - 1  # Convert to 0-indexed
         else:
             resolved_start = 0  # Default to first row
@@ -2587,7 +2685,9 @@ async def auto_resize_dimension(
         if end_index is not None:
             if end_index < start_index if start_index else 1:
                 raise ValueError("end_index must be >= start_index")
-            resolved_end = end_index  # Already 1-indexed, use as exclusive end in 0-indexed terms
+            resolved_end = (
+                end_index  # Already 1-indexed, use as exclusive end in 0-indexed terms
+            )
         else:
             # Auto-resize all rows - need to get sheet dimensions
             spreadsheet = await asyncio.to_thread(
@@ -2595,9 +2695,11 @@ async def auto_resize_dimension(
             )
             for sheet in spreadsheet.get("sheets", []):
                 if sheet.get("properties", {}).get("sheetId") == resolved_sheet_id:
-                    resolved_end = sheet.get("properties", {}).get(
-                        "gridProperties", {}
-                    ).get("rowCount", 1000)
+                    resolved_end = (
+                        sheet.get("properties", {})
+                        .get("gridProperties", {})
+                        .get("rowCount", 1000)
+                    )
                     break
             else:
                 resolved_end = 1000  # Default if not found
@@ -2677,13 +2779,19 @@ async def clear_conditional_formatting(
         f"[clear_conditional_formatting] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
     )
 
+    # Extract sheet name from range_name if present and no explicit sheet_name provided
+    extracted_sheet_name, clean_range = _strip_sheet_prefix(range_name)
+    effective_sheet_name = (
+        sheet_name if sheet_name is not None else extracted_sheet_name
+    )
+
     # Resolve sheet ID
     resolved_sheet_id = await _resolve_sheet_id(
-        service, spreadsheet_id, sheet_name, sheet_id
+        service, spreadsheet_id, effective_sheet_name, sheet_id
     )
 
     # Parse range
-    grid_range = _parse_range_to_grid(range_name)
+    grid_range = _parse_range_to_grid(clean_range)
     grid_range["sheetId"] = resolved_sheet_id
 
     # Get existing conditional format rules to find overlapping ones
