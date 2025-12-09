@@ -1837,6 +1837,151 @@ async def rename_sheet(
 
 
 @server.tool()
+@handle_http_errors("set_borders", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def set_borders(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    range_name: str,
+    top: Optional[bool] = None,
+    bottom: Optional[bool] = None,
+    left: Optional[bool] = None,
+    right: Optional[bool] = None,
+    inner_horizontal: Optional[bool] = None,
+    inner_vertical: Optional[bool] = None,
+    border_style: str = "SOLID",
+    border_color: Optional[str] = None,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Applies borders to a range of cells in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        range_name (str): The range to apply borders to (e.g., "A1:D10", "B2:C5"). Required.
+        top (Optional[bool]): Apply border to the top edge of the range.
+        bottom (Optional[bool]): Apply border to the bottom edge of the range.
+        left (Optional[bool]): Apply border to the left edge of the range.
+        right (Optional[bool]): Apply border to the right edge of the range.
+        inner_horizontal (Optional[bool]): Apply horizontal borders between cells inside the range.
+        inner_vertical (Optional[bool]): Apply vertical borders between cells inside the range.
+        border_style (str): Style of the border - DOTTED, DASHED, SOLID, SOLID_MEDIUM, SOLID_THICK, DOUBLE, or NONE. Defaults to SOLID. Use NONE to remove a border.
+        border_color (Optional[str]): Border color - hex (#RRGGBB) or color name (red, blue, etc.). Defaults to black.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful border operation.
+    """
+    logger.info(
+        f"[set_borders] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Range: {range_name}"
+    )
+
+    # Validate border style
+    valid_styles = [
+        "DOTTED",
+        "DASHED",
+        "SOLID",
+        "SOLID_MEDIUM",
+        "SOLID_THICK",
+        "DOUBLE",
+        "NONE",
+    ]
+    border_style_upper = border_style.upper()
+    if border_style_upper not in valid_styles:
+        raise ValueError(
+            f"Invalid border_style: '{border_style}'. Must be one of: {valid_styles}"
+        )
+
+    # Check if at least one border position is specified
+    if all(
+        v is None for v in [top, bottom, left, right, inner_horizontal, inner_vertical]
+    ):
+        return "No border positions specified. Please set at least one of: top, bottom, left, right, inner_horizontal, inner_vertical."
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse range
+    grid_range = _parse_range_to_grid(range_name)
+    grid_range["sheetId"] = resolved_sheet_id
+
+    # Build border style object
+    def build_border(enabled: Optional[bool]) -> Optional[Dict[str, Any]]:
+        if enabled is None:
+            return None
+        if not enabled:
+            # Explicitly set to False means remove the border
+            return {"style": "NONE"}
+        border: Dict[str, Any] = {"style": border_style_upper}
+        if border_color:
+            border["color"] = _parse_color(border_color)
+        else:
+            # Default to black
+            border["color"] = {"red": 0, "green": 0, "blue": 0}
+        return border
+
+    # Build the updateBorders request
+    update_borders_request: Dict[str, Any] = {"range": grid_range}
+
+    if top is not None:
+        update_borders_request["top"] = build_border(top)
+    if bottom is not None:
+        update_borders_request["bottom"] = build_border(bottom)
+    if left is not None:
+        update_borders_request["left"] = build_border(left)
+    if right is not None:
+        update_borders_request["right"] = build_border(right)
+    if inner_horizontal is not None:
+        update_borders_request["innerHorizontal"] = build_border(inner_horizontal)
+    if inner_vertical is not None:
+        update_borders_request["innerVertical"] = build_border(inner_vertical)
+
+    # Build request
+    request_body = {"requests": [{"updateBorders": update_borders_request}]}
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Build summary of applied borders
+    border_positions = []
+    if top is not None:
+        border_positions.append(f"top={'on' if top else 'off'}")
+    if bottom is not None:
+        border_positions.append(f"bottom={'on' if bottom else 'off'}")
+    if left is not None:
+        border_positions.append(f"left={'on' if left else 'off'}")
+    if right is not None:
+        border_positions.append(f"right={'on' if right else 'off'}")
+    if inner_horizontal is not None:
+        border_positions.append(
+            f"inner_horizontal={'on' if inner_horizontal else 'off'}"
+        )
+    if inner_vertical is not None:
+        border_positions.append(f"inner_vertical={'on' if inner_vertical else 'off'}")
+
+    style_info = f"style={border_style_upper}"
+    if border_color:
+        style_info += f", color={border_color}"
+
+    text_output = (
+        f"Successfully applied borders to range '{range_name}' in spreadsheet {spreadsheet_id} for {user_google_email}.\n"
+        f"Borders: {', '.join(border_positions)} ({style_info})"
+    )
+
+    logger.info(f"Successfully set borders for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
 @handle_http_errors("clear_conditional_formatting", service_type="sheets")
 @require_google_service("sheets", "sheets_write")
 async def clear_conditional_formatting(
