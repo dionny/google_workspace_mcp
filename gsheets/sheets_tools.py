@@ -3188,3 +3188,116 @@ async def copy_range(
 
     logger.info(f"Successfully copied range for {user_google_email}.")
     return text_output
+
+
+@server.tool()
+@handle_http_errors("copy_sheet", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def copy_sheet(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    source_sheet_name: Optional[str] = None,
+    source_sheet_id: Optional[int] = None,
+    destination_spreadsheet_id: Optional[str] = None,
+    new_sheet_name: Optional[str] = None,
+) -> str:
+    """
+    Copies a sheet within the same spreadsheet or to a different spreadsheet.
+
+    This is useful for:
+    - Creating a backup/copy of a sheet before making changes
+    - Duplicating a template sheet within the same spreadsheet
+    - Copying a sheet to another spreadsheet
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the source spreadsheet. Required.
+        source_sheet_name (Optional[str]): Name of the sheet to copy. If neither
+            source_sheet_name nor source_sheet_id is provided, copies the first sheet.
+        source_sheet_id (Optional[int]): Numeric ID of the sheet to copy. Alternative
+            to source_sheet_name.
+        destination_spreadsheet_id (Optional[str]): The ID of the destination spreadsheet.
+            If not provided, copies within the same spreadsheet.
+        new_sheet_name (Optional[str]): Name for the copied sheet. If not provided,
+            the API will use the default "Copy of <original>" name.
+
+    Returns:
+        str: Confirmation message including the new sheet ID and name.
+    """
+    logger.info(
+        f"[copy_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"SourceSheet: {source_sheet_name}, SourceSheetId: {source_sheet_id}, "
+        f"DestSpreadsheet: {destination_spreadsheet_id}, NewName: {new_sheet_name}"
+    )
+
+    # Resolve source sheet ID
+    resolved_source_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, source_sheet_name, source_sheet_id
+    )
+
+    # Get source sheet title for the response message
+    source_sheet_title = await _get_sheet_name_by_id(
+        service, spreadsheet_id, resolved_source_sheet_id
+    )
+
+    # Determine destination spreadsheet
+    dest_spreadsheet_id = destination_spreadsheet_id or spreadsheet_id
+    is_same_spreadsheet = dest_spreadsheet_id == spreadsheet_id
+
+    # Copy the sheet using the copyTo API
+    copy_request_body = {"destinationSpreadsheetId": dest_spreadsheet_id}
+
+    copy_response = await asyncio.to_thread(
+        service.spreadsheets()
+        .sheets()
+        .copyTo(
+            spreadsheetId=spreadsheet_id,
+            sheetId=resolved_source_sheet_id,
+            body=copy_request_body,
+        )
+        .execute
+    )
+
+    new_sheet_id = copy_response.get("sheetId")
+    default_new_name = copy_response.get("title", f"Copy of {source_sheet_title}")
+
+    # Rename the copied sheet if a custom name was provided
+    final_sheet_name = default_new_name
+    if new_sheet_name and new_sheet_name != default_new_name:
+        rename_request_body = {
+            "requests": [
+                {
+                    "updateSheetProperties": {
+                        "properties": {
+                            "sheetId": new_sheet_id,
+                            "title": new_sheet_name,
+                        },
+                        "fields": "title",
+                    }
+                }
+            ]
+        }
+
+        await asyncio.to_thread(
+            service.spreadsheets()
+            .batchUpdate(spreadsheetId=dest_spreadsheet_id, body=rename_request_body)
+            .execute
+        )
+        final_sheet_name = new_sheet_name
+
+    # Build response message
+    if is_same_spreadsheet:
+        text_output = (
+            f"Successfully copied sheet '{source_sheet_title}' to '{final_sheet_name}' "
+            f"(ID: {new_sheet_id}) in spreadsheet {spreadsheet_id} for {user_google_email}."
+        )
+    else:
+        text_output = (
+            f"Successfully copied sheet '{source_sheet_title}' from spreadsheet {spreadsheet_id} "
+            f"to '{final_sheet_name}' (ID: {new_sheet_id}) in destination spreadsheet "
+            f"{dest_spreadsheet_id} for {user_google_email}."
+        )
+
+    logger.info(f"Successfully copied sheet for {user_google_email}.")
+    return text_output
