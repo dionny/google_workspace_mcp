@@ -1210,6 +1210,137 @@ async def delete_sheet(
 
 
 @server.tool()
+@handle_http_errors("rename_sheet", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def rename_sheet(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    new_name: str,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Renames a sheet (tab) within a Google Spreadsheet.
+
+    This tool changes the name of an existing sheet to a new name.
+    The new name must be unique within the spreadsheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        new_name (str): The new name for the sheet. Required.
+            Must be unique within the spreadsheet.
+        sheet_name (Optional[str]): The current name of the sheet to rename.
+            If not provided and sheet_id is not set, an error will be raised.
+        sheet_id (Optional[int]): The ID of the sheet to rename. Alternative to
+            sheet_name. Takes precedence over sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful rename.
+
+    Example:
+        Rename a sheet by current name:
+        >>> rename_sheet(spreadsheet_id="...", sheet_name="Old Name", new_name="New Name")
+
+        Rename a sheet by ID:
+        >>> rename_sheet(spreadsheet_id="...", sheet_id=123456, new_name="New Name")
+
+    Raises:
+        Exception: If neither sheet_name nor sheet_id is provided.
+        Exception: If the sheet does not exist.
+        Exception: If the new_name conflicts with an existing sheet name.
+    """
+    logger.info(
+        f"[rename_sheet] Invoked. Email: '{user_google_email}', "
+        f"Spreadsheet: {spreadsheet_id}, sheet_name: {sheet_name}, "
+        f"sheet_id: {sheet_id}, new_name: {new_name}"
+    )
+
+    # Require explicit identification to prevent accidental renaming
+    if sheet_name is None and sheet_id is None:
+        raise Exception(
+            "Either 'sheet_name' or 'sheet_id' must be provided to identify the sheet to rename."
+        )
+
+    if not new_name or not new_name.strip():
+        raise Exception("'new_name' must be a non-empty string.")
+
+    # Get spreadsheet info to validate and get sheet details
+    spreadsheet = await asyncio.to_thread(
+        service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+    )
+    sheets = spreadsheet.get("sheets", [])
+
+    # Check if new_name conflicts with an existing sheet name
+    for sheet in sheets:
+        props = sheet.get("properties", {})
+        existing_title = props.get("title", "")
+        existing_id = props.get("sheetId")
+        # Allow renaming to same name if it's the same sheet (no-op)
+        if existing_title == new_name:
+            # Check if it's a different sheet
+            if sheet_id is not None and existing_id != sheet_id:
+                raise Exception(
+                    f"A sheet named '{new_name}' already exists in spreadsheet {spreadsheet_id}."
+                )
+            elif sheet_name is not None and existing_title != sheet_name:
+                raise Exception(
+                    f"A sheet named '{new_name}' already exists in spreadsheet {spreadsheet_id}."
+                )
+
+    # Resolve the sheet to rename and get its current name for the confirmation message
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Find the current sheet title for the confirmation message
+    current_title = None
+    for sheet in sheets:
+        props = sheet.get("properties", {})
+        if props.get("sheetId") == resolved_sheet_id:
+            current_title = props.get("title", "Unknown")
+            break
+
+    if current_title is None:
+        identifier = sheet_name if sheet_name else f"ID {sheet_id}"
+        raise Exception(
+            f"Sheet '{identifier}' not found in spreadsheet {spreadsheet_id}."
+        )
+
+    # Rename the sheet using batchUpdate with updateSheetProperties
+    request_body = {
+        "requests": [
+            {
+                "updateSheetProperties": {
+                    "properties": {
+                        "sheetId": resolved_sheet_id,
+                        "title": new_name,
+                    },
+                    "fields": "title",
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully renamed sheet '{current_title}' to '{new_name}' "
+        f"(ID: {resolved_sheet_id}) in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(
+        f"Successfully renamed sheet '{current_title}' to '{new_name}' for {user_google_email}."
+    )
+    return text_output
+
+
+@server.tool()
 @handle_http_errors("copy_sheet", service_type="sheets")
 @require_google_service("sheets", "sheets_write")
 async def copy_sheet(
