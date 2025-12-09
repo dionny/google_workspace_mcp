@@ -2,6 +2,11 @@
 
 # <span style="color:#cad8d9">Google Workspace MCP Server</span> <img src="https://github.com/user-attachments/assets/b89524e4-6e6e-49e6-ba77-00d6df0c6e5c" width="80" align="right" />
 
+> **⚠️ Indeed Internal Fork**  
+> This is Indeed's fork of [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp).  
+> Public installation methods (uvx, DXT, Docker Hub) install the upstream version, not this fork.  
+> **Indeed users**: See [Quick Start](#overview) below for correct installation.
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![PyPI](https://img.shields.io/pypi/v/workspace-mcp.svg)](https://pypi.org/project/workspace-mcp/)
@@ -49,6 +54,19 @@
 </details>
 
 ## <span style="color:#adbcbc">Overview</span>
+
+> **⚠️ IMPORTANT - Indeed Internal Fork**
+> 
+> This is Indeed's internal fork of [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp).
+> 
+> **For Indeed Users - Quick Start:**
+> ```bash
+> # Clone and run from any directory:
+> git clone https://code.corp.indeed.com/dionny/google_workspace_mcp.git
+> uv run --directory /path/to/google_workspace_mcp main.py --tools gmail drive
+> ```
+> 
+> **⚠️ Note**: The public `uvx workspace-mcp`, DXT installer, and Docker images described below install the upstream version, NOT this Indeed fork. Do not use these methods at this time.
 
 A production-ready MCP server that integrates all major Google Workspace services with AI assistants. It supports both single-user operation and multi-user authentication via OAuth 2.1, making it a powerful backend for custom applications. Built with FastMCP for optimal performance, featuring advanced authentication handling, service caching, and streamlined development patterns.
 
@@ -137,7 +155,9 @@ uv run main.py --tools gmail drive
 
 ### 1. One-Click Claude Desktop Install (Recommended)
 
-1. **Download:** Grab the latest `google_workspace_mcp.dxt` from the “Releases” page
+> **⚠️ NOT AVAILABLE FOR INDEED FORK** - The DXT installer installs the upstream version only. See "Indeed Internal Fork" section above for correct installation.
+
+1. **Download:** Grab the latest `google_workspace_mcp.dxt` from the "Releases" page
 2. **Install:** Double-click the file – Claude Desktop opens and prompts you to **Install**
 3. **Configure:** In Claude Desktop → **Settings → Extensions → Google Workspace MCP**, paste your Google OAuth credentials
 4. **Use it:** Start a new Claude chat and call any Google Workspace tool
@@ -476,7 +496,7 @@ export GOOGLE_PSE_ENGINE_ID=\
 
 <table>
 <tr>
-<td width="33%" align="center">
+<td width="25%" align="center">
 
 **▶ Quick Start**
 ```bash
@@ -485,7 +505,7 @@ uv run main.py
 <sub>Default stdio mode</sub>
 
 </td>
-<td width="33%" align="center">
+<td width="25%" align="center">
 
 **◆ HTTP Mode**
 ```bash
@@ -495,7 +515,7 @@ uv run main.py \
 <sub>Web interfaces & debugging</sub>
 
 </td>
-<td width="34%" align="center">
+<td width="25%" align="center">
 
 **@ Single User**
 ```bash
@@ -505,9 +525,19 @@ uv run main.py \
 <sub>Simplified authentication</sub>
 
 </td>
+<td width="25%" align="center">
+
+**🔍 Optimizer Mode**
+```bash
+uv run main.py \
+  --optimizer
+```
+<sub>Semantic tool discovery</sub>
+
+</td>
 </tr>
 <tr>
-<td colspan="3">
+<td colspan="4">
 
 <details>
 <summary>◆ <b>Advanced Options</b> <sub><sup>← Tool selection, tiers & Docker</sup></sub></summary>
@@ -529,7 +559,53 @@ uv run main.py --tool-tier extended  # ◐ Core + additional
 uv run main.py --tool-tier complete  # ○ All available tools
 ```
 
+**🔍 Optimizer Mode** (NEW!)
+```bash
+# Install optimizer dependencies first
+uv pip install numpy sentence-transformers
+
+# Enable optimizer mode for large tool sets
+uv run main.py --optimizer
+
+# Works with tool selection and tiers
+uv run main.py --optimizer --tools gmail drive calendar
+uv run main.py --optimizer --tool-tier extended
+```
+
+**What is Optimizer Mode?**
+Instead of exposing hundreds of tool schemas to your LLM, optimizer mode provides just 4 meta-tools for on-demand tool discovery and execution:
+
+1. `google_workspace_find_tool` - Semantic search for tools by natural language description
+2. `google_workspace_describe_tool` - Get full schema for a specific tool  
+3. `google_workspace_list_tools` - List all available tools (optionally filter by service)
+4. `google_workspace_call_tool` - Execute a discovered tool with arguments
+
+**How It Works:**
+```
+Step 1: Find → "google_workspace_find_tool('send an email')"
+        Returns: [{"name": "send_gmail_message", ...}]
+
+Step 2: Describe → "google_workspace_describe_tool('send_gmail_message')"
+        Returns: Full parameter schema
+
+Step 3: Execute → "google_workspace_call_tool('send_gmail_message', {args})"
+        Performs the actual action
+```
+
+The LLM discovers and executes tools on-demand using semantic search, reducing context window usage by ~95% and improving performance with large tool sets.
+
+**Benefits:**
+- 📉 Reduces initial context window usage by ~95%
+- 🚀 Faster startup and tool list processing
+- 🔍 Semantic tool discovery using natural language
+- 💰 Lower token costs for tool schemas
+- 📈 Scales to arbitrarily large tool sets
+- 🎯 Works with `--tools` and `--tool-tier` for fine-grained control
+
 **◆ Docker Deployment**
+
+> **⚠️ NOT AVAILABLE FOR INDEED FORK** - Public Docker images are for the upstream version only. You would need to build your own Docker image from Indeed's fork. See "Indeed Internal Fork" section above for correct installation.
+
 ```bash
 docker build -t workspace-mcp .
 docker run -p 8000:8000 -v $(pwd):/app \
@@ -892,6 +968,8 @@ If you’re developing, deploying to servers, or using another MCP-capable clien
 
 #### Instant CLI (uvx)
 
+> **⚠️ NOT AVAILABLE FOR INDEED FORK** - The `uvx` command installs from PyPI which points to the upstream version only. See "Indeed Internal Fork" section above for correct installation.
+
 <details open>
 <summary>⚡ <b>Quick Start with uvx</b> <sub><sup>← No installation required!</sup></sub></summary>
 
@@ -911,6 +989,10 @@ uvx workspace-mcp --tool-tier core  # or --tools gmail drive calendar
 <summary>🛠️ <b>Developer Workflow</b> <sub><sup>← Install deps, lint, and test</sup></sub></summary>
 
 ```bash
+# Clone Indeed's fork
+git clone https://code.corp.indeed.com/dionny/google_workspace_mcp.git
+cd google_workspace_mcp
+
 # Install everything needed for linting, tests, and release tooling
 uv sync --group dev
 
@@ -919,6 +1001,12 @@ uv run ruff check .
 
 # Execute the full test suite (async fixtures require pytest-asyncio)
 uv run pytest
+
+# Run the server
+uv run main.py --tools gmail drive
+
+# Or from anywhere using --directory:
+uv run --directory /path/to/google_workspace_mcp main.py --tools gmail drive
 ```
 
 - `uv sync --group test` installs only the testing stack if you need a slimmer environment.
@@ -1094,6 +1182,8 @@ You also have options for:
 <details>
 <summary>🚀 <b>Advanced uvx Commands</b> <sub><sup>← More startup options</sup></sub></summary>
 
+> **⚠️ NOT AVAILABLE FOR INDEED FORK** - These commands install from PyPI (upstream version only).
+
 ```bash
 # Configure credentials first (see Credential Configuration section)
 
@@ -1113,6 +1203,8 @@ uvx workspace-mcp --transport streamable-http
 *Requires Python 3.10+ and [uvx](https://github.com/astral-sh/uv). The package is available on [PyPI](https://pypi.org/project/workspace-mcp).*
 
 ### Development Installation
+
+> **⚠️ For Indeed Users**: Use the "Local Development Setup" section above which includes the correct Git URL for Indeed's fork.
 
 For development or customization:
 

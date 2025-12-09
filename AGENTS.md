@@ -19,12 +19,9 @@ gh pr create --repo dionny/google_workspace_mcp --base main --head <branch-name>
 # gh pr create (without --repo flag may target upstream)
 ```
 
-### When to Contribute Upstream
-If you believe a feature or fix would benefit the broader community:
-1. Discuss with the team first
-2. Create a separate branch if needed
-3. Ensure the feature is generic and well-documented
-4. Submit PR to `taylorwilsdon/google_workspace_mcp` only after team approval
+## Running CLI
+
+By default run all python commands via `uv`, unless otherwise directed.
 
 ## Testing Tools
 
@@ -32,7 +29,7 @@ If you believe a feature or fix would benefit the broader community:
 Test individual MCP tools without running the server:
 
 ```bash
-python tools_cli.py --tool modify_doc_text --document_id <doc_id> --user_google_email <email> --text "Hello" --location end
+uv run python tools_cli.py --tool modify_doc_text --document_id <doc_id> --user_google_email <email> --text "Hello" --location end
 ```
 
 Use `--list` to see all available tools.
@@ -41,26 +38,6 @@ Use `--list` to see all available tools.
 - Uses OAuth2 flow with credential store in `~/.cache/google_workspace_mcp/`
 - Email parameter is required: `--user_google_email your@email.com`
 - First run will trigger browser authentication
-
-## Project Structure
-
-```
-gdocs/          - Google Docs tools (largest module)
-  managers/     - Complex operation handlers (batch, tables, history, validation)
-  docs_tools.py - Main tool definitions (~11K lines)
-gcalendar/      - Calendar tools
-gmail/          - Gmail tools
-gdrive/         - Drive tools
-gsheets/        - Sheets tools
-gslides/        - Slides tools
-gtasks/         - Tasks tools
-gchat/          - Chat tools
-gforms/         - Forms tools
-gsearch/        - Custom Search tools
-auth/           - OAuth and authentication
-core/           - Server, config, utils
-adrs/           - Architecture Decision Records
-```
 
 ## Common Issues
 
@@ -136,7 +113,6 @@ bd list --status open
 
 ## Gotchas
 
-- **Don't commit test files** from integration/ if another agent is working on them
 - **pyproject.toml/uv.lock** changes are often from dependency updates, commit separately
 - **Linting** - Always check and fix linter errors before committing
 - **Timeout commands** - Use `timeout` for potentially long-running operations

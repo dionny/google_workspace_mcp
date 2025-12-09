@@ -1,4 +1,5 @@
 import logging
+import json
 from typing import List, Optional
 from importlib import metadata
 
@@ -300,3 +301,242 @@ async def start_google_auth(
     except Exception as e:
         logger.error(f"Failed to start Google authentication flow: {e}", exc_info=True)
         return f"**Error:** An unexpected error occurred: {e}"
+
+
+# Optimizer mode tools (conditionally registered)
+def register_optimizer_tools():
+    """Register optimizer tools for on-demand tool discovery."""
+    from core.optimizer import get_optimizer
+
+    @server.tool()
+    async def google_workspace_find_tool(query: str, top_k: int = 10) -> str:
+        """
+        Semantic search for Google Workspace tools by description.
+
+        This is the FIRST STEP in using Google Workspace tools in optimizer mode.
+        Use this tool to discover which tools are available for your task.
+
+        WORKFLOW:
+        1. Use this tool (google_workspace_find_tool) to search for relevant tools
+        2. Use google_workspace_describe_tool to get the full schema of a tool
+        3. Use google_workspace_call_tool to execute the tool with proper arguments
+
+        Args:
+            query: Natural language description of what you're trying to do
+                   Examples:
+                   - "send an email"
+                   - "create a document"
+                   - "list calendar events"
+                   - "search for files in drive"
+            top_k: Number of top matching tools to return (default: 10)
+
+        Returns:
+            JSON array of matching tools with:
+            - name: The tool name to use in describe_tool and call_tool
+            - excerpt: Brief description of what the tool does
+            - score: Similarity score (higher is better match)
+
+        Example:
+            Query: "send an email"
+            Returns: [{"name": "send_gmail_message", "excerpt": "Send an email...", "score": 0.85}]
+        """
+        optimizer = get_optimizer()
+        if optimizer is None:
+            return json.dumps(
+                {"error": "Optimizer not initialized"}, indent=2
+            )
+
+        try:
+            results = optimizer.find_similar_tools(query, top_k)
+            return json.dumps(results, indent=2)
+        except Exception as e:
+            logger.error(f"Error in google_workspace_find_tool: {e}", exc_info=True)
+            return json.dumps({"error": str(e)}, indent=2)
+
+    @server.tool()
+    async def google_workspace_describe_tool(name: str) -> str:
+        """
+        Get the full definition and parameter schema of a specific tool.
+
+        This is the SECOND STEP after finding a tool with google_workspace_find_tool.
+        Use this to understand what parameters the tool requires before calling it.
+
+        WORKFLOW:
+        1. google_workspace_find_tool - Search for tools
+        2. Use THIS tool to get the full schema
+        3. google_workspace_call_tool - Execute with proper arguments
+
+        Args:
+            name: The exact tool name from google_workspace_find_tool results
+                  (e.g., "send_gmail_message", "create_doc", "list_calendar_events")
+
+        Returns:
+            JSON object with:
+            - name: Tool name
+            - description: Full description of what the tool does
+            - inputSchema: Complete JSON schema of all parameters (required and optional)
+
+        Example:
+            Input: name="send_gmail_message"
+            Returns: {
+              "name": "send_gmail_message",
+              "description": "Send an email message via Gmail...",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "to": {"type": "string", "description": "Recipient email"},
+                  "subject": {"type": "string", "description": "Email subject"},
+                  ...
+                },
+                "required": ["to", "subject", "body"]
+              }
+            }
+        """
+        optimizer = get_optimizer()
+        if optimizer is None:
+            return json.dumps(
+                {"error": "Optimizer not initialized"}, indent=2
+            )
+
+        try:
+            definition = optimizer.get_tool_definition(name)
+            return json.dumps(definition, indent=2)
+        except ValueError as e:
+            return json.dumps({"error": str(e)}, indent=2)
+        except Exception as e:
+            logger.error(f"Error in google_workspace_describe_tool: {e}", exc_info=True)
+            return json.dumps({"error": str(e)}, indent=2)
+
+    @server.tool()
+    async def google_workspace_list_tools(service: str = None) -> str:
+        """
+        List all available Google Workspace tool names, optionally filtered by service.
+
+        Use this as an alternative to google_workspace_find_tool when you want to
+        browse all available tools or see all tools for a specific service.
+
+        IMPORTANT: This tool should ONLY be used when you know the specific service you need
+        (e.g., 'gmail', 'docs', 'sheets'). For general task-based discovery, use
+        google_workspace_find_tool instead with a natural language query.
+
+        RECOMMENDED USAGE:
+        - ✅ GOOD: list_tools(service='gmail') - when you know you need Gmail tools
+        - ✅ GOOD: After find_tool narrows down to a service, list all tools in that service
+        - ❌ AVOID: list_tools() with no filter - this dumps all tools and defeats the optimizer's purpose
+        - ❌ AVOID: Using this as your first step - use find_tool for semantic search instead
+
+        Args:
+            service: Optional service name to filter by. Valid values:
+                    - 'gmail' - Email tools
+                    - 'docs' - Google Docs tools
+                    - 'sheets' - Google Sheets tools
+                    - 'drive' - Google Drive tools
+                    - 'calendar' - Google Calendar tools
+                    - 'slides' - Google Slides tools
+                    - 'forms' - Google Forms tools
+                    - 'tasks' - Google Tasks tools
+                    - 'chat' - Google Chat tools
+                    - 'search' - Custom Search tools
+                    - None (default) - All tools (use sparingly!)
+
+        Returns:
+            JSON array of tool names that you can then describe or call
+
+        Example Workflow:
+            1. find_tool('send an email') → identifies this is a Gmail task
+            2. list_tools(service='gmail') → see all available Gmail tools
+            3. describe_tool('send_gmail_message') → get full schema
+            4. call_tool('send_gmail_message', args) → execute
+        """
+        optimizer = get_optimizer()
+        if optimizer is None:
+            return json.dumps(
+                {"error": "Optimizer not initialized"}, indent=2
+            )
+
+        try:
+            tools = optimizer.list_all_tools(service=service)
+            
+            # Warn if returning too many tools without filtering
+            if service is None and len(tools) > 20:
+                return json.dumps({
+                    "warning": f"Returning {len(tools)} tools without service filter. Consider using google_workspace_find_tool with a natural language query, or filter by service.",
+                    "tools": tools,
+                    "suggestion": "Use find_tool('your task description') for semantic search, or specify a service parameter to filter results."
+                }, indent=2)
+            
+            return json.dumps(tools, indent=2)
+        except Exception as e:
+            logger.error(f"Error in google_workspace_list_tools: {e}", exc_info=True)
+            return json.dumps({"error": str(e)}, indent=2)
+
+    @server.tool()
+    async def google_workspace_call_tool(name: str, arguments: dict) -> str:
+        """
+        Execute a Google Workspace tool with the given arguments.
+
+        This is the FINAL STEP after finding and understanding a tool.
+        Use this to actually execute the tool and perform the action.
+
+        COMPLETE WORKFLOW:
+        1. google_workspace_find_tool - Search: "send an email"
+           → Returns: [{"name": "send_gmail_message", ...}]
+        
+        2. google_workspace_describe_tool - Get schema: name="send_gmail_message"
+           → Returns: Full parameter schema showing required fields: to, subject, body
+        
+        3. Use THIS tool to execute: 
+           name="send_gmail_message"
+           arguments={"to": "user@example.com", "subject": "Hello", "body": "Message"}
+           → Sends the actual email
+
+        Args:
+            name: The exact tool name from find_tool or describe_tool
+                  (e.g., "send_gmail_message", "create_doc", "list_calendar_events")
+            
+            arguments: Dictionary of arguments matching the tool's inputSchema
+                      - Must include all required parameters
+                      - Can include optional parameters
+                      - Parameter names and types must match the schema exactly
+
+        Returns:
+            The result from the tool execution (format varies by tool)
+            - Success: Tool output (could be confirmation, data, resource URL, etc.)
+            - Error: JSON with error details
+
+        Example:
+            Input:
+              name="send_gmail_message"
+              arguments={
+                "to": "colleague@example.com",
+                "subject": "Meeting Notes",
+                "body": "Here are the notes from our meeting...",
+                "user_google_email": "myemail@gmail.com"
+              }
+            Returns: "Email sent successfully. Message ID: abc123..."
+        """
+        optimizer = get_optimizer()
+        if optimizer is None:
+            return json.dumps(
+                {"error": "Optimizer not initialized"}, indent=2
+            )
+
+        try:
+            # Call the underlying tool function
+            result = await optimizer.call_tool(name, arguments)
+            
+            # If result is already a string, return it directly
+            if isinstance(result, str):
+                return result
+            
+            # Otherwise, convert to JSON
+            return json.dumps({"result": result}, indent=2)
+        except ValueError as e:
+            return json.dumps({"error": str(e)}, indent=2)
+        except Exception as e:
+            logger.error(f"Error in google_workspace_call_tool: {e}", exc_info=True)
+            return json.dumps({"error": str(e)}, indent=2)
+
+    logger.info("Registered 4 optimizer tools: find_tool, describe_tool, list_tools, call_tool")
+
+
