@@ -2179,6 +2179,477 @@ async def find_and_replace(
 
 
 @server.tool()
+@handle_http_errors("insert_rows", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def insert_rows(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    start_row: int,
+    num_rows: int = 1,
+    inherit_from_before: bool = False,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Inserts blank rows at a specified position in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        start_row (int): The row number where new rows will be inserted (1-indexed).
+            New rows are inserted BEFORE this row. Required.
+        num_rows (int): The number of rows to insert. Defaults to 1.
+        inherit_from_before (bool): If True, new rows inherit formatting from the row
+            before start_row. If False, inherit from start_row. Defaults to False.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful row insertion.
+    """
+    logger.info(
+        f"[insert_rows] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, StartRow: {start_row}, NumRows: {num_rows}"
+    )
+
+    if start_row < 1:
+        raise ValueError("start_row must be 1 or greater (1-indexed)")
+    if num_rows < 1:
+        raise ValueError("num_rows must be 1 or greater")
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Convert to 0-indexed
+    start_index = start_row - 1
+
+    # Build the insert request
+    request_body = {
+        "requests": [
+            {
+                "insertDimension": {
+                    "range": {
+                        "sheetId": resolved_sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": start_index,
+                        "endIndex": start_index + num_rows,
+                    },
+                    "inheritFromBefore": inherit_from_before,
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully inserted {num_rows} row(s) at row {start_row} "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully inserted rows for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("delete_rows", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def delete_rows(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    start_row: int,
+    num_rows: int = 1,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Deletes rows at a specified position in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        start_row (int): The first row number to delete (1-indexed). Required.
+        num_rows (int): The number of rows to delete. Defaults to 1.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful row deletion.
+    """
+    logger.info(
+        f"[delete_rows] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, StartRow: {start_row}, NumRows: {num_rows}"
+    )
+
+    if start_row < 1:
+        raise ValueError("start_row must be 1 or greater (1-indexed)")
+    if num_rows < 1:
+        raise ValueError("num_rows must be 1 or greater")
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Convert to 0-indexed
+    start_index = start_row - 1
+
+    # Build the delete request
+    request_body = {
+        "requests": [
+            {
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": resolved_sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": start_index,
+                        "endIndex": start_index + num_rows,
+                    }
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    end_row = start_row + num_rows - 1
+    row_range = f"{start_row}-{end_row}" if num_rows > 1 else str(start_row)
+    text_output = (
+        f"Successfully deleted {num_rows} row(s) ({row_range}) "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully deleted rows for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("insert_columns", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def insert_columns(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    start_column: str,
+    num_columns: int = 1,
+    inherit_from_before: bool = False,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Inserts blank columns at a specified position in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        start_column (str): The column letter where new columns will be inserted (e.g., "A", "B", "AA").
+            New columns are inserted BEFORE this column. Required.
+        num_columns (int): The number of columns to insert. Defaults to 1.
+        inherit_from_before (bool): If True, new columns inherit formatting from the column
+            before start_column. If False, inherit from start_column. Defaults to False.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful column insertion.
+    """
+    logger.info(
+        f"[insert_columns] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, StartColumn: {start_column}, NumColumns: {num_columns}"
+    )
+
+    if num_columns < 1:
+        raise ValueError("num_columns must be 1 or greater")
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse column letter to index
+    col_ref = f"{start_column}1"
+    _, start_col_idx = _parse_cell_reference(col_ref)
+
+    # Build the insert request
+    request_body = {
+        "requests": [
+            {
+                "insertDimension": {
+                    "range": {
+                        "sheetId": resolved_sheet_id,
+                        "dimension": "COLUMNS",
+                        "startIndex": start_col_idx,
+                        "endIndex": start_col_idx + num_columns,
+                    },
+                    "inheritFromBefore": inherit_from_before,
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    text_output = (
+        f"Successfully inserted {num_columns} column(s) at column {start_column} "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully inserted columns for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("delete_columns", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def delete_columns(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    start_column: str,
+    num_columns: int = 1,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Deletes columns at a specified position in a Google Sheet.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        start_column (str): The first column letter to delete (e.g., "A", "B", "AA"). Required.
+        num_columns (int): The number of columns to delete. Defaults to 1.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful column deletion.
+    """
+    logger.info(
+        f"[delete_columns] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, StartColumn: {start_column}, NumColumns: {num_columns}"
+    )
+
+    if num_columns < 1:
+        raise ValueError("num_columns must be 1 or greater")
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Parse column letter to index
+    col_ref = f"{start_column}1"
+    _, start_col_idx = _parse_cell_reference(col_ref)
+
+    # Build the delete request
+    request_body = {
+        "requests": [
+            {
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": resolved_sheet_id,
+                        "dimension": "COLUMNS",
+                        "startIndex": start_col_idx,
+                        "endIndex": start_col_idx + num_columns,
+                    }
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    if num_columns > 1:
+        end_col_letter = _column_index_to_letter(start_col_idx + num_columns - 1)
+        col_range = f"{start_column}-{end_col_letter}"
+    else:
+        col_range = start_column
+
+    text_output = (
+        f"Successfully deleted {num_columns} column(s) ({col_range}) "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully deleted columns for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
+@handle_http_errors("auto_resize_dimension", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def auto_resize_dimension(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    dimension: str,
+    start_index: Optional[int] = None,
+    end_index: Optional[int] = None,
+    start_column: Optional[str] = None,
+    end_column: Optional[str] = None,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Auto-resizes rows or columns to fit their content in a Google Sheet.
+
+    For rows, this adjusts the height to fit the tallest cell content.
+    For columns, this adjusts the width to fit the widest cell content.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        dimension (str): Either "ROWS" or "COLUMNS". Required.
+        start_index (Optional[int]): For ROWS: starting row number (1-indexed).
+            For COLUMNS: starting column index (0-indexed). Use start_column instead for columns.
+        end_index (Optional[int]): For ROWS: ending row number (inclusive, 1-indexed).
+            For COLUMNS: ending column index (exclusive, 0-indexed). Use end_column instead for columns.
+        start_column (Optional[str]): For COLUMNS: starting column letter (e.g., "A", "B", "AA").
+            More intuitive than start_index for columns.
+        end_column (Optional[str]): For COLUMNS: ending column letter (inclusive).
+            More intuitive than end_index for columns.
+        sheet_name (Optional[str]): Name of the sheet. If not provided, uses first sheet.
+        sheet_id (Optional[int]): Numeric ID of the sheet. Alternative to sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful auto-resize operation.
+    """
+    logger.info(
+        f"[auto_resize_dimension] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Dimension: {dimension}"
+    )
+
+    # Validate dimension
+    dimension_upper = dimension.upper()
+    if dimension_upper not in ["ROWS", "COLUMNS"]:
+        raise ValueError(
+            f"Invalid dimension: '{dimension}'. Must be ROWS or COLUMNS."
+        )
+
+    # Resolve sheet ID
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    # Determine start and end indices
+    if dimension_upper == "COLUMNS":
+        # For columns, prefer letter-based specification
+        if start_column is not None:
+            col_ref = f"{start_column}1"
+            _, resolved_start = _parse_cell_reference(col_ref)
+        elif start_index is not None:
+            resolved_start = start_index
+        else:
+            resolved_start = 0  # Default to first column
+
+        if end_column is not None:
+            col_ref = f"{end_column}1"
+            _, end_col_idx = _parse_cell_reference(col_ref)
+            resolved_end = end_col_idx + 1  # API uses exclusive end
+        elif end_index is not None:
+            resolved_end = end_index
+        else:
+            # Auto-resize all columns - need to get sheet dimensions
+            spreadsheet = await asyncio.to_thread(
+                service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+            )
+            for sheet in spreadsheet.get("sheets", []):
+                if sheet.get("properties", {}).get("sheetId") == resolved_sheet_id:
+                    resolved_end = sheet.get("properties", {}).get(
+                        "gridProperties", {}
+                    ).get("columnCount", 26)
+                    break
+            else:
+                resolved_end = 26  # Default if not found
+    else:
+        # For rows, use 1-indexed start_index and end_index
+        if start_index is not None:
+            if start_index < 1:
+                raise ValueError("start_index for rows must be 1 or greater (1-indexed)")
+            resolved_start = start_index - 1  # Convert to 0-indexed
+        else:
+            resolved_start = 0  # Default to first row
+
+        if end_index is not None:
+            if end_index < start_index if start_index else 1:
+                raise ValueError("end_index must be >= start_index")
+            resolved_end = end_index  # Already 1-indexed, use as exclusive end in 0-indexed terms
+        else:
+            # Auto-resize all rows - need to get sheet dimensions
+            spreadsheet = await asyncio.to_thread(
+                service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+            )
+            for sheet in spreadsheet.get("sheets", []):
+                if sheet.get("properties", {}).get("sheetId") == resolved_sheet_id:
+                    resolved_end = sheet.get("properties", {}).get(
+                        "gridProperties", {}
+                    ).get("rowCount", 1000)
+                    break
+            else:
+                resolved_end = 1000  # Default if not found
+
+    # Build the auto-resize request
+    request_body = {
+        "requests": [
+            {
+                "autoResizeDimensions": {
+                    "dimensions": {
+                        "sheetId": resolved_sheet_id,
+                        "dimension": dimension_upper,
+                        "startIndex": resolved_start,
+                        "endIndex": resolved_end,
+                    }
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Build summary
+    if dimension_upper == "COLUMNS":
+        if start_column and end_column:
+            range_desc = f"columns {start_column}-{end_column}"
+        elif start_column:
+            range_desc = f"columns starting from {start_column}"
+        else:
+            range_desc = "all columns"
+    else:
+        if start_index and end_index:
+            range_desc = f"rows {start_index}-{end_index}"
+        elif start_index:
+            range_desc = f"rows starting from {start_index}"
+        else:
+            range_desc = "all rows"
+
+    text_output = (
+        f"Successfully auto-resized {range_desc} to fit content "
+        f"in spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully auto-resized dimensions for {user_google_email}.")
+    return text_output
+
+
+@server.tool()
 @handle_http_errors("clear_conditional_formatting", service_type="sheets")
 @require_google_service("sheets", "sheets_write")
 async def clear_conditional_formatting(
