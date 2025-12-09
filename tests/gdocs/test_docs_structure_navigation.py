@@ -639,6 +639,62 @@ class TestFindSectionInsertionPoint:
         index = find_section_insertion_point(doc, "NonExistent", "start")
         assert index is None
 
+    def test_finds_start_position_case_insensitive(self):
+        """Test finding insertion point with case-insensitive search.
+
+        Bug: google_workspace_mcp-e0fc
+        When using heading parameter with different case, the search should
+        succeed when match_case=False.
+        """
+        doc = create_mock_document(
+            [
+                create_mock_paragraph("Introduction", 1, "HEADING_1"),
+                create_mock_paragraph("Content here", 14, "NORMAL_TEXT"),
+            ]
+        )
+
+        # Search with different case, case-insensitive
+        index = find_section_insertion_point(
+            doc, "INTRODUCTION", "start", match_case=False
+        )
+
+        assert index is not None
+        assert index == 14  # End of heading element
+
+    def test_finds_end_position_case_insensitive(self):
+        """Test finding end insertion point with case-insensitive search."""
+        doc = create_mock_document(
+            [
+                create_mock_paragraph("Introduction", 1, "HEADING_1"),
+                create_mock_paragraph("Content here", 14, "NORMAL_TEXT"),
+                create_mock_paragraph("Next Section", 28, "HEADING_1"),
+            ]
+        )
+
+        # Search with different case, case-insensitive
+        index = find_section_insertion_point(
+            doc, "introduction", "end", match_case=False
+        )
+
+        assert index is not None
+        assert index == 28
+
+    def test_case_sensitive_fails_when_case_differs(self):
+        """Test case-sensitive search fails with different case."""
+        doc = create_mock_document(
+            [
+                create_mock_paragraph("Introduction", 1, "HEADING_1"),
+                create_mock_paragraph("Content here", 14, "NORMAL_TEXT"),
+            ]
+        )
+
+        # Search with different case, case-sensitive
+        index = find_section_insertion_point(
+            doc, "INTRODUCTION", "start", match_case=True
+        )
+
+        assert index is None
+
 
 class TestHeadingTypes:
     """Tests for HEADING_TYPES constant."""

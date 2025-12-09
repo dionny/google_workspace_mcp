@@ -784,7 +784,7 @@ async def modify_doc_text(
     search: str = None,
     position: str = None,
     occurrence: int = 1,
-    match_case: bool = True,
+    match_case: bool = None,
     heading: str = None,
     section_position: str = None,
     range: Dict[str, Any] = None,
@@ -826,7 +826,9 @@ async def modify_doc_text(
             - "replace": Replace the found text (ONE occurrence only!)
                          For replacing ALL occurrences, use find_and_replace_doc instead
         occurrence: Which occurrence to target (1=first, 2=second, -1=last). Default: 1
-        match_case: Whether to match case exactly. Default: True
+        match_case: Whether to match case exactly. Default depends on mode:
+            - Heading mode: False (case-insensitive, more user-friendly for sections)
+            - Search mode: True (case-sensitive, more precise for text search)
 
         Heading-based positioning (structural):
         heading: Section heading text to target
@@ -1453,6 +1455,16 @@ async def modify_doc_text(
     use_search_mode = search is not None
     use_heading_mode = heading is not None
     use_location_mode = location is not None
+
+    # Set appropriate default for match_case based on mode if not explicitly provided
+    # - Heading mode: case-insensitive by default (more user-friendly for section navigation)
+    # - Search mode: case-sensitive by default (more precise for text search)
+    # - Range mode: depends on range spec, handled separately
+    if match_case is None:
+        if use_heading_mode:
+            match_case = False  # Heading searches are typically case-insensitive
+        else:
+            match_case = True  # Search/other modes default to case-sensitive
 
     # Validate positioning parameters - range mode takes priority, then location, then heading, then search, then index
     if use_range_mode:
