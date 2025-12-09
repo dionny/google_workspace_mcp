@@ -588,7 +588,7 @@ async def delete_rows(
     spreadsheet_id: str,
     sheet_id: int,
     start_index: int,
-    end_index: int,
+    count: int = 1,
 ) -> str:
     """
     Deletes rows from a sheet.
@@ -597,20 +597,20 @@ async def delete_rows(
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
         sheet_id (int): The ID of the sheet (not the sheet name). Required. Use get_spreadsheet_info to find sheet IDs.
-        start_index (int): The starting row index to delete (0-based, inclusive). Required.
-        end_index (int): The ending row index (0-based, exclusive). Required. Rows from start_index to end_index-1 will be deleted.
+        start_index (int): The row index to start deleting from (0-based). Required. Rows will be deleted starting at this index.
+        count (int): Number of rows to delete. Defaults to 1.
 
     Returns:
         str: Confirmation message of the successful row deletion.
     """
     logger.info(
-        f"[delete_rows] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet ID: {sheet_id}, Start: {start_index}, End: {end_index}"
+        f"[delete_rows] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet ID: {sheet_id}, Start: {start_index}, Count: {count}"
     )
 
-    if start_index >= end_index:
-        raise Exception(
-            f"start_index ({start_index}) must be less than end_index ({end_index})"
-        )
+    if count < 1:
+        raise Exception(f"count ({count}) must be at least 1")
+
+    end_index = start_index + count
 
     request_body = {
         "requests": [
@@ -633,13 +633,12 @@ async def delete_rows(
         .execute
     )
 
-    rows_deleted = end_index - start_index
     text_output = (
-        f"Successfully deleted {rows_deleted} row(s) (index {start_index} to {end_index - 1}) "
+        f"Successfully deleted {count} row(s) starting at index {start_index} "
         f"from sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
     )
 
-    logger.info(f"Successfully deleted {rows_deleted} row(s) for {user_google_email}.")
+    logger.info(f"Successfully deleted {count} row(s) for {user_google_email}.")
     return text_output
 
 
@@ -713,7 +712,7 @@ async def delete_columns(
     spreadsheet_id: str,
     sheet_id: int,
     start_index: int,
-    end_index: int,
+    count: int = 1,
 ) -> str:
     """
     Deletes columns from a sheet.
@@ -722,20 +721,20 @@ async def delete_columns(
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
         sheet_id (int): The ID of the sheet (not the sheet name). Required. Use get_spreadsheet_info to find sheet IDs.
-        start_index (int): The starting column index to delete (0-based, A=0, B=1, etc., inclusive). Required.
-        end_index (int): The ending column index (0-based, exclusive). Required. Columns from start_index to end_index-1 will be deleted.
+        start_index (int): The column index to start deleting from (0-based, A=0, B=1, etc.). Required. Columns will be deleted starting at this index.
+        count (int): Number of columns to delete. Defaults to 1.
 
     Returns:
         str: Confirmation message of the successful column deletion.
     """
     logger.info(
-        f"[delete_columns] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet ID: {sheet_id}, Start: {start_index}, End: {end_index}"
+        f"[delete_columns] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet ID: {sheet_id}, Start: {start_index}, Count: {count}"
     )
 
-    if start_index >= end_index:
-        raise Exception(
-            f"start_index ({start_index}) must be less than end_index ({end_index})"
-        )
+    if count < 1:
+        raise Exception(f"count ({count}) must be at least 1")
+
+    end_index = start_index + count
 
     request_body = {
         "requests": [
@@ -758,15 +757,12 @@ async def delete_columns(
         .execute
     )
 
-    columns_deleted = end_index - start_index
     text_output = (
-        f"Successfully deleted {columns_deleted} column(s) (index {start_index} to {end_index - 1}) "
+        f"Successfully deleted {count} column(s) starting at index {start_index} "
         f"from sheet ID {sheet_id} of spreadsheet {spreadsheet_id} for {user_google_email}."
     )
 
-    logger.info(
-        f"Successfully deleted {columns_deleted} column(s) for {user_google_email}."
-    )
+    logger.info(f"Successfully deleted {count} column(s) for {user_google_email}.")
     return text_output
 
 
