@@ -285,7 +285,9 @@ class TestSheetIdResolution:
 
         with pytest.raises(Exception) as exc_info:
             if not found:
-                raise Exception(f"Sheet '{sheet_name}' not found in spreadsheet {spreadsheet_id}.")
+                raise Exception(
+                    f"Sheet '{sheet_name}' not found in spreadsheet {spreadsheet_id}."
+                )
 
         assert "NonExistentSheet" in str(exc_info.value)
         assert "not found" in str(exc_info.value)

@@ -7,7 +7,8 @@ This module provides MCP tools for interacting with Google Sheets API.
 import logging
 import asyncio
 import json
-from typing import List, Optional, Union
+import re
+from typing import List, Optional, Union, Dict
 
 
 from auth.service_decorator import require_google_service
@@ -780,6 +781,259 @@ async def delete_columns(
     logger.info(
         f"Successfully deleted {num_columns} column(s) for {user_google_email}."
     )
+    return text_output
+
+
+def _column_letter_to_index(col_str: str) -> int:
+    """
+    Convert a column letter (e.g., 'A', 'B', 'AA') to a 0-indexed column number.
+
+    Args:
+        col_str: Column letter(s) like 'A', 'Z', 'AA', 'AZ'.
+
+    Returns:
+        int: 0-indexed column number (A=0, B=1, Z=25, AA=26).
+    """
+    result = 0
+    for char in col_str.upper():
+        result = result * 26 + (ord(char) - ord("A") + 1)
+    return result - 1  # Convert to 0-indexed
+
+
+def _parse_a1_range(range_str: str) -> Dict:
+    """
+    Parse an A1 notation range string into row and column indices.
+
+    Args:
+        range_str: A1 notation range like 'A1:D10', 'Sheet1!A1:D10', 'A:D', '1:10'.
+
+    Returns:
+        Dict with keys: sheet_name (optional), start_row, end_row, start_col, end_col.
+        Row/col values are 0-indexed. None values mean unbounded.
+
+    Raises:
+        ValueError: If the range format is invalid.
+    """
+    # Remove sheet name if present
+    sheet_name = None
+    if "!" in range_str:
+        sheet_name, range_str = range_str.split("!", 1)
+        # Remove quotes from sheet name if present
+        sheet_name = sheet_name.strip("'\"")
+
+    # Pattern for A1 notation: optional letters + optional numbers
+    cell_pattern = r"([A-Za-z]*)(\d*)"
+
+    if ":" in range_str:
+        start_part, end_part = range_str.split(":", 1)
+    else:
+        start_part = range_str
+        end_part = range_str
+
+    start_match = re.fullmatch(cell_pattern, start_part)
+    end_match = re.fullmatch(cell_pattern, end_part)
+
+    if not start_match or not end_match:
+        raise ValueError(f"Invalid A1 range format: {range_str}")
+
+    start_col_str, start_row_str = start_match.groups()
+    end_col_str, end_row_str = end_match.groups()
+
+    # Convert to 0-indexed values
+    start_col = _column_letter_to_index(start_col_str) if start_col_str else None
+    end_col = (
+        _column_letter_to_index(end_col_str) + 1 if end_col_str else None
+    )  # +1 for exclusive end
+    start_row = (
+        int(start_row_str) - 1 if start_row_str else None
+    )  # Convert to 0-indexed
+    end_row = (
+        int(end_row_str) if end_row_str else None
+    )  # Already exclusive (1-indexed end = 0-indexed exclusive)
+
+    return {
+        "sheet_name": sheet_name,
+        "start_row": start_row,
+        "end_row": end_row,
+        "start_col": start_col,
+        "end_col": end_col,
+    }
+
+
+@server.tool()
+@handle_http_errors("sort_range", service_type="sheets")
+@require_google_service("sheets", "sheets_write")
+async def sort_range(
+    service,
+    user_google_email: str,
+    spreadsheet_id: str,
+    range_name: str,
+    sort_column: int,
+    ascending: bool = True,
+    has_header_row: bool = False,
+    secondary_sort_column: Optional[int] = None,
+    secondary_ascending: Optional[bool] = None,
+    sheet_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+) -> str:
+    """
+    Sorts data in a range of a Google Sheet by one or more columns.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        spreadsheet_id (str): The ID of the spreadsheet. Required.
+        range_name (str): The range to sort in A1 notation (e.g., "A1:D10", "Sheet1!A1:D10").
+            Required. The range should include all columns you want to keep together during sort.
+        sort_column (int): The 1-indexed column number to sort by within the range. Required.
+            For example, if range is "B2:E10" and sort_column=1, sorts by column B.
+        ascending (bool): Sort order. True for A-Z/smallest-first, False for Z-A/largest-first.
+            Defaults to True.
+        has_header_row (bool): If True, the first row of the range is treated as a header
+            and excluded from sorting. Defaults to False.
+        secondary_sort_column (Optional[int]): Optional 1-indexed column for secondary sort.
+            Used when primary sort column has duplicate values.
+        secondary_ascending (Optional[bool]): Sort order for secondary column.
+            Defaults to same as 'ascending' if not specified.
+        sheet_name (Optional[str]): The name of the sheet. If not provided, uses
+            sheet from range_name, or first sheet if neither specified.
+        sheet_id (Optional[int]): The ID of the sheet. Alternative to sheet_name.
+            Takes precedence over sheet_name.
+
+    Returns:
+        str: Confirmation message of the successful sort operation.
+
+    Example:
+        Sort cells A1:D10 by column A (ascending), keeping header row in place:
+        >>> sort_range(spreadsheet_id="...", range_name="A1:D10", sort_column=1,
+        ...            ascending=True, has_header_row=True)
+    """
+    logger.info(
+        f"[sort_range] Invoked. Email: '{user_google_email}', "
+        f"Spreadsheet: {spreadsheet_id}, Range: {range_name}, "
+        f"sort_column: {sort_column}, ascending: {ascending}"
+    )
+
+    if sort_column < 1:
+        raise Exception("sort_column must be >= 1 (1-indexed).")
+
+    if secondary_sort_column is not None and secondary_sort_column < 1:
+        raise Exception("secondary_sort_column must be >= 1 (1-indexed).")
+
+    # Parse the A1 notation range
+    parsed_range = _parse_a1_range(range_name)
+
+    # Determine sheet: priority is sheet_id > sheet_name param > sheet from range > first sheet
+    effective_sheet_name = sheet_name or parsed_range.get("sheet_name")
+
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, effective_sheet_name, sheet_id
+    )
+
+    # Validate we have a proper range
+    if parsed_range["start_col"] is None or parsed_range["end_col"] is None:
+        raise Exception(
+            "Range must specify column bounds (e.g., 'A1:D10'). "
+            "Unbounded column ranges are not supported for sorting."
+        )
+
+    if parsed_range["start_row"] is None or parsed_range["end_row"] is None:
+        raise Exception(
+            "Range must specify row bounds (e.g., 'A1:D10'). "
+            "Unbounded row ranges are not supported for sorting."
+        )
+
+    start_row = parsed_range["start_row"]
+    end_row = parsed_range["end_row"]
+    start_col = parsed_range["start_col"]
+    end_col = parsed_range["end_col"]
+
+    # If has_header_row, adjust start_row to exclude the header
+    if has_header_row:
+        if end_row - start_row < 2:
+            raise Exception(
+                "Range must have at least 2 rows when has_header_row=True "
+                "(1 header + 1 data row)."
+            )
+        start_row += 1
+
+    # Validate sort_column is within range
+    range_width = end_col - start_col
+    if sort_column > range_width:
+        raise Exception(
+            f"sort_column ({sort_column}) exceeds the range width ({range_width} columns). "
+            f"sort_column must be between 1 and {range_width}."
+        )
+
+    if secondary_sort_column is not None and secondary_sort_column > range_width:
+        raise Exception(
+            f"secondary_sort_column ({secondary_sort_column}) exceeds the range width ({range_width} columns). "
+            f"secondary_sort_column must be between 1 and {range_width}."
+        )
+
+    # Build sort specs - dimensionIndex is the absolute column index (0-based)
+    sort_specs = [
+        {
+            "dimensionIndex": start_col
+            + sort_column
+            - 1,  # Convert 1-indexed relative to 0-indexed absolute
+            "sortOrder": "ASCENDING" if ascending else "DESCENDING",
+        }
+    ]
+
+    if secondary_sort_column is not None:
+        sec_ascending = (
+            secondary_ascending if secondary_ascending is not None else ascending
+        )
+        sort_specs.append(
+            {
+                "dimensionIndex": start_col + secondary_sort_column - 1,
+                "sortOrder": "ASCENDING" if sec_ascending else "DESCENDING",
+            }
+        )
+
+    request_body = {
+        "requests": [
+            {
+                "sortRange": {
+                    "range": {
+                        "sheetId": resolved_sheet_id,
+                        "startRowIndex": start_row,
+                        "endRowIndex": end_row,
+                        "startColumnIndex": start_col,
+                        "endColumnIndex": end_col,
+                    },
+                    "sortSpecs": sort_specs,
+                }
+            }
+        ]
+    }
+
+    await asyncio.to_thread(
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=request_body)
+        .execute
+    )
+
+    # Build user-friendly message
+    sort_order = "ascending" if ascending else "descending"
+    header_note = " (excluding header row)" if has_header_row else ""
+
+    sort_description = f"column {sort_column} ({sort_order})"
+    if secondary_sort_column is not None:
+        sec_order = (
+            "ascending"
+            if (secondary_ascending if secondary_ascending is not None else ascending)
+            else "descending"
+        )
+        sort_description += f", then column {secondary_sort_column} ({sec_order})"
+
+    sheet_identifier = effective_sheet_name or f"sheet ID {resolved_sheet_id}"
+    text_output = (
+        f"Successfully sorted range '{range_name}' by {sort_description}{header_note} "
+        f"in '{sheet_identifier}' of spreadsheet {spreadsheet_id} for {user_google_email}."
+    )
+
+    logger.info(f"Successfully sorted range '{range_name}' for {user_google_email}.")
     return text_output
 
 
