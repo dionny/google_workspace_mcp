@@ -1758,7 +1758,7 @@ async def clear_conditional_formatting(
             for rule_range in rule.get("ranges", []):
                 # Check if ranges overlap
                 if (
-                    rule_range.get("sheetId") == resolved_sheet_id
+                    rule_range.get("sheetId", 0) == resolved_sheet_id
                     and rule_range.get("startRowIndex", 0) < grid_range["endRowIndex"]
                     and rule_range.get("endRowIndex", float("inf"))
                     > grid_range["startRowIndex"]
