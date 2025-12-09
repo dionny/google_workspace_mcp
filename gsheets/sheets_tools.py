@@ -777,7 +777,8 @@ async def delete_sheet(
     service,
     user_google_email: str,
     spreadsheet_id: str,
-    sheet_id: int,
+    sheet_id: Optional[int] = None,
+    sheet_name: Optional[str] = None,
 ) -> str:
     """
     Deletes a sheet from a spreadsheet.
@@ -785,8 +786,10 @@ async def delete_sheet(
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (int): The ID of the sheet to delete (not the sheet name). Required.
-            Use get_spreadsheet_info to find sheet IDs.
+        sheet_id (Optional[int]): The ID of the sheet to delete. Either sheet_id or
+            sheet_name must be provided. If both are provided, sheet_id takes precedence.
+        sheet_name (Optional[str]): The name of the sheet to delete. Either sheet_id or
+            sheet_name must be provided. If both are provided, sheet_id takes precedence.
 
     Returns:
         str: Confirmation message of the successful sheet deletion.
@@ -796,10 +799,15 @@ async def delete_sheet(
         remaining sheet will result in an error.
     """
     logger.info(
-        f"[delete_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, Sheet ID: {sheet_id}"
+        f"[delete_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
+        f"Sheet ID: {sheet_id}, Sheet Name: {sheet_name}"
     )
 
-    request_body = {"requests": [{"deleteSheet": {"sheetId": sheet_id}}]}
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    request_body = {"requests": [{"deleteSheet": {"sheetId": resolved_sheet_id}}]}
 
     await asyncio.to_thread(
         service.spreadsheets()
@@ -807,12 +815,17 @@ async def delete_sheet(
         .execute
     )
 
+    identifier = (
+        f"'{sheet_name}' (ID: {resolved_sheet_id})"
+        if sheet_name and sheet_id is None
+        else f"ID {resolved_sheet_id}"
+    )
     text_output = (
-        f"Successfully deleted sheet ID {sheet_id} from spreadsheet {spreadsheet_id} "
+        f"Successfully deleted sheet {identifier} from spreadsheet {spreadsheet_id} "
         f"for {user_google_email}."
     )
 
-    logger.info(f"Successfully deleted sheet ID {sheet_id} for {user_google_email}.")
+    logger.info(f"Successfully deleted sheet {identifier} for {user_google_email}.")
     return text_output
 
 
@@ -823,8 +836,9 @@ async def rename_sheet(
     service,
     user_google_email: str,
     spreadsheet_id: str,
-    sheet_id: int,
     new_name: str,
+    sheet_id: Optional[int] = None,
+    sheet_name: Optional[str] = None,
 ) -> str:
     """
     Renames a sheet within a spreadsheet.
@@ -832,23 +846,29 @@ async def rename_sheet(
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (int): The ID of the sheet to rename (not the sheet name). Required.
-            Use get_spreadsheet_info to find sheet IDs.
         new_name (str): The new name for the sheet. Required.
+        sheet_id (Optional[int]): The ID of the sheet to rename. Either sheet_id or
+            sheet_name must be provided. If both are provided, sheet_id takes precedence.
+        sheet_name (Optional[str]): The current name of the sheet to rename. Either sheet_id
+            or sheet_name must be provided. If both are provided, sheet_id takes precedence.
 
     Returns:
         str: Confirmation message of the successful sheet rename.
     """
     logger.info(
         f"[rename_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
-        f"Sheet ID: {sheet_id}, New Name: '{new_name}'"
+        f"Sheet ID: {sheet_id}, Sheet Name: {sheet_name}, New Name: '{new_name}'"
+    )
+
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
     )
 
     request_body = {
         "requests": [
             {
                 "updateSheetProperties": {
-                    "properties": {"sheetId": sheet_id, "title": new_name},
+                    "properties": {"sheetId": resolved_sheet_id, "title": new_name},
                     "fields": "title",
                 }
             }
@@ -861,13 +881,18 @@ async def rename_sheet(
         .execute
     )
 
+    identifier = (
+        f"'{sheet_name}' (ID: {resolved_sheet_id})"
+        if sheet_name and sheet_id is None
+        else f"ID {resolved_sheet_id}"
+    )
     text_output = (
-        f"Successfully renamed sheet ID {sheet_id} to '{new_name}' in spreadsheet {spreadsheet_id} "
+        f"Successfully renamed sheet {identifier} to '{new_name}' in spreadsheet {spreadsheet_id} "
         f"for {user_google_email}."
     )
 
     logger.info(
-        f"Successfully renamed sheet ID {sheet_id} to '{new_name}' for {user_google_email}."
+        f"Successfully renamed sheet {identifier} to '{new_name}' for {user_google_email}."
     )
     return text_output
 
@@ -879,8 +904,9 @@ async def copy_sheet(
     service,
     user_google_email: str,
     spreadsheet_id: str,
-    sheet_id: int,
     new_name: Optional[str] = None,
+    sheet_id: Optional[int] = None,
+    sheet_name: Optional[str] = None,
 ) -> str:
     """
     Creates a copy of a sheet within the same spreadsheet.
@@ -888,20 +914,26 @@ async def copy_sheet(
     Args:
         user_google_email (str): The user's Google email address. Required.
         spreadsheet_id (str): The ID of the spreadsheet. Required.
-        sheet_id (int): The ID of the sheet to copy (not the sheet name). Required.
-            Use get_spreadsheet_info to find sheet IDs.
         new_name (Optional[str]): The name for the new sheet. If not provided,
             Google Sheets will generate a name like "Copy of [original name]".
+        sheet_id (Optional[int]): The ID of the sheet to copy. Either sheet_id or
+            sheet_name must be provided. If both are provided, sheet_id takes precedence.
+        sheet_name (Optional[str]): The name of the sheet to copy. Either sheet_id or
+            sheet_name must be provided. If both are provided, sheet_id takes precedence.
 
     Returns:
         str: Confirmation message including the new sheet's ID and name.
     """
     logger.info(
         f"[copy_sheet] Invoked. Email: '{user_google_email}', Spreadsheet: {spreadsheet_id}, "
-        f"Sheet ID: {sheet_id}, New Name: {new_name or '(auto-generated)'}"
+        f"Sheet ID: {sheet_id}, Sheet Name: {sheet_name}, New Name: {new_name or '(auto-generated)'}"
     )
 
-    duplicate_request = {"sourceSheetId": sheet_id}
+    resolved_sheet_id = await _resolve_sheet_id(
+        service, spreadsheet_id, sheet_name, sheet_id
+    )
+
+    duplicate_request = {"sourceSheetId": resolved_sheet_id}
     if new_name:
         duplicate_request["newSheetName"] = new_name
 
@@ -918,15 +950,69 @@ async def copy_sheet(
     new_sheet_id = new_sheet_props["sheetId"]
     new_sheet_title = new_sheet_props["title"]
 
+    identifier = (
+        f"'{sheet_name}' (ID: {resolved_sheet_id})"
+        if sheet_name and sheet_id is None
+        else f"ID {resolved_sheet_id}"
+    )
     text_output = (
-        f"Successfully copied sheet ID {sheet_id} to new sheet '{new_sheet_title}' (ID: {new_sheet_id}) "
+        f"Successfully copied sheet {identifier} to new sheet '{new_sheet_title}' (ID: {new_sheet_id}) "
         f"in spreadsheet {spreadsheet_id} for {user_google_email}."
     )
 
     logger.info(
-        f"Successfully copied sheet ID {sheet_id} to new sheet ID {new_sheet_id} for {user_google_email}."
+        f"Successfully copied sheet {identifier} to new sheet ID {new_sheet_id} for {user_google_email}."
     )
     return text_output
+
+
+async def _resolve_sheet_id(
+    service, spreadsheet_id: str, sheet_name: Optional[str], sheet_id: Optional[int]
+) -> int:
+    """
+    Resolve a sheet identifier to a sheet ID.
+
+    Accepts either sheet_name or sheet_id. If both are provided, sheet_id takes
+    precedence. At least one must be provided.
+
+    Args:
+        service: The Google Sheets API service.
+        spreadsheet_id: The ID of the spreadsheet.
+        sheet_name: The name of the sheet to look up.
+        sheet_id: The numeric ID of the sheet.
+
+    Returns:
+        int: The resolved sheet ID.
+
+    Raises:
+        Exception: If neither sheet_name nor sheet_id is provided, or if sheet_name
+            is provided but no matching sheet is found.
+    """
+    if sheet_id is not None:
+        return sheet_id
+
+    if sheet_name is None:
+        raise Exception("Either 'sheet_name' or 'sheet_id' must be provided.")
+
+    # Look up the sheet by name
+    spreadsheet = await asyncio.to_thread(
+        service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute
+    )
+
+    sheets = spreadsheet.get("sheets", [])
+    for sheet in sheets:
+        sheet_props = sheet.get("properties", {})
+        if sheet_props.get("title") == sheet_name:
+            return sheet_props.get("sheetId")
+
+    # Sheet not found
+    available_sheets = [
+        sheet.get("properties", {}).get("title", "Unknown") for sheet in sheets
+    ]
+    raise Exception(
+        f"Sheet '{sheet_name}' not found in spreadsheet. "
+        f"Available sheets: {available_sheets}"
+    )
 
 
 def _parse_hex_color(hex_color: str) -> dict:

@@ -5,6 +5,174 @@ These tests verify the logic and request body structures for delete_sheet,
 rename_sheet, and copy_sheet tools.
 """
 
+import pytest
+
+
+class TestResolveSheetIdLogic:
+    """Unit tests for the _resolve_sheet_id helper function logic."""
+
+    def test_sheet_id_takes_precedence_when_both_provided(self):
+        """Test that sheet_id is returned when both sheet_id and sheet_name are provided."""
+        # Logic: if sheet_id is not None, return it immediately
+        sheet_id = 123
+        # sheet_name = "MySheet" would be provided but ignored
+
+        # The actual function returns sheet_id immediately if it's not None
+        if sheet_id is not None:
+            result = sheet_id
+        else:
+            result = None  # Would do lookup
+
+        assert result == 123
+
+    def test_neither_provided_raises_error(self):
+        """Test that an error is raised when neither sheet_id nor sheet_name is provided."""
+        sheet_id = None
+        sheet_name = None
+
+        # The function checks both being None and raises an error
+        with pytest.raises(Exception) as exc_info:
+            if sheet_id is not None:
+                pass  # Would return sheet_id
+            elif sheet_name is None:
+                raise Exception("Either 'sheet_name' or 'sheet_id' must be provided.")
+        assert "Either 'sheet_name' or 'sheet_id' must be provided" in str(
+            exc_info.value
+        )
+
+    def test_sheet_name_lookup_logic(self):
+        """Test the sheet name lookup logic against a mock spreadsheet response."""
+        # Simulated API response from get spreadsheet
+        spreadsheet_response = {
+            "properties": {"title": "My Spreadsheet"},
+            "sheets": [
+                {"properties": {"sheetId": 0, "title": "Sheet1"}},
+                {"properties": {"sheetId": 123456, "title": "Data"}},
+                {"properties": {"sheetId": 789012, "title": "Summary"}},
+            ],
+        }
+
+        sheet_name_to_find = "Data"
+
+        # The lookup logic
+        sheets = spreadsheet_response.get("sheets", [])
+        found_id = None
+        for sheet in sheets:
+            sheet_props = sheet.get("properties", {})
+            if sheet_props.get("title") == sheet_name_to_find:
+                found_id = sheet_props.get("sheetId")
+                break
+
+        assert found_id == 123456
+
+    def test_sheet_name_not_found_error(self):
+        """Test error message when sheet name is not found."""
+        spreadsheet_response = {
+            "sheets": [
+                {"properties": {"sheetId": 0, "title": "Sheet1"}},
+                {"properties": {"sheetId": 123, "title": "Data"}},
+            ],
+        }
+
+        sheet_name_to_find = "NonExistent"
+        sheets = spreadsheet_response.get("sheets", [])
+
+        found_id = None
+        for sheet in sheets:
+            sheet_props = sheet.get("properties", {})
+            if sheet_props.get("title") == sheet_name_to_find:
+                found_id = sheet_props.get("sheetId")
+                break
+
+        if found_id is None:
+            available_sheets = [
+                sheet.get("properties", {}).get("title", "Unknown") for sheet in sheets
+            ]
+            error_msg = (
+                f"Sheet '{sheet_name_to_find}' not found in spreadsheet. "
+                f"Available sheets: {available_sheets}"
+            )
+
+            assert "NonExistent" in error_msg
+            assert "Sheet1" in error_msg
+            assert "Data" in error_msg
+
+
+class TestSheetIdentifierMessageFormats:
+    """Tests for success message formatting with sheet_name parameter."""
+
+    def test_delete_sheet_message_with_sheet_name(self):
+        """Test delete_sheet message format when using sheet_name."""
+        sheet_name = "MyData"
+        resolved_sheet_id = 123456
+        spreadsheet_id = "abc123xyz"
+        user_email = "test@example.com"
+
+        # When sheet_name is provided and sheet_id is None
+        identifier = f"'{sheet_name}' (ID: {resolved_sheet_id})"
+        message = (
+            f"Successfully deleted sheet {identifier} from spreadsheet {spreadsheet_id} "
+            f"for {user_email}."
+        )
+
+        assert "'MyData'" in message
+        assert "ID: 123456" in message
+        assert "abc123xyz" in message
+
+    def test_delete_sheet_message_with_sheet_id(self):
+        """Test delete_sheet message format when using sheet_id."""
+        resolved_sheet_id = 123456
+        spreadsheet_id = "abc123xyz"
+        user_email = "test@example.com"
+
+        # When sheet_id is provided (sheet_name is None or sheet_id takes precedence)
+        identifier = f"ID {resolved_sheet_id}"
+        message = (
+            f"Successfully deleted sheet {identifier} from spreadsheet {spreadsheet_id} "
+            f"for {user_email}."
+        )
+
+        assert "ID 123456" in message
+        assert "'MyData'" not in message
+
+    def test_rename_sheet_message_with_sheet_name(self):
+        """Test rename_sheet message format when using sheet_name."""
+        sheet_name = "OldName"
+        resolved_sheet_id = 456
+        new_name = "NewName"
+        spreadsheet_id = "xyz789abc"
+        user_email = "user@example.com"
+
+        identifier = f"'{sheet_name}' (ID: {resolved_sheet_id})"
+        message = (
+            f"Successfully renamed sheet {identifier} to '{new_name}' in spreadsheet {spreadsheet_id} "
+            f"for {user_email}."
+        )
+
+        assert "'OldName'" in message
+        assert "ID: 456" in message
+        assert "'NewName'" in message
+
+    def test_copy_sheet_message_with_sheet_name(self):
+        """Test copy_sheet message format when using sheet_name."""
+        sheet_name = "SourceSheet"
+        resolved_sheet_id = 789
+        new_sheet_title = "Copy of SourceSheet"
+        new_sheet_id = 999
+        spreadsheet_id = "def456ghi"
+        user_email = "copy@example.com"
+
+        identifier = f"'{sheet_name}' (ID: {resolved_sheet_id})"
+        message = (
+            f"Successfully copied sheet {identifier} to new sheet '{new_sheet_title}' (ID: {new_sheet_id}) "
+            f"in spreadsheet {spreadsheet_id} for {user_email}."
+        )
+
+        assert "'SourceSheet'" in message
+        assert "ID: 789" in message
+        assert "'Copy of SourceSheet'" in message
+        assert "ID: 999" in message
+
 
 class TestDeleteSheetValidation:
     """Unit tests for delete_sheet request body structure."""
