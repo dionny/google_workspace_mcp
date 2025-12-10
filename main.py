@@ -406,12 +406,19 @@ def main():
             # Start minimal OAuth callback server for stdio mode
             from auth.oauth_callback_server import ensure_oauth_callback_available
 
-            success, error_msg = ensure_oauth_callback_available(
+            success, error_msg, actual_port = ensure_oauth_callback_available(
                 "stdio", port, base_uri
             )
             if success:
+                actual_display_url = (
+                    f"{base_uri}:{actual_port}" if actual_port else display_url
+                )
+                if actual_port and actual_port != port:
+                    safe_print(
+                        f"   ⚠️  Port {port} was in use, using port {actual_port} instead"
+                    )
                 safe_print(
-                    f"   OAuth callback server started on {display_url}/oauth2callback"
+                    f"   OAuth callback server started on {actual_display_url}/oauth2callback"
                 )
             else:
                 warning_msg = "   ⚠️  Warning: Failed to start OAuth callback server"

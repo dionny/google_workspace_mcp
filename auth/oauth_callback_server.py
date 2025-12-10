@@ -32,16 +32,22 @@ logger = logging.getLogger(__name__)
 class MinimalOAuthServer:
     """
     Minimal HTTP server for OAuth callbacks in stdio mode.
-    Only starts when needed and uses the same port (8000) as streamable-http mode.
+    Only starts when needed. Supports automatic port detection to avoid conflicts.
     """
 
+    # Port range for automatic port detection
+    PORT_RANGE_START = 8000
+    PORT_RANGE_END = 8100
+
     def __init__(self, port: int = 8000, base_uri: str = "http://localhost"):
-        self.port = port
+        self.configured_port = port  # Original configured port
+        self.port = port  # Actual port (may change during start)
         self.base_uri = base_uri
         self.app = FastAPI()
         self.server = None
         self.server_thread = None
         self.is_running = False
+        self.actual_url = None  # Will be set when server starts
 
         # Setup the callback route
         self._setup_callback_route()
@@ -132,18 +138,77 @@ class MinimalOAuthServer:
                 media_type=metadata["mime_type"],
             )
 
-    def start(self) -> tuple[bool, str]:
+    def _find_available_port(self, hostname: str, preferred_port: int) -> Optional[int]:
+        """
+        Find an available port, starting with the preferred port.
+
+        Args:
+            hostname: The hostname to bind to
+            preferred_port: The preferred port to try first
+
+        Returns:
+            An available port number, or None if no port is available
+        """
+        # First try the preferred port
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind((hostname, preferred_port))
+                return preferred_port
+        except OSError:
+            logger.info(
+                f"Port {preferred_port} is in use, searching for available port..."
+            )
+
+        # Try ports in the range
+        for port in range(self.PORT_RANGE_START, self.PORT_RANGE_END + 1):
+            if port == preferred_port:
+                continue  # Already tried this one
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind((hostname, port))
+                    logger.info(f"Found available port: {port}")
+                    return port
+            except OSError:
+                continue
+
+        return None
+
+    def _update_oauth_config_port(self, new_port: int) -> None:
+        """
+        Update the OAuth configuration with the actual port being used.
+
+        This ensures OAuth redirect URIs use the correct port.
+
+        Args:
+            new_port: The actual port the server is running on
+        """
+        from auth.oauth_config import get_oauth_config
+
+        config = get_oauth_config()
+
+        # Update the config's port and base_url
+        config.port = new_port
+        config.base_url = f"{config.base_uri}:{new_port}"
+
+        # Update the redirect URI if it wasn't explicitly set via environment
+        import os
+
+        if not os.getenv("GOOGLE_OAUTH_REDIRECT_URI"):
+            config.redirect_uri = f"{config.base_url}/oauth2callback"
+            config.redirect_path = "/oauth2callback"
+            logger.info(f"Updated OAuth redirect URI to: {config.redirect_uri}")
+
+    def start(self) -> tuple[bool, str, Optional[int]]:
         """
         Start the minimal OAuth server.
 
         Returns:
-            Tuple of (success: bool, error_message: str)
+            Tuple of (success: bool, error_message: str, actual_port: Optional[int])
         """
         if self.is_running:
             logger.info("Minimal OAuth server is already running")
-            return True, ""
+            return True, "", self.port
 
-        # Check if port is available
         # Extract hostname from base_uri (e.g., "http://localhost" -> "localhost")
         try:
             parsed_uri = urlparse(self.base_uri)
@@ -151,13 +216,26 @@ class MinimalOAuthServer:
         except Exception:
             hostname = "localhost"
 
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind((hostname, self.port))
-        except OSError:
-            error_msg = f"Port {self.port} is already in use on {hostname}. Cannot start minimal OAuth server."
+        # Find an available port
+        available_port = self._find_available_port(hostname, self.configured_port)
+        if available_port is None:
+            error_msg = (
+                f"No available ports found in range {self.PORT_RANGE_START}-{self.PORT_RANGE_END}. "
+                "Cannot start minimal OAuth server."
+            )
             logger.error(error_msg)
-            return False, error_msg
+            return False, error_msg, None
+
+        # Update the port to use
+        self.port = available_port
+        self.actual_url = f"{self.base_uri}:{self.port}"
+
+        # Update OAuth config with the actual port if it changed
+        if self.port != self.configured_port:
+            logger.info(
+                f"Using port {self.port} instead of configured port {self.configured_port}"
+            )
+            self._update_oauth_config_port(self.port)
 
         def run_server():
             """Run the server in a separate thread."""
@@ -192,14 +270,14 @@ class MinimalOAuthServer:
                         logger.info(
                             f"Minimal OAuth server started on {hostname}:{self.port}"
                         )
-                        return True, ""
+                        return True, "", self.port
             except Exception:
                 pass
             time.sleep(0.1)
 
         error_msg = f"Failed to start minimal OAuth server on {hostname}:{self.port} - server did not respond within {max_wait}s"
         logger.error(error_msg)
-        return False, error_msg
+        return False, error_msg, None
 
     def stop(self):
         """Stop the minimal OAuth server."""
@@ -227,20 +305,21 @@ _minimal_oauth_server: Optional[MinimalOAuthServer] = None
 
 def ensure_oauth_callback_available(
     transport_mode: str = "stdio", port: int = 8000, base_uri: str = "http://localhost"
-) -> tuple[bool, str]:
+) -> tuple[bool, str, Optional[int]]:
     """
     Ensure OAuth callback endpoint is available for the given transport mode.
 
     For streamable-http: Assumes the main server is already running
-    For stdio: Starts a minimal server if needed
+    For stdio: Starts a minimal server if needed, with automatic port detection
 
     Args:
         transport_mode: "stdio" or "streamable-http"
-        port: Port number (default 8000)
+        port: Port number (default 8000) - may be changed if port is in use
         base_uri: Base URI (default "http://localhost")
 
     Returns:
-        Tuple of (success: bool, error_message: str)
+        Tuple of (success: bool, error_message: str, actual_port: Optional[int])
+        actual_port is the port the server is actually running on (may differ from requested port)
     """
     global _minimal_oauth_server
 
@@ -249,7 +328,7 @@ def ensure_oauth_callback_available(
         logger.debug(
             "Using existing FastAPI server for OAuth callbacks (streamable-http mode)"
         )
-        return True, ""
+        return True, "", port
 
     elif transport_mode == "stdio":
         # In stdio mode, start minimal server if not already running
@@ -259,25 +338,25 @@ def ensure_oauth_callback_available(
 
         if not _minimal_oauth_server.is_running:
             logger.info("Starting minimal OAuth server for stdio mode")
-            success, error_msg = _minimal_oauth_server.start()
+            success, error_msg, actual_port = _minimal_oauth_server.start()
             if success:
                 logger.info(
-                    f"Minimal OAuth server successfully started on {base_uri}:{port}"
+                    f"Minimal OAuth server successfully started on {base_uri}:{actual_port}"
                 )
-                return True, ""
+                return True, "", actual_port
             else:
                 logger.error(
-                    f"Failed to start minimal OAuth server on {base_uri}:{port}: {error_msg}"
+                    f"Failed to start minimal OAuth server: {error_msg}"
                 )
-                return False, error_msg
+                return False, error_msg, None
         else:
             logger.info("Minimal OAuth server is already running")
-            return True, ""
+            return True, "", _minimal_oauth_server.port
 
     else:
         error_msg = f"Unknown transport mode: {transport_mode}"
         logger.error(error_msg)
-        return False, error_msg
+        return False, error_msg, None
 
 
 def cleanup_oauth_callback_server():
