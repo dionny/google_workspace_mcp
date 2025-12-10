@@ -33,3 +33,4 @@ PROMPT*
 .beads/
 .coverage.cursor/
 pr_body.txt
+.coverage
